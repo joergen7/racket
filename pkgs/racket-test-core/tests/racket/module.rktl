@@ -1029,6 +1029,12 @@
     (err/rt-test (eval '(module m racket/base (define x 2) (provide x)))
                  exn:fail:contract:variable?)))
 
+(parameterize ([current-namespace (make-base-namespace)])
+  (parameterize ([compile-enforce-module-constants #f])
+    (eval '(module m racket/base (eq? y y) (define y 2))))
+  (err/rt-test/once (eval '(dynamic-require ''m #f))
+                    exn:fail:contract:variable?))
+
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Check JIT treatement of seemingly constant imports
 
@@ -1073,10 +1079,9 @@
   (define am-s (compile-m (a-expr #t) '()))
   (define b-s (compile-m b-expr (list a-s)))
 
-  (define temp-dir (find-system-path 'temp-dir))
+  (define temp-dir (make-temporary-file "comp~a" 'directory))
   (define dir (build-path temp-dir (car (use-compiled-file-paths))))
-  (define dir-existed? (directory-exists? dir))
-  (unless dir-existed? (make-directory* dir))
+  (make-directory* dir)
 
   (define (go a-s)
     (parameterize ([current-namespace (make-base-namespace)]
@@ -1091,8 +1096,7 @@
   ;; Check that we don't crash when trying to use a different `a':
   (err/rt-test (go am-s) exn:fail?)
   ;; Cleanup
-  (delete-file (build-path dir "check-gen_rkt.zo"))
-  (unless dir-existed? (delete-directory dir)))
+  (delete-directory/files temp-dir))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -1425,7 +1429,7 @@ case of module-leve bindings; it doesn't cover local bindings.
     [else (error "unknown")]))
 
 (let ()
-  (define dir (find-system-path 'temp-dir))
+  (define dir (make-temporary-file "tmx~a" 'directory))
   (define tmx (build-path dir "tmx.rkt"))
   (define e (compile '(module tmx racket/base
                         (module s racket/base
@@ -1454,11 +1458,11 @@ case of module-leve bindings; it doesn't cover local bindings.
     (dynamic-require tmx #f)
     (test #f module-declared? `(submod ,tmx s) #f)
     (test 1 dynamic-require `(submod ,tmx s) 'x))
-  (delete-file zo-path))
+  (delete-directory/files dir))
 
 ;; Check that module-code caching works
 (let ()
-  (define dir (find-system-path 'temp-dir))
+  (define dir (make-temporary-file "tmx~a" 'directory))
   (define tmx (build-path dir "tmx2.rkt"))
   (define e (compile '(module tmx2 racket/kernel
                         (#%provide x)
@@ -1483,7 +1487,6 @@ case of module-leve bindings; it doesn't cover local bindings.
                  [current-load-relative-directory dir])
     (eval (parameterize ([read-accept-compiled #t])
             (read (open-input-bytes bstr)))))
-
   ;; Mangle the bytecode file; cached variant should be used:
   (call-with-output-file zo-path
     #:exists 'update
@@ -1492,12 +1495,15 @@ case of module-leve bindings; it doesn't cover local bindings.
       (write-bytes (make-bytes 100 (char->integer #\!)) o)))
 
   (test 2 add1
-        (parameterize ([current-namespace (make-base-namespace)])
+        (parameterize ([current-namespace (make-base-namespace)]
+                       [current-load-relative-directory dir])
           (dynamic-require tmx 'x)))
   (delete-file zo-path)
 
   ;; Need to retain the namespace until here
-  (ephemeron-value (make-ephemeron first-namespace 7) first-namespace))
+  (ephemeron-value (make-ephemeron first-namespace 7) first-namespace)
+
+  (delete-directory/files dir))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Check that `provide` doesn't run enclosed expanders until within a
@@ -1652,7 +1658,7 @@ case of module-leve bindings; it doesn't cover local bindings.
 (require (rename-in racket/base [lib racket-base:lib]))
 
 (let ()
-  (define (find-disappeared stx id)
+  (define (find-disappeared stx pred)
     (let loop ([s stx])
       (cond
        [(syntax? s)
@@ -1660,8 +1666,7 @@ case of module-leve bindings; it doesn't cover local bindings.
                         (syntax-property s 'origin)))
         (or (let loop ([p p])
               (cond
-               [(identifier? p) (and (free-identifier=? p id)
-                                     (eq? (syntax-e p) (syntax-e id)))]
+               [(identifier? p) (pred p)]
                [(pair? p) (or (loop (car p))
                               (loop (cdr p)))]
                [else #f]))
@@ -1670,17 +1675,22 @@ case of module-leve bindings; it doesn't cover local bindings.
         (or (loop (car s))
             (loop (cdr s)))]
        [else #f])))
-  (let ([form (expand `(module m racket/base
-                        (provide (struct-out s))
-                        (struct s ())))])
-    (test #t find-disappeared form #'struct-out))
+  (define ((id=? a) b)
+    (and (free-identifier=? a b)
+         (eq? (syntax-e a) (syntax-e b))))
+  (let ([form (expand #'(module m racket/base
+                          (provide a (struct-out abc))
+                          (struct abc ())
+                          (define a 1)))])
+    (test #t find-disappeared form (id=? #'struct-out))
+    (test #t find-disappeared form (λ (id) (eq? (syntax-e id) 'abc))))
   (let ([form (expand `(module m racket/base
                         (require (only-in racket/base car))))])
-    (test #t find-disappeared form #'only-in))
+    (test #t find-disappeared form (id=? #'only-in)))
   (let ([form (expand `(module m racket/base
                         (require (rename-in racket/base [lib racket-base:lib])
                                  (racket-base:lib "racket/base"))))])
-    (test #t find-disappeared form #'racket-base:lib))
+    (test #t find-disappeared form (id=? #'racket-base:lib)))
   ;; Check case where the provide transformer also sets disappeared-use
   (let ([form (expand `(module m racket/base
                          (require (for-syntax racket/base racket/provide-transform))
@@ -1694,7 +1704,7 @@ case of module-leve bindings; it doesn't cover local bindings.
                                                      'disappeared-use
                                                      (syntax-local-introduce #'id))]))))
                            (provide (my-out map))))])
-    (test #t find-disappeared form #'map)))
+    (test #t find-disappeared form (id=? #'map))))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -2707,6 +2717,17 @@ case of module-leve bindings; it doesn't cover local bindings.
 
 (namespace-attach-module-declaration (current-namespace) ''please-attach-me-successfully (make-base-namespace))
 
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Check that `#:unsafe` is allowed
+
+(module unsafe-module-so-call-provided-carefully racket/base
+  (#%declare #:unsafe)
+  (provide unsafe-first)
+  (define (unsafe-first l) (car l)))
+
+(require 'unsafe-module-so-call-provided-carefully)
+(test 3 unsafe-first '(3 4 5))
+
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Make sure that a module with an attached instance
 ;; cannot be redeclared in the target namespace
@@ -3356,6 +3377,206 @@ case of module-leve bindings; it doesn't cover local bindings.
 
 (parameterize ([current-output-port (open-output-bytes)])
   (dynamic-require ''regression-test-for-cross-module-inline-quoted-identifier #f))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(let ([m '(module cross-inline-function-with-strange-srcloc racket/base
+            (require (for-syntax racket/base))
+            (define-syntax (m stx)
+              (struct opaque ())
+              #`(begin
+                  (provide f)
+                  (define f
+                    #,(datum->syntax #'here
+                                     '(lambda (x) x)
+                                     (vector (opaque) 1 2 3 4)))))
+            (m))])
+  ;; Make sure this doesn't error:
+  (write (compile m) (open-output-bytes)))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(module regression-test-for-set!-in-dead-compile-time-code '#%kernel
+  (#%require (for-syntax '#%kernel))
+  
+  (begin-for-syntax
+    (let-values ([(fresh)
+                  (let-values ([(weird-next) 0])
+                    (lambda ()
+                      (set! weird-next (add1 weird-next))))])
+      10)))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(module regression-test-for-delayed-set!-after-direct-use racket/base
+  (define align
+    (lambda ()
+      'ok))
+  
+  (define strings-are-numbers
+    (let-values ([(real-align) align])
+      (lambda ()
+        (set! align 7)
+        real-align)))
+  
+  (void (strings-are-numbers)))
+
+(dynamic-require ''regression-test-for-delayed-set!-after-direct-use #f)
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(module regression-test-for-loop-detection racket/base
+  (provide go)
+  
+  (define (f pick)
+    (let would-be-loop ([v #f])
+      (if (pick)
+          (let not-a-loop ()
+            (if (pick)
+                (let also-would-be-loop ()
+                  (if (pick)
+                      (if (pick)
+                          (also-would-be-loop)
+                          (would-be-loop #t))
+                      null))
+                (if (pick)
+                    (list (not-a-loop))
+                    null)))
+          (would-be-loop v))))
+
+  (define (go)
+    (f (let ([l '(#t #t #t #f #t #f #f)])
+         (lambda ()
+           (begin0
+             (car l)
+             (set! l (cdr l))))))))
+
+(test '() (dynamic-require ''regression-test-for-loop-detection 'go))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(let ()
+  (define (syntax-size stx)
+    (syntax-case stx ()
+      [(a . b) (+ (syntax-size #'a)
+                  (syntax-size #'b))]
+      [_ 1]))
+  (test #t 'simple-rename-in-size-is-linear-to-renamed-ids
+        (equal?
+         (syntax-size
+          (expand #'(module a racket/base
+                      (require (rename-in racket/base
+                                          [call/cc callcc])))))
+         (syntax-size
+          (expand #'(module a racket/base
+                      (require (rename-in racket
+                                          [call/cc callcc])))))))
+  )
+
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(module regression-test-to-make-sure-property-procedure-mutation-is-seen racket/base
+  (struct foo2 (f g) #:transparent
+    #:property prop:equal+hash
+    (list (λ (a b recur) #f)
+          (λ (a recur) 0)
+          (λ (a recur) (set! here? #t) 0)))
+  
+  (define here? #f)
+  (void (equal-secondary-hash-code (foo2 0 "ggg"))))
+
+(dynamic-require ''regression-test-to-make-sure-property-procedure-mutation-is-seen #f)
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Check an interaction of recompilation and cross-module-inlining
+
+;; Make sure that a constant is inlined across a module boundary by
+;; recompilation
+(parameterize ([current-module-name-resolver
+                (let ([orig (current-module-name-resolver)])
+                  (case-lambda
+                    [(mp ns) (orig mp ns)]
+                    [(mp wrt stx load?)
+                     (cond
+                       [(equal? mp "module-out-of-thin-air.rkt")
+                        (when load?
+                          (unless (module-declared? ''module-out-of-thin-air)
+                            (eval `(module module-out-of-thin-air racket/base
+                                     (define five 5)
+                                     (provide five)))))
+                        (make-resolved-module-path 'module-out-of-thin-air)]
+                       [else
+                        (orig mp wrt stx load?)])]))])
+  (define mi-compiled
+    (parameterize ([current-namespace (make-base-namespace)]
+                   [current-compile-target-machine #f])
+      (compile '(module uses-module-out-of-thin-air racket/base
+                  (require "module-out-of-thin-air.rkt")
+                  (define also-five five)
+                  (provide also-five)))))
+  ;; We expect that `mi-compiled` does not have 5 inlined.
+  ;; If it does, that's not actually a problem, but it means that
+  ;; the rest of the test doesn't check what it means to check, so
+  ;; count it as a problem
+  (parameterize ([current-namespace (make-base-namespace)])
+    (eval '(module module-out-of-thin-air racket/base
+             (define five 6)
+             (provide five)))
+    (eval mi-compiled)
+    (test 6 dynamic-require ''uses-module-out-of-thin-air 'also-five))
+  (define recompiled
+    (parameterize ([current-namespace (make-base-namespace)])
+      (compiled-expression-recompile mi-compiled)))
+  (parameterize ([current-namespace (make-base-namespace)])
+    (eval '(module module-out-of-thin-air racket/base
+             (define five 6)
+             (provide five)))
+    (eval recompiled)
+    ;; Ir recompilation did not inline the 5, then the result
+    ;; will be 6 instead of 5:
+    (test 5 dynamic-require ''uses-module-out-of-thin-air 'also-five)))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Check relative-path encoding and decoding for procedure source locations
+
+(let ([m (compile `(module m racket/base
+                     (provide f)
+                     (define f ,(datum->syntax #f
+                                               `(lambda (thunk) (list (thunk)))
+                                               (list (build-path (current-directory) "the-file.rkt")
+                                                     2
+                                                     3
+                                                     4
+                                                     5)))))])
+  (define o (open-output-bytes))
+  (parameterize ([current-write-relative-directory (current-directory)])
+    (write m o))
+  (define (get)
+    (parameterize ([read-accept-compiled #t])
+      (read (open-input-bytes (get-output-bytes o)))))
+  (define (check-name m p)
+    (parameterize ([current-namespace (make-base-namespace)])
+      (eval m)
+      (define f (dynamic-require ''m 'f))
+      (define e (with-handlers ([exn:fail? values])
+                  (f (lambda () (car 0)))))
+      (define ctx (continuation-mark-set->context (exn-continuation-marks e)))
+      (test
+       #t
+       `(has ,p)
+       (for/or ([pr (in-list ctx)])
+         (printf ">> ~s\n" (cdr pr))
+         (and (cdr pr)
+              (equal? p (srcloc-source (cdr pr))))))))
+  (let ([m1 (parameterize ([current-load-relative-directory #f])
+              (get))])
+    (check-name m1 (build-path (current-directory) "the-file.rkt"))
+    (void))
+  (let ([m1 (parameterize ([current-load-relative-directory (find-system-path 'temp-dir)])
+              (get))])
+    (check-name m1 (build-path (find-system-path 'temp-dir) "the-file.rkt"))
+    (void)))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

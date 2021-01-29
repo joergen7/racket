@@ -24,10 +24,10 @@ jobs:
         fetch-depth: 100
     - name: Setup cify if enabled1
       if: matrix.cify == 'cify'
-      run: echo "::set-env name=CIFY_OPTION::--enable-cify"
+      run: echo "CIFY_OPTION=--enable-cify" >> $GITHUB_ENV
     - name: Setup cify if disabled
       if: matrix.cify == 'nocify'
-      run: echo "::set-env name=CIFY_OPTION::--disable-cify"
+      run: echo "CIFY_OPTION=--disable-cify" >> $GITHUB_ENV
     - name: Configuring Racket CGC
       working-directory: ./racket/src
       run: >
@@ -79,10 +79,10 @@ jobs:
         fetch-depth: 100
     - name: Setup cify if enabled
       if: matrix.cify == 'cify'
-      run: echo "::set-env name=CIFY_OPTION::--enable-cify"
+      run: echo "CIFY_OPTION=--enable-cify" >> $GITHUB_ENV
     - name: Setup cify if disabled
       if: matrix.cify == 'nocify'
-      run: echo "::set-env name=CIFY_OPTION::--disable-cify"
+      run: echo "CIFY_OPTION=--disable-cify" >> $GITHUB_ENV
     - uses: actions/download-artifact@v2
       with:
         name: racketcgc-macos-nocify-x64_git${{ github.sha }}
@@ -162,6 +162,8 @@ jobs:
     - name: Installing
       working-directory: ./racket/src
       run: make -j  $((cpus+1)) install
+    - name: Copying src/ into distro # ChezScheme build is needed by build-ios
+      run: cp -r racket/src racketcs/
     - name: Tarballing
       working-directory: ${{ github.workspace }}
       run: tar -cvjf racketcs-macos-x64_git${{ github.sha}}.tar.bz2 racketcs
@@ -169,6 +171,32 @@ jobs:
       with:
         name: racketcs-macos-x64_git${{ github.sha }}
         path: ${{ github.workspace }}/racketcs-macos-x64_git${{ github.sha }}.tar.bz2
+
+  build-ios:
+    runs-on: macos-latest
+    needs: build-racketcs
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/download-artifact@v2
+        with:
+          name: racketcs-macos-x64_git${{ github.sha }}
+          path: ${{ github.workspace }}
+      - name: Untar host Racket
+        run: |
+          mkdir host-racket
+          tar -xvjf racketcs-macos-x64_git${{ github.sha }}.tar.bz2 -C host-racket --strip-components 1
+      - name: Build iOS Racket
+        run: |
+          set -euo pipefail
+          mkdir -p racket/src/build-ios
+          pushd racket/src/build-ios
+          ../configure \
+            --host=aarch64-apple-darwin \
+            --enable-ios=iPhoneOS \
+            --enable-racket=${{ github.workspace }}/host-racket/bin/racket \
+            --enable-scheme=${{ github.workspace }}/host-racket/src/cs/c
+          make
+          make install
 
   # Tests
   # Unfortunately Actions does not support atm yaml anchors
@@ -196,7 +224,7 @@ jobs:
         run: tar -xvjf racketcgc-macos-${{ matrix.cify }}-x64_git${{ github.sha }}.tar.bz2
       - name: Extend PATH with Racket executable
         working-directory: ${{ github.workspace }}
-        run: echo "::set-env name=PATH::$PWD/racketcgc/bin:$PATH"
+        run: echo "$PWD/racketcgc/bin" >> $GITHUB_PATH
       - name: Check for Racket
         run: racket --version
       - name: Install catalog
@@ -239,6 +267,8 @@ jobs:
         run: raco pkg install --auto db-test
       - name: Run db tests
         run: raco test -l tests/db/all-tests
+      - name: Run syntax tests
+        run: raco test -c tests/syntax
 
   test-3m:
     strategy:
@@ -261,7 +291,7 @@ jobs:
         run: tar -xvjf racket3m-macos-${{ matrix.cify }}-x64_git${{ github.sha }}.tar.bz2
       - name: Extend PATH with Racket executable
         working-directory: ${{ github.workspace }}
-        run: echo "::set-env name=PATH::$PWD/racket3m/bin:$PATH"
+        run: echo "$PWD/racket3m/bin" >> $GITHUB_PATH
       - name: Check for Racket
         run: racket --version
       - name: Install catalog and required packages
@@ -304,6 +334,8 @@ jobs:
         run: raco pkg install --auto db-test
       - name: Run db tests
         run: raco test -l tests/db/all-tests
+      - name: Run syntax tests
+        run: raco test -c tests/syntax
           
   test-cs:
     runs-on: macos-latest
@@ -321,7 +353,7 @@ jobs:
         run: tar -xvjf racketcs-macos-x64_git${{ github.sha }}.tar.bz2
       - name: Extend PATH with Racket executable
         working-directory: ${{ github.workspace }}
-        run: echo "::set-env name=PATH::$PWD/racketcs/bin:$PATH"
+        run: echo "$PWD/racketcs/bin" >> $GITHUB_PATH
       - name: Check for Racket
         run: racket --version
       - name: Install catalog and required packages
@@ -364,3 +396,5 @@ jobs:
         run: raco pkg install --auto db-test
       - name: Run db tests
         run: raco test -l tests/db/all-tests
+      - name: Run syntax tests
+        run: raco test -c tests/syntax

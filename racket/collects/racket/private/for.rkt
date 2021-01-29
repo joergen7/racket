@@ -385,6 +385,7 @@
                           'feature-profile:generic-sequence #t))))
                   (make-rearm)))))]
           [[(id ...) rhs]
+           (not (syntax-property #'rhs 'for:no-implicit-optimization))
            (with-syntax ([expanded-rhs (syntax-disarm (local-expand #'rhs 'expression (list #'quote)) orig-insp)])
              (syntax-case #'expanded-rhs (quote)
                [(quote e)
@@ -418,6 +419,8 @@
                                               (make-rearm)))]
                     [else (eloop #f #'expanded-rhs)]))]
                [_ (eloop #f #'expanded-rhs)]))]
+          ;; when for:no-implicit-optimization is true
+          [[(id ...) rhs] (eloop #f #'rhs)]
           [_
            (raise-syntax-error #f
                                "bad sequence binding clause" orig-stx clause)]))))
@@ -899,17 +902,17 @@
 
   ;; Vector-like sequences --------------------------------------------------
 
-  ;; (: check-ranges (Symbol Natural Integer Integer Natural -> Void))
+  ;; (: check-ranges (Symbol String Natural Integer Integer Natural -> Void))
   ;;
   ;; As no object can have more slots than can be indexed by
   ;; the largest fixnum, after running these checks start,
   ;; stop, and step are guaranteed to be fixnums.
-  (define (check-ranges who vec start stop step len)
+  (define (check-ranges who type-name vec start stop step len)
     (unless (and (exact-nonnegative-integer? start)
                  (or (< start len) (= len start stop)))
-      (raise-range-error who "vector" "starting " start vec 0 (sub1 len)))
+      (raise-range-error who type-name "starting " start vec 0 (sub1 len)))
     (unless (and (exact-integer? stop) (<= -1 stop) (<= stop len))
-      (raise-range-error who "vector" "stopping " stop vec -1 len))
+      (raise-range-error who type-name "stopping " stop vec -1 len))
     (unless (and (exact-integer? step) (not (zero? step)))
       (raise-argument-error who "(and/c exact-integer? (not/c zero?))" step))
     (when (and (< start stop) (< step 0))
@@ -936,8 +939,11 @@
       (raise-argument-error who type-name vec))
     (let* ([len (unsafe-vector-length vec)]
            [stop* (if stop stop len)])
-      (check-ranges who vec start stop* step len)
+      (check-ranges who type-name vec start stop* step len)
       (values vec start stop* step)))
+
+  (define (unsafe-normalise-inputs unsafe-vector-length vec start stop step)
+    (values vec start (or stop (unsafe-vector-length vec)) step))
 
   (define-syntax define-in-vector-like
     (syntax-rules ()
@@ -1031,12 +1037,15 @@
                   ;; Outer bindings
                   ;; start*, stop*, and step* are guaranteed to be exact integers
                   ([(v* start* stop* step*)
-                    (normalise-inputs (quote in-vector-name) type-name
-                                      ;; reverse-eta triggers JIT inlining of
-                                      ;; primitives, which is good for futures:
-                                      (lambda (x) (vector? x))
-                                      (lambda (x) (unsafe-vector-length x))
-                                      vec-expr start stop step)])
+                    (if (variable-reference-from-unsafe? (#%variable-reference))
+                        (unsafe-normalise-inputs unsafe-vector-length
+                                                 vec-expr start stop step)
+                        (normalise-inputs (quote in-vector-name) type-name
+                                          ;; reverse-eta triggers JIT inlining of
+                                          ;; primitives, which is good for futures:
+                                          (lambda (x) (vector? x))
+                                          (lambda (x) (unsafe-vector-length x))
+                                          vec-expr start stop step))])
                   ;; Outer check is done by normalise-inputs
                   #t
                   ;; Loop bindings
@@ -1102,7 +1111,7 @@
   (define-sequence-syntax *in-bytes
     (lambda () #'in-bytes)
     (make-in-vector-like 'in-bytes
-                         "bytes"
+                         "byte string"
                          #'bytes?
                          #'unsafe-bytes-length
                          #'in-bytes

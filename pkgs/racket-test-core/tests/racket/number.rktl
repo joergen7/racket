@@ -1110,6 +1110,19 @@
 (err/rt-test (modulo 6 -0.0) exn:fail:contract:divide-by-zero?)
 (err/rt-test (remainder 6 -0.0) exn:fail:contract:divide-by-zero?)
 
+(let ()
+  (define (check-rem-mod a b rem mod)
+    (test rem remainder a b)
+    (test rem remainder (inexact->exact a) b)
+    (test rem remainder a (inexact->exact b))
+    (test mod modulo a b)
+    (test mod modulo (inexact->exact a) b)
+    (test mod modulo a (inexact->exact b)))
+  (check-rem-mod 5.842423430828094e+60 10.0 4.0 4.0)
+  (check-rem-mod 5.842423430828094e+60 -10.0 4.0 -6.0)
+  (check-rem-mod -5.842423430828094e+60 10.0 -4.0 6.0)
+  (check-rem-mod -5.842423430828094e+60 -10.0 -4.0 -4.0))
+
 (define (test-qrm-inf v)
   (define iv (exact->inexact v))
 
@@ -1470,6 +1483,10 @@
 (test 6 lcm 1/3 2/5 3/7)
 (test 3.0 lcm 0.5 3)
 (test 3.0 lcm 1/2 3.0)
+
+(test 4611686018427387904 gcd -4611686018427387904)
+(test 4611686018427387904 gcd -4611686018427387904 -4611686018427387904)
+(test 4611686018427387904 gcd -4611686018427387904 0)
 
 (err/rt-test (gcd +nan.0))
 (err/rt-test (gcd +inf.0))
@@ -2423,15 +2440,15 @@
 (err/rt-test (rationalize .3+0.0i 1/10))
 
 (define (test-rat-inf v)
-  (define zero (if (exact? v) 0 0.0))
-
   (test +inf.0 rationalize +inf.0 v)
   (test -inf.0 rationalize -inf.0 v)
   (test-nan.0 rationalize +nan.0 v)
 
-  (test zero rationalize v +inf.0)
-  (test zero rationalize v -inf.0)
+  (test 0.0 rationalize v +inf.0)
+  (test 0.0 rationalize v -inf.0)
   (test-nan.0 rationalize v +nan.0))
+
+(test-rat-inf 1/3)
 
 (let loop ([i 100])
   (unless (= i -100)
@@ -2635,6 +2652,9 @@
 (test 10.0 string->number (string-append "1" (make-string 8000 #\0) "/" "1" (make-string 7998 #\0) "#@0"))
 (test #f zero? (string->number "7.4109846876187e-323"))
 
+;; Regression test to make sure prevision isn't lost by multiplying 10.0 times 1e44:
+(test (exact->inexact #e1e45) string->number "1.0e45")
+
 (test #t andmap (lambda (x) (and (>= x 0) (< x 10))) (map random '(10 10 10 10)))
 (test (void) random-seed 5)
 (test (begin (random-seed 23) (list (random 10) (random 20) (random 30)))
@@ -2735,6 +2755,10 @@
   (random-seed 2)
   (test '#(1062645402 3593208522 3838676319 2291995347 179540564 3081399108)
         pseudo-random-generator->vector (current-pseudo-random-generator)))
+
+(test 1110944503
+      random 4294967087 (vector->pseudo-random-generator
+                         '#(2182378604 1199273501 1921976687 2184096762 3398188531 1221198170)))
 
 (test #t = 0 0)
 (test #f = 0 (expt 2 32))
@@ -3531,7 +3555,7 @@
                 extra-p))
     (define n3 (inexact->exact (exact->inexact n2)))
     (unless (= n3 (arithmetic-shift 53-bit-number (+ num-zeros 1 extra-p)))
-      (error 'random-exact->inexact "truncating round failed ~s" n2)))
+      (error 'random-exact->inexact "truncating round failed ~s ~s ~s" n2 53-bit-number (+ num-zeros 1 extra-p))))
   (check-random-pairs check-shift-plus-bits-to-truncate)
   
   ;; If we add a one bit and then a non-zero bit anywhere later,

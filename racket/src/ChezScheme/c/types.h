@@ -158,6 +158,9 @@ typedef struct _seginfo {
   struct _seginfo *next;                    /* pointer to the next seginfo (used in occupied_segments and unused_segs) */
   struct _seginfo *sweep_next;              /* next in list of segments allocated during GC => need to sweep */
   ptr sweep_start;                          /* address within segment to start sweep */
+#if defined(WRITE_XOR_EXECUTE_CODE)
+  iptr sweep_bytes;                         /* total number of bytes starting at sweep_start */
+#endif
   struct _seginfo **dirty_prev;             /* pointer to the next pointer on the previous seginfo in the DirtySegments list */
   struct _seginfo *dirty_next;              /* pointer to the next seginfo on the DirtySegments list */
   ptr trigger_ephemerons;                   /* ephemerons to re-check if object in segment is copied out */
@@ -170,6 +173,9 @@ typedef struct _seginfo {
   octet *counting_mask;                     /* bitmap of counting roots during a GC */
   octet *measured_mask;                     /* bitmap of objects that have been measured */
 #ifdef PORTABLE_BYTECODE
+# ifndef PTHREADS
+  void *encorage_alignment;                 /* hack for 32-bit systems that align 64-bit values on 4 bytes */
+# endif
   union { ptr force_alignment;    
 #endif
   octet dirty_bytes[cards_per_segment];     /* one dirty byte per card */
@@ -183,7 +189,7 @@ typedef struct _chunkinfo {
   iptr base;                                /* first segment */
   iptr bytes;                               /* size in bytes */
   iptr segs;                                /* size in segments */
-  iptr nused_segs;                          /* number of segments currently in used use */ 
+  iptr nused_segs;                          /* number of segments currently in use */
   struct _chunkinfo **prev;                 /* pointer to previous chunk's next */
   struct _chunkinfo *next;                  /* next chunk */
   struct _seginfo *unused_segs;             /* list of unused segments */
@@ -268,12 +274,15 @@ typedef struct _bucket_pointer_list {
 #define size_closure(n) ptr_align(header_size_closure + (n)*ptr_bytes)
 #define size_string(n) ptr_align(header_size_string + (n)*string_char_bytes)
 #define size_fxvector(n) ptr_align(header_size_fxvector + (n)*ptr_bytes)
+#define size_flvector(n) ptr_align(header_size_flvector + (n)*sizeof(double))
 #define size_bytevector(n) ptr_align(header_size_bytevector + (n))
 #define size_bignum(n) ptr_align(header_size_bignum + (n)*bigit_bytes)
 #define size_code(n) ptr_align(header_size_code + (n))
 #define size_reloc_table(n) ptr_align(header_size_reloc_table + (n)*ptr_bytes)
 #define size_record_inst(n) ptr_align(n)
 #define unaligned_size_record_inst(n) (n)
+
+#define rtd_parent(x) INITVECTIT(RECORDDESCANCESTRY(x), 0)
 
 /* type tagging macros */
 
@@ -391,21 +400,37 @@ typedef struct {
     tc_mutex_release()\
   }\
 }
-/* S_tc_mutex_depth records the number of nested mutex acquires in
-   C code on tc_mutex.  it is used by do_error to release tc_mutex
-   the appropriate number of times.
-*/
+
 #define tc_mutex_acquire() do {                 \
+    assert_no_alloc_mutex();                    \
     S_mutex_acquire(&S_tc_mutex);               \
-    S_tc_mutex_depth += 1;                      \
   } while (0);
 #define tc_mutex_release() do {                 \
-    S_tc_mutex_depth -= 1;                      \
     S_mutex_release(&S_tc_mutex);               \
   } while (0);
-#define gc_tc_mutex_acquire() S_mutex_acquire(&S_gc_tc_mutex)
-#define gc_tc_mutex_release() S_mutex_release(&S_gc_tc_mutex)
 
+/* Allocation mutex is ordered after tc mutex */
+#define alloc_mutex_acquire() do {              \
+    S_mutex_acquire(&S_alloc_mutex);            \
+  } while (0);
+#define alloc_mutex_release() do {              \
+    S_mutex_release(&S_alloc_mutex);            \
+  } while (0);
+
+/* To enable checking lock order: */
+#if 0
+# define assert_no_alloc_mutex() do {                                   \
+    if (S_mutex_is_owner(&S_alloc_mutex))                               \
+      S_error_abort("cannot take tc mutex after allocation mutex");     \
+  } while (0)
+#else
+# define assert_no_alloc_mutex() do { } while (0)
+#endif
+
+#define IS_TC_MUTEX_OWNER() S_mutex_is_owner(&S_tc_mutex)
+#define IS_ALLOC_MUTEX_OWNER() S_mutex_is_owner(&S_alloc_mutex)
+
+/* Enable in "version.h": */
 #ifdef IMPLICIT_ATOMIC_AS_EXPLICIT
 # define AS_IMPLICIT_ATOMIC(T, X) ({       \
       T RESLT;                             \
@@ -434,8 +459,10 @@ typedef struct {
 #define reactivate_thread(tc) {}
 #define tc_mutex_acquire() do {} while (0)
 #define tc_mutex_release() do {} while (0)
-#define gc_tc_mutex_acquire() do {} while (0)
-#define gc_tc_mutex_release() do {} while (0)
+#define alloc_mutex_acquire() do {} while (0)
+#define alloc_mutex_release() do {} while (0)
+#define IS_TC_MUTEX_OWNER() 1
+#define IS_ALLOC_MUTEX_OWNER() 1
 #define S_cas_load_acquire_voidp(a, old, new) (*(a) = new, 1)
 #define S_cas_store_release_voidp(a, old, new) (*(a) = new, 1)
 #define S_cas_load_acquire_ptr(a, old, new) (*(a) = new, 1)
@@ -446,17 +473,12 @@ typedef struct {
 #define AS_IMPLICIT_ATOMIC(T, X) X
 #endif
 
-typedef struct remote_range {
-  ISPC s;
-  IGEN g;
-  ptr start, end;
-  struct thread_gc *tgc;
-  struct remote_range *next;
-} remote_range;
-
 typedef struct thread_gc {
   ptr tc;
-  ptr thread; /* set only when collecting */
+
+  int during_alloc;
+  IBOOL queued_fire;
+  IBOOL preserve_ownership;
 
   struct thread_gc *next;
 
@@ -476,12 +498,16 @@ typedef struct thread_gc {
   int sweep_change;
   
   int sweeper; /* parallel GC: sweeper thread identity */
-  
-  struct thread_gc *remote_range_tgc;
-  ptr remote_range_start;
-  ptr remote_range_end;
-  remote_range *ranges_to_send; /* modified only by owning sweeper */
-  remote_range *ranges_received; /* modified with sweeper mutex held */
+
+  /* modified only by owning sweeper; contains ptr and thread_gc* */
+  ptr send_remote_sweep_stack;
+  ptr send_remote_sweep_stack_start;
+  ptr send_remote_sweep_stack_limit;
+
+  /* modified with sweeper mutex held; contains just ptr */
+  ptr receive_remote_sweep_stack;
+  ptr receive_remote_sweep_stack_start;
+  ptr receive_remote_sweep_stack_limit;
 
   seginfo *dirty_segments[DIRTY_SEGMENT_LISTS];
 

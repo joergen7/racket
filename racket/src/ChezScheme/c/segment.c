@@ -38,12 +38,16 @@ Low-level Memory management strategy:
 
 static void out_of_memory PROTO((void));
 static void initialize_seginfo PROTO((seginfo *si, thread_gc *creator, ISPC s, IGEN g));
-static seginfo *allocate_segments PROTO((uptr nreq));
+static seginfo *allocate_segments PROTO((uptr nreq, IBOOL for_code));
 static void expand_segment_table PROTO((uptr base, uptr end, seginfo *si));
 static void contract_segment_table PROTO((uptr base, uptr end));
 static void add_to_chunk_list PROTO((chunkinfo *chunk, chunkinfo **pchunk_list));
 static seginfo *sort_seginfo PROTO((seginfo *si, uptr n));
 static seginfo *merge_seginfo PROTO((seginfo *si1, seginfo *si2));
+
+#if defined(WRITE_XOR_EXECUTE_CODE)
+static void enable_code_write PROTO((ptr tc, IGEN maxg, IBOOL on, IBOOL current, ptr hint));
+#endif
 
 void S_segment_init() {
   IGEN g; ISPC s; int i;
@@ -51,7 +55,11 @@ void S_segment_init() {
   if (!S_boot_time) return;
 
   S_chunks_full = NULL;
-  for (i = PARTIAL_CHUNK_POOLS; i >= 0; i -= 1) S_chunks[i] = NULL;
+  S_code_chunks_full = NULL;
+  for (i = PARTIAL_CHUNK_POOLS; i >= 0; i -= 1) {
+    S_chunks[i] = NULL;
+    S_code_chunks[i] = NULL;
+  }
   for (g = 0; g <= static_generation; g++) {
     for (s = 0; s <= max_real_space; s++) {
       S_G.occupied_segments[g][s] = NULL;
@@ -79,39 +87,40 @@ static void out_of_memory(void) {
 }
 
 #if defined(USE_MALLOC)
-void *S_getmem(iptr bytes, IBOOL zerofill) {
+void *S_getmem(iptr bytes, IBOOL zerofill, UNUSED IBOOL for_code) {
   void *addr;
 
   if ((addr = malloc(bytes)) == (void *)0) out_of_memory();
 
-  debug(printf("getmem(%p) -> %p\n", bytes, addr))
+  debug(printf("getmem(%p) -> %p\n", TO_VOIDP(bytes), addr))
   if ((membytes += bytes) > maxmembytes) maxmembytes = membytes;
   if (zerofill) memset(addr, 0, bytes);
   return addr;
 }
 
 void S_freemem(void *addr, iptr bytes) {
-  debug(printf("freemem(%p, %p)\n", addr, bytes))
+  debug(printf("freemem(%p, %p)\n", addr, TO_VOIDP(bytes)))
   free(addr);
   membytes -= bytes;
 }
 #endif
 
 #if defined(USE_VIRTUAL_ALLOC)
-#include <WinBase.h>
-void *S_getmem(iptr bytes, IBOOL zerofill) {
+#include <winbase.h>
+void *S_getmem(iptr bytes, IBOOL zerofill, IBOOL for_code) {
   void *addr;
 
   if ((uptr)bytes < S_pagesize) {
     if ((addr = malloc(bytes)) == (void *)0) out_of_memory();
-    debug(printf("getmem malloc(%p) -> %p\n", bytes, addr))
+    debug(printf("getmem malloc(%p) -> %p\n", TO_VOIDP(bytes), addr))
     if ((membytes += bytes) > maxmembytes) maxmembytes = membytes;
     if (zerofill) memset(addr, 0, bytes);
   } else {
     uptr n = S_pagesize - 1; iptr p_bytes = (iptr)(((uptr)bytes + n) & ~n);
-    if ((addr = VirtualAlloc((void *)0, (SIZE_T)p_bytes, MEM_COMMIT, PAGE_EXECUTE_READWRITE)) == (void *)0) out_of_memory();
+    int perm = (for_code ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE);
+    if ((addr = VirtualAlloc((void *)0, (SIZE_T)p_bytes, MEM_COMMIT, perm)) == (void *)0) out_of_memory();
     if ((membytes += p_bytes) > maxmembytes) maxmembytes = membytes;
-    debug(printf("getmem VirtualAlloc(%p => %p) -> %p\n", bytes, p_bytes, addr))
+    debug(printf("getmem VirtualAlloc(%p => %p) -> %p\n", TO_VOIDP(bytes), TO_VOIDP(p_bytes), addr))
   }
 
   return addr;
@@ -136,30 +145,32 @@ void S_freemem(void *addr, iptr bytes) {
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS MAP_ANON
 #endif
-void *S_getmem(iptr bytes, IBOOL zerofill) {
+void *S_getmem(iptr bytes, IBOOL zerofill, IBOOL for_code) {
   void *addr;
 
   if ((uptr)bytes < S_pagesize) {
     if ((addr = malloc(bytes)) == (void *)0) out_of_memory();
-    debug(printf("getmem malloc(%p) -> %p\n", bytes, addr))
+    debug(printf("getmem malloc(%p) -> %p\n", TO_VOIDP(bytes), addr))
     if ((membytes += bytes) > maxmembytes) maxmembytes = membytes;
     if (zerofill) memset(addr, 0, bytes);
   } else {
     uptr n = S_pagesize - 1; iptr p_bytes = (iptr)(((uptr)bytes + n) & ~n);
+    int perm = (for_code ? S_PROT_CODE : (PROT_WRITE | PROT_READ));
+    int flags = (MAP_PRIVATE | MAP_ANONYMOUS) | (for_code ? S_MAP_CODE : 0);
 #ifdef MAP_32BIT
     /* try for first 2GB of the memory space first of x86_64 so that we have a
        better chance of having short jump instructions */
-    if ((addr = mmap(NULL, p_bytes, PROT_EXEC|PROT_WRITE|PROT_READ, MAP_PRIVATE|MAP_ANONYMOUS|MAP_32BIT, -1, 0)) == (void *)-1) {
+    if ((addr = mmap(NULL, p_bytes, perm, flags|MAP_32BIT, -1, 0)) == (void *)-1) {
 #endif
-      if ((addr = mmap(NULL, p_bytes, PROT_EXEC|PROT_WRITE|PROT_READ, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)) == (void *)-1) {
+      if ((addr = mmap(NULL, p_bytes, perm, flags, -1, 0)) == (void *)-1) {
         out_of_memory();
-        debug(printf("getmem mmap(%p) -> %p\n", bytes, addr))
+        debug(printf("getmem mmap(%p) -> %p\n", TO_VOIDP(bytes), addr))
       }
 #ifdef MAP_32BIT
     }
 #endif
     if ((membytes += p_bytes) > maxmembytes) maxmembytes = membytes;
-    debug(printf("getmem mmap(%p => %p) -> %p\n", bytes, p_bytes, addr))
+    debug(printf("getmem mmap(%p => %p) -> %p\n", TO_VOIDP(bytes), TO_VOIDP(p_bytes), addr))
   }
 
   return addr;
@@ -167,12 +178,12 @@ void *S_getmem(iptr bytes, IBOOL zerofill) {
 
 void S_freemem(void *addr, iptr bytes) {
   if ((uptr)bytes < S_pagesize) {
-    debug(printf("freemem free(%p, %p)\n", addr, bytes))
+    debug(printf("freemem free(%p, %p)\n", addr, TO_VOIDP(bytes)))
     free(addr);
     membytes -= bytes;
   } else {
     uptr n = S_pagesize - 1; iptr p_bytes = (iptr)(((uptr)bytes + n) & ~n);
-    debug(printf("freemem munmap(%p, %p => %p)\n", addr, bytes, p_bytes))
+    debug(printf("freemem munmap(%p, %p => %p)\n", addr, TO_VOIDP(bytes), TO_VOIDP(p_bytes)))
     munmap(addr, p_bytes);
     membytes -= p_bytes;
   }
@@ -254,29 +265,36 @@ static void initialize_seginfo(seginfo *si, NO_THREADS_UNUSED thread_gc *creator
   si->counting_mask = NULL;
   si->measured_mask = NULL;
   si->sweep_next = NULL;
+#if defined(WRITE_XOR_EXECUTE_CODE)
+  si->sweep_bytes = 0;
+#endif
 }
 
+/* allocation mutex must be held */
 iptr S_find_segments(creator, s, g, n) thread_gc *creator; ISPC s; IGEN g; iptr n; {
-  chunkinfo *chunk, *nextchunk;
+  chunkinfo *chunk, *nextchunk, **chunks;
   seginfo *si, *nextsi, **prevsi;
   iptr nunused_segs, j;
   INT i, loser_index;
+  IBOOL for_code = ((s == space_code));
 
   if (g != static_generation) S_G.number_of_nonstatic_segments += n;
 
-  debug(printf("attempting to find %d segments for space %d, generation %d\n", n, s, g))
+  debug(printf("attempting to find %ld segments for space %d, generation %d\n", n, s, g))
+
+  chunks = (for_code ? S_code_chunks : S_chunks);
 
   if (n == 1) {
     for (i = 0; i <= PARTIAL_CHUNK_POOLS; i++) {
-      chunk = S_chunks[i];
+      chunk = chunks[i];
       if (chunk != NULL) {
         si = chunk->unused_segs;
         chunk->unused_segs = si->next;
 
         if (chunk->unused_segs == NULL) {
-          S_move_to_chunk_list(chunk, &S_chunks_full);
+          S_move_to_chunk_list(chunk, (for_code ? &S_code_chunks_full : &S_chunks_full));
         } else if (i == PARTIAL_CHUNK_POOLS) {
-          S_move_to_chunk_list(chunk, &S_chunks[PARTIAL_CHUNK_POOLS-1]);
+          S_move_to_chunk_list(chunk, &chunks[PARTIAL_CHUNK_POOLS-1]);
         }
 
         chunk->nused_segs += 1;
@@ -290,7 +308,7 @@ iptr S_find_segments(creator, s, g, n) thread_gc *creator; ISPC s; IGEN g; iptr 
   } else {
     loser_index = (n == 2) ? 0 : find_index(n-1);
     for (i = find_index(n); i <= PARTIAL_CHUNK_POOLS; i += 1) {
-      chunk = S_chunks[i];
+      chunk = chunks[i];
       while (chunk != NULL) {
         if (n < (nunused_segs = (chunk->segs - chunk->nused_segs))) {
           sort_chunk_unused_segments(chunk);
@@ -310,9 +328,9 @@ iptr S_find_segments(creator, s, g, n) thread_gc *creator; ISPC s; IGEN g; iptr 
               if (--j == 0) {
                 *prevsi = nextsi->next;
                 if (chunk->unused_segs == NULL) {
-                  S_move_to_chunk_list(chunk, &S_chunks_full);
+                  S_move_to_chunk_list(chunk, (for_code ? &S_code_chunks_full : &S_chunks_full));
                 } else if (i == PARTIAL_CHUNK_POOLS) {
-                  S_move_to_chunk_list(chunk, &S_chunks[PARTIAL_CHUNK_POOLS-1]);
+                  S_move_to_chunk_list(chunk, &chunks[PARTIAL_CHUNK_POOLS-1]);
                 }
                 chunk->nused_segs += n;
                 nextsi->next = S_G.occupied_segments[g][s];
@@ -328,7 +346,7 @@ iptr S_find_segments(creator, s, g, n) thread_gc *creator; ISPC s; IGEN g; iptr 
         }
         nextchunk = chunk->next;
         if (i != loser_index && i != PARTIAL_CHUNK_POOLS) {
-          S_move_to_chunk_list(chunk, &S_chunks[loser_index]);
+          S_move_to_chunk_list(chunk, &chunks[loser_index]);
         }
         chunk = nextchunk;
       }
@@ -336,13 +354,19 @@ iptr S_find_segments(creator, s, g, n) thread_gc *creator; ISPC s; IGEN g; iptr 
   }
 
   /* we couldn't find space, so ask for more */
-  si = allocate_segments(n);
-  for (nextsi = si; n > 0; n -= 1, nextsi += 1) {
+  si = allocate_segments(n, for_code);
+  for (nextsi = si, i = 0; i < n; i += 1, nextsi += 1) {
     initialize_seginfo(nextsi, creator, s, g);
     /* add segment to appropriate list of occupied segments */
     nextsi->next = S_G.occupied_segments[g][s];
     S_G.occupied_segments[g][s] = nextsi;
   }
+
+  /* preemptively mark a huge allocation as immobile, since
+     we don't want the GC to ever copy it */
+  if (n > 128)
+    si->must_mark = MUST_MARK_INFINITY;
+
   return si->number;
 }
 
@@ -350,7 +374,7 @@ iptr S_find_segments(creator, s, g, n) thread_gc *creator; ISPC s; IGEN g; iptr 
  * allocates a group of n contiguous fresh segments, returning the
  * segment number of the first segment of the group.
  */
-static seginfo *allocate_segments(nreq) uptr nreq; {
+static seginfo *allocate_segments(uptr nreq, UNUSED IBOOL for_code) {
   uptr nact, bytes, base; void *addr;
   iptr i;
   chunkinfo *chunk; seginfo *si;
@@ -358,7 +382,7 @@ static seginfo *allocate_segments(nreq) uptr nreq; {
   nact = nreq < minimum_segment_request ? minimum_segment_request : nreq;
 
   bytes = (nact + 1) * bytes_per_segment;
-  addr = S_getmem(bytes, 0);
+  addr = S_getmem(bytes, 0, for_code);
   debug(printf("allocate_segments addr = %p\n", addr))
 
     base = addr_get_segment((uptr)TO_PTR(addr) + bytes_per_segment - 1);
@@ -368,7 +392,7 @@ static seginfo *allocate_segments(nreq) uptr nreq; {
   if (build_ptr(base, 0) == TO_PTR(addr) && base + nact != ((uptr)1 << (ptr_bits - segment_offset_bits)) - 1)
     nact += 1;
 
-  chunk = S_getmem(sizeof(chunkinfo) + sizeof(seginfo) * nact, 0);
+  chunk = S_getmem(sizeof(chunkinfo) + sizeof(seginfo) * nact, 0, 0);
   debug(printf("allocate_segments chunk = %p\n", chunk))
   chunk->addr = addr;
   chunk->base = base;
@@ -399,9 +423,9 @@ static seginfo *allocate_segments(nreq) uptr nreq; {
  /* account for trailing empty segments */
   if (nact > nreq) {
     S_G.number_of_empty_segments += nact - nreq;
-    add_to_chunk_list(chunk, &S_chunks[PARTIAL_CHUNK_POOLS-1]);
+    add_to_chunk_list(chunk, &((for_code ? S_code_chunks : S_chunks)[PARTIAL_CHUNK_POOLS-1]));
   } else {
-    add_to_chunk_list(chunk, &S_chunks_full);
+    add_to_chunk_list(chunk, (for_code ? &S_code_chunks_full : &S_chunks_full));
   }
 
   return &chunk->sis[0];
@@ -421,15 +445,24 @@ void S_free_chunk(chunkinfo *chunk) {
  * nonempty nonstatic segment. */
 void S_free_chunks(void) {
   iptr ntofree;
-  chunkinfo *chunk, *nextchunk;
+  chunkinfo *chunk, *code_chunk, *nextchunk= NULL, *code_nextchunk = NULL;
 
   ntofree = S_G.number_of_empty_segments -
     (iptr)(Sflonum_value(SYMVAL(S_G.heap_reserve_ratio_id)) * S_G.number_of_nonstatic_segments);
 
-  for (chunk = S_chunks[PARTIAL_CHUNK_POOLS]; ntofree > 0 && chunk != NULL; chunk = nextchunk) {
-    nextchunk = chunk->next;
-    ntofree -= chunk->segs;
-    S_free_chunk(chunk);
+  for (chunk = S_chunks[PARTIAL_CHUNK_POOLS], code_chunk = S_code_chunks[PARTIAL_CHUNK_POOLS];
+       ntofree > 0 && ((chunk != NULL) || (code_chunk != NULL));
+       chunk = nextchunk, code_chunk = code_nextchunk) {
+    if (chunk) {
+      nextchunk = chunk->next;
+      ntofree -= chunk->segs;
+      S_free_chunk(chunk);
+    }
+    if (code_chunk) {
+      code_nextchunk = code_chunk->next;
+      ntofree -= code_chunk->segs;
+      S_free_chunk(code_chunk);
+    }
   }
 }
 
@@ -462,14 +495,14 @@ static void expand_segment_table(uptr base, uptr end, seginfo *si) {
   while (base != end) {
 #ifdef segment_t3_bits
     if ((t2i = S_segment_info[SEGMENT_T3_IDX(base)]) == NULL) {
-      S_segment_info[SEGMENT_T3_IDX(base)] = t2i = (t2table *)S_getmem(sizeof(t2table), 1);
+      S_segment_info[SEGMENT_T3_IDX(base)] = t2i = (t2table *)S_getmem(sizeof(t2table), 1, 0);
     }
     t2 = t2i->t2;
 #else
     t2 = S_segment_info;
 #endif
     if ((t1i = t2[SEGMENT_T2_IDX(base)]) == NULL) {
-      t2[SEGMENT_T2_IDX(base)] = t1i = (t1table *)S_getmem(sizeof(t1table), 1);
+      t2[SEGMENT_T2_IDX(base)] = t1i = (t1table *)S_getmem(sizeof(t1table), 1, 0);
 #ifdef segment_t3_bits
       t2i->refcount += 1;
 #endif
@@ -533,3 +566,154 @@ static void contract_segment_table(uptr base, uptr end) {
   while (t1 < t1end) *t1++ = NULL;
 #endif
 }
+
+/* Bracket all writes to `space_code` memory with calls to
+   `S_thread_start_code_write` and `S_thread_start_code_write'.
+
+   On a platform where a page cannot be both writable and executable
+   at the same time (a.k.a. W^X), AND assuming that the disposition is
+   thread-specific, the bracketing functions disable execution of the
+   code's memory while enabling writing.
+
+   A process-wide W^X disposition seems incompatible with the Chez
+   Scheme rule that a foreign thread is allowed to invoke a callback
+   (as long as the callback is immobile/locked) at any time --- even,
+   say, while Scheme is collecting garbage and needs to write to
+   executable pages.  However, on platforms where W^X is enforced
+   (eg. iOS), we provide a best-effort implementation that flips pages
+   between W and X for the minimal set of segments possible (depending
+   on the context) in an effort to minimize the chances of a page
+   being flipped while a thread is executing code off of it.
+*/
+
+void S_thread_start_code_write(WX_UNUSED ptr tc, WX_UNUSED IGEN maxg, WX_UNUSED IBOOL current, WX_UNUSED void *hint) {
+#if defined(WRITE_XOR_EXECUTE_CODE)
+  enable_code_write(tc, maxg, 1, current, hint);
+#else
+  S_ENABLE_CODE_WRITE(1);
+#endif
+}
+
+void S_thread_end_code_write(WX_UNUSED ptr tc, WX_UNUSED IGEN maxg, WX_UNUSED IBOOL current, WX_UNUSED void *hint) {
+#if defined(WRITE_XOR_EXECUTE_CODE)
+  enable_code_write(tc, maxg, 0, current, hint);
+#else
+  S_ENABLE_CODE_WRITE(0);
+#endif
+}
+
+#if defined(WRITE_XOR_EXECUTE_CODE)
+# if defined(PTHREADS)
+static IBOOL is_unused_seg(chunkinfo *chunk, seginfo *si) {
+  uptr number;
+  if (si->creator == NULL) {
+    /* If the seginfo doesn't have a creator, then it's unused so we
+       can skip the search. */
+    return 1;
+  }
+  number = si->number;
+  si = chunk->unused_segs;
+  while (si != NULL) {
+    if (si->number == number) {
+      return 1;
+    }
+    si = si->next;
+  }
+  return 0;
+}
+# endif
+
+static void enable_code_write(ptr tc, IGEN maxg, IBOOL on, IBOOL current, void *hint) {
+  thread_gc *tgc;
+  chunkinfo *chunk;
+  seginfo si, *sip;
+  iptr i, j, bytes;
+  void *addr;
+  INT flags = (on ? PROT_WRITE : PROT_EXEC) | PROT_READ;
+
+  /* Flip only the segment hinted at by the caller. */
+  if (maxg == 0 && hint != NULL) {
+    addr = TO_VOIDP((char*)hint - ((uptr)hint % bytes_per_segment));
+    if (mprotect(addr, bytes_per_segment, flags) != 0) {
+      S_error_abort("bad hint to enable_code_write");
+    }
+    return;
+  }
+
+  /* Flip only the current allocation segments. */
+  tgc = THREAD_GC(tc);
+  if (maxg == 0 && current) {
+    addr = tgc->base_loc[0][space_code];
+    if (addr == NULL) {
+      return;
+    }
+    bytes = (char*)tgc->next_loc[0][space_code] - (char*)tgc->base_loc[0][space_code] + tgc->bytes_left[0][space_code] + ptr_bytes;
+    if (mprotect(addr, bytes, flags) != 0) {
+      S_error_abort("failed to protect current allocation segments");
+    }
+    /* If disabling writes, turn on exec for recently-allocated
+       segments in addition to the current segments. Clears the
+       current sweep_next chain so must not be used durring
+       collection. */
+    if (!on) {
+      while ((sip = tgc->sweep_next[0][space_code]) != NULL) {
+        tgc->sweep_next[0][space_code] = sip->sweep_next;
+        addr = sip->sweep_start;
+        bytes = sip->sweep_bytes;
+        if (mprotect(addr, bytes, flags) != 0) {
+          S_error_abort("failed to protect recent allocation segments");
+        }
+      }
+    }
+    return;
+  }
+
+  for (i = 0; i <= PARTIAL_CHUNK_POOLS; i++) {
+    chunk = S_code_chunks[i];
+    while (chunk != NULL) {
+      addr = chunk->addr;
+# if defined(PTHREADS)
+      bytes = 0;
+      if (chunk->nused_segs == 0) {
+        /* None of the segments in the chunk are used so flip the bits
+           for all of them in one go. */
+        bytes = chunk->bytes;
+      } else {
+        /* Flip bits for whole runs of segs that are either unused or
+           whose generation is within the range [0, maxg]. */
+        for (j = 0; j < chunk->segs; j++) {
+          si = chunk->sis[j];
+          /* When maxg is 0, limit the search to unused segments and
+             segments that belong to the current thread. */
+          if ((maxg == 0 && si.generation == 0 && si.creator == tgc) ||
+              (maxg != 0 && si.generation <= maxg) ||
+              (is_unused_seg(chunk, &si))) {
+            bytes += bytes_per_segment;
+          } else {
+            if (bytes > 0) {
+              debug(printf("mprotect flags=%d from=%p to=%p maxg=%d (interrupted)\n", flags, addr, TO_VOIDP((char *)addr + bytes), maxg))
+              if (mprotect(addr, bytes, flags) != 0) {
+                S_error_abort("mprotect failed");
+              }
+            }
+
+            addr = TO_VOIDP((char *)chunk->addr + (j + 1) * bytes_per_segment);
+            bytes = 0;
+          }
+        }
+      }
+# else
+      bytes = chunk->bytes;
+# endif
+      if (bytes > 0) {
+        debug(printf("mprotect flags=%d from=%p to=%p maxg=%d\n", flags, addr, TO_VOIDP((char *)addr + bytes), maxg))
+        if (mprotect(addr, bytes, flags) != 0) {
+          S_error_abort("mprotect failed");
+        }
+      }
+
+      chunk = chunk->next;
+    }
+  }
+}
+#endif

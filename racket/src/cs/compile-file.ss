@@ -2,7 +2,7 @@
 ;; Check to make we're using a build of Chez Scheme
 ;; that has all the features we need.
 (define-values (need-maj need-min need-sub need-dev)
-  (values 9 5 3 38))
+  (values 9 5 5 1))
 
 (unless (guard (x [else #f]) (eval 'scheme-fork-version-number))
   (error 'compile-file
@@ -108,11 +108,13 @@
 (when xpatch-path
   (load xpatch-path))
 
-(time
+(define (compile-it)
  (cond
    [whole-program?
     (unless (= 1 (length deps))
       (error 'compile-file "expected a single dependency for whole-program compilation"))
+    (printf "Whole-program optimization for Racket core...\n")
+    (printf "[If this step runs out of memory, try configuring with `--disable-wpo`]\n")
     (unless (equal? build-dir "")
       (library-directories (list (cons "." build-dir))))
     (compile-whole-program (car deps) src #t)]
@@ -143,9 +145,12 @@
                                    (let ([e (map annotation-expression
                                                  (annotation-expression e))])
                                      (cons e (loop pos))))))))])
-             (compile-to-file exprs dest)))]
+             ;; Pass #t for `force-host-out?' in case  host and target are the same.
+             (compile-to-file exprs dest #f #t)))]
         [else
          ;; Normal mode
          (compile-file src dest)]))]))
+
+(time (compile-it))
 
 (printf "    ~a bytes peak memory use\n" (maximum-memory-bytes))

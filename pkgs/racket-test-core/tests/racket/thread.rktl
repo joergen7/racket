@@ -16,6 +16,10 @@
 (err/rt-test (thread (lambda (x) 8)) type?)
 (arity-test thread? 1 1)
 
+(test #f struct-predicate-procedure? thread?)
+(test #f struct-predicate-procedure? evt?)
+(test #f struct-type-property-predicate-procedure? evt?)
+
 ;; ----------------------------------------
 ;; Thread sets
 
@@ -1013,6 +1017,17 @@
      (goes (lambda () (sync (system-idle-evt))) (lambda () (sync (system-idle-evt))) kill-thread)))
  (list sleep void))
 
+;; Suspend and sleep
+(when (run-unreliable-tests? 'timing)
+  (let ([done? #f])
+    (define t (thread (lambda ()
+                        (sleep 0.1)
+                        (set! done? #t))))
+    (sync (system-idle-evt))
+    (thread-suspend t)
+    (sleep 0.1)
+    (test #f 'suspended-while-sleeping done?)))
+
 ;; ----------------------------------------
 ;;  Simple multi-custodian threads
 
@@ -1259,6 +1274,22 @@
   (custodian-shutdown-all c2)
   (test #f thread-running? t1)
   (test #f thread-running? t2))
+
+;; Attempting to shut down a thread without the managing custodian
+(let ([t (thread (lambda () (sync (make-semaphore))))])
+  (parameterize ([current-custodian (make-custodian)])
+    (err/rt-test (thread-suspend t) exn:fail:contract? #rx"does not solely manage")))
+
+(let ([c1 (make-custodian)]
+      [c2 (make-custodian)])
+  (define t (parameterize ([current-custodian c1])
+              (thread (lambda () (sync (make-semaphore))))))
+  (thread-resume t c2)
+  (parameterize ([current-custodian c1])
+    (err/rt-test (thread-suspend t) exn:fail:contract? #rx"does not solely manage"))
+  (parameterize ([current-custodian c2])
+    (err/rt-test (thread-suspend t) exn:fail:contract? #rx"does not solely manage"))
+  (test (void) thread-suspend t))
 
 ;; ----------------------------------------
 ;; plumbers

@@ -19,6 +19,10 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 
+#ifdef TARGET_OS_IPHONE
+# include <libkern/OSCacheControl.h>
+#endif
+
 /* we don't count on having the right value for correctness,
  * but the right value will give maximum efficiency */
 #define DEFAULT_L1_MAX_CACHE_LINE_SIZE 32
@@ -35,17 +39,27 @@ void S_doflush(uptr start, uptr end) {
   printf("  doflush(%x, %x)\n", start, end); fflush(stdout);
 #endif
 
+#ifdef TARGET_OS_IPHONE
+  sys_icache_invalidate((void *)start, (char *)end-(char *)start);
+#else
   __clear_cache((char *)start, (char *)end);
+#endif
 }
 
 void S_machine_init() {
   int l1_dcache_line_size, l1_icache_line_size;
 
+#if defined(__linux__)
   if ((l1_dcache_line_size = sysconf(_SC_LEVEL1_DCACHE_LINESIZE)) <= 0) {
     l1_dcache_line_size = DEFAULT_L1_MAX_CACHE_LINE_SIZE;
   }
   if ((l1_icache_line_size = sysconf(_SC_LEVEL1_ICACHE_LINESIZE)) <= 0) {
     l1_icache_line_size = DEFAULT_L1_MAX_CACHE_LINE_SIZE;
   }
+#else
+  l1_dcache_line_size = DEFAULT_L1_MAX_CACHE_LINE_SIZE;
+  l1_icache_line_size = DEFAULT_L1_MAX_CACHE_LINE_SIZE;
+#endif
+
   l1_max_cache_line_size = l1_dcache_line_size > l1_icache_line_size ? l1_dcache_line_size : l1_icache_line_size;
 }

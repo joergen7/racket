@@ -11,6 +11,13 @@
 #ifdef RKTIO_USE_PTHREADS
 # include <pthread.h>
 #endif
+#ifdef RKTIO_USE_XLOCALE
+# ifdef RKTIO_USE_XLOCALE_HEADER
+#  include <xlocale.h>
+# else
+#  include <locale.h>
+# endif
+#endif
 
 #if defined(RKTIO_SYSTEM_UNIX) && !defined(RKTIO_STATIC_FDSET_SIZE)
 # define USE_DYNAMIC_FDSET_SIZE
@@ -131,6 +138,10 @@ struct rktio_t {
 
 #ifdef OS_X
   int macos_kernel_version; /* e.g., 10 => 10.6, 15 => 10.11 */
+#endif
+
+#ifdef RKTIO_USE_XLOCALE
+  locale_t locale;
 #endif
 };
 
@@ -275,6 +286,9 @@ typedef wchar_t WIDE_PATH_t;
 typedef char WIDE_PATH_t;
 
 #endif
+
+void rktio_convert_init(rktio_t *rktio);
+void rktio_convert_deinit(rktio_t *rktio);
 
 /*========================================================================*/
 /* Hash table                                                             */

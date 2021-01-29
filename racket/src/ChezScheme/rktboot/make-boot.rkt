@@ -96,7 +96,8 @@
                expand
                compile
                error
-               format))))
+               format
+               make-variable-transformer))))
 
 (reset-toplevels)
 
@@ -402,7 +403,6 @@
       (eval `(mkgc-ocd.inc ,(path->string (build-path out-subdir "gc-ocd.inc"))))
       (eval `(mkgc-oce.inc ,(path->string (build-path out-subdir "gc-oce.inc"))))
       (eval `(mkgc-par.inc ,(path->string (build-path out-subdir "gc-par.inc"))))
-      (eval `(mkvfasl.inc ,(path->string (build-path out-subdir "vfasl.inc"))))
       (eval `(mkheapcheck.inc ,(path->string (build-path out-subdir "heapcheck.inc"))))
       (plumber-flush-all (current-plumber))))
 

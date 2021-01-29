@@ -105,6 +105,7 @@
               (box? x)
               (and ($record? x) (not (eq? x #!base-rtd)))
               (fxvector? x)
+              (flvector? x)
               (string? x)
               (bytevector? x)
               (gensym? x))))))
@@ -172,7 +173,9 @@
                  [(and ($record? x) (not (eq? x #!base-rtd)))
                   (when (print-record)
                     ((record-writer ($record-type-descriptor x)) x (bit-sink)
-                     (lambda (x p) ; could check for p == (bit-sink)
+                     (lambda (x p)
+                       (unless (and (output-port? p) (textual-port? p))
+                         ($oops 'write "~s is not a textual output port" p))
                        (find-dupls x (decr lev) len))))]
                  [(box? x) (find-dupls (unbox x) (decr lev) len)]
                  [(eq? x black-hole) (find-dupls x (decr lev) len)])]
@@ -214,7 +217,9 @@
                            (call/cc
                              (lambda (k)
                                ((record-writer ($record-type-descriptor x)) x (bit-sink)
-                                (lambda (x p) ; could check for p == (bit-sink)
+                                (lambda (x p)
+                                  (unless (and (output-port? p) (textual-port? p))
+                                    ($oops 'write "~s is not a textual output port" p))
                                   (if (cyclic? x (fx+ curlev 1) 0)
                                       (k #t))))
                                #f)))))]
@@ -307,7 +312,9 @@
                       (call/cc
                         (lambda (k)
                           ((record-writer ($record-type-descriptor x)) x (bit-sink)
-                           (lambda (x p) ; could check for p == (bit-sink)
+                           (lambda (x p)
+                             (unless (and (output-port? p) (textual-port? p))
+                               ($oops 'write "~s is not a textual output port" p))
                              (if (down x (fx- xlev 1)) (k #t))))
                           #f)))]
                 [(box? x) (down (unbox x) (fx- xlev 1))]
@@ -679,6 +686,7 @@ floating point returns with (1 0 -1 ...).
                                        (string-append "stencil[" (number->string (stencil-vector-mask x) 16) "]")
                                        x r lev len d? env p)]
           [(fxvector?) (wrvector fxvector-length fxvector-ref "vfx" x r lev len d? env p)]
+          [(flvector?) (wrvector flvector-length flvector-ref "vfl" x r lev len d? env p)]
           [(bytevector?) (wrvector bytevector-length bytevector-u8-ref "vu8" x r lev len d? env p)]
           [(flonum?) (wrflonum #f x r d? p)]
           ; catch before record? case
@@ -704,7 +712,9 @@ floating point returns with (1 0 -1 ...).
                (if (limit? lev)
                    (display-string "#[...]" p)
                    ((record-writer ($record-type-descriptor x)) x p
-                    (lambda (x p) ; could check for p == old p
+                    (lambda (x p)
+                      (unless (and (output-port? p) (textual-port? p))
+                        ($oops 'write "~s is not a textual output port" p))
                       (wr x r (decr lev) len d? env p))))
                (let ([rtd ($record-type-descriptor x)])
                  (cond ; keep in sync with default-record-writer
@@ -755,12 +765,13 @@ floating point returns with (1 0 -1 ...).
         [(let ([info ($code-info x)])
            (and (code-info? info) (code-info-src info))) =>
          (lambda (src)
-           (fprintf p " at ~a:~a"
-             (let ([fn (source-file-descriptor-name (source-sfd src))])
-               (if (string? fn) (path-last fn) fn))
-             (if (source-2d? src)
-                 (format "~a.~a" (source-2d-line src) (source-2d-column src))
-                 (source-bfp src))))])))
+           (let ([fn (source-file-descriptor-name (source-sfd src))])
+             (when (or (string? fn) (symbol? fn))
+               (fprintf p " at ~a:~a"
+                  (if (string? fn) (path-last fn) fn)
+                  (if (source-2d? src)
+                      (format "~a.~a" (source-2d-line src) (source-2d-column src))
+                      (source-bfp src))))))])))
 
   (define wrprocedure
     (lambda (x p)

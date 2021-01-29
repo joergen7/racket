@@ -190,7 +190,8 @@
    [(mode)
     (cond
      [(not mode) (bytes-allocated)]
-     [(eq? mode 'cumulative) (+ (bytes-deallocated) (bytes-allocated))]
+     [(eq? mode 'cumulative) (with-interrupts-disabled
+                              (+ (bytes-deallocated) (bytes-allocated)))]
      ;; must be a custodian; hook is reposnsible for complaining if not
      [else (custodian-memory-use mode (bytes-allocated))])]))
 
@@ -474,7 +475,7 @@
               (raise-arguments-error who "bad 'every value" "given" every-n))
             (loop (cddr args) flags max-path-length every-n))]
          [else
-          (raise-arguments-error who "unreognized argument;\n try 'help for more information" "given" (car args))])))]))
+          (raise-arguments-error who "unrecognized argument;\n try 'help for more information" "given" (car args))])))]))
 
 (define (make-struct-name-predicate name)
   (lambda (o)

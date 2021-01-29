@@ -1338,14 +1338,19 @@
  (((ref rktio_t) rktio) (rktio_const_string_t name)))
 (define-function
  ()
- (ref char)
+ void
+ rktio_set_default_locale
+ ((rktio_const_string_t name)))
+(define-function
+ ()
+ (ref void)
  rktio_push_c_numeric_locale
  (((ref rktio_t) rktio)))
 (define-function
  ()
  void
  rktio_pop_c_numeric_locale
- (((ref rktio_t) rktio) ((*ref char) prev)))
+ (((ref rktio_t) rktio) ((ref void) prev)))
 (define-function/errno
  NULL
  ()

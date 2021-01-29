@@ -1,5 +1,5 @@
-Chez Scheme Version 9.5.3
-Copyright 1984-2019 Cisco Systems, Inc.
+Chez Scheme Version 9.5.5
+Copyright 1984-2020 Cisco Systems, Inc.
 
 This product includes code developed by Cisco Systems, Inc.
 
@@ -28,3 +28,6 @@ Builds of this product incorporate separately copyrighted code from:
 
 * the Zlib compression library, developed by Jean-loup Gailly and
   Mark Adler
+
+* the LZ4 compression library, developed by Yann Collet and
+  contributors.

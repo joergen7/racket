@@ -338,8 +338,8 @@ RACKET_FOR_BOOTFILES = $(RACKET)
 RACKET_FOR_BUILD = $(RACKET)
 
 # This branch name changes each time the pb boot files are updated:
-PB_BRANCH == circa-7.8.0.10-13
-PB_REPO == https://github.com/racket/pb
+PB_BRANCH == circa-8.0.0.3-1
+PB_REPO = https://github.com/racket/pb
 
 # Alternative source for Chez Scheme boot files, normally set by
 # the distro-build client driver
@@ -420,7 +420,6 @@ cs-minimal-in-place-after-base:
 cs-minimal-in-place-after-base-cross:
 	$(MAKE) plain-minimal-in-place-after-base PLAIN_RACKET="$(RACKET_FOR_BUILD)" PLT_SETUP_OPTIONS="--no-pkg-deps $(PLT_SETUP_OPTIONS)"
 
-
 fetch-pb:
 	if [ "$(EXTRA_REPOS_BASE)" = "" ] ; \
           then $(MAKE) fetch-pb-from ; \
@@ -442,12 +441,19 @@ fetch-pb-from:
 	  else cd $(PB_DIR) && git fetch -q origin $(PB_BRANCH):remotes/origin/$(PB_BRANCH) ; fi
 	cd $(PB_DIR) && git checkout -q $(PB_BRANCH)
 
+pb-fetch:
+	$(MAKE) fetch-pb
+
 # Helpers for managing the "pb" repo:
+#  * `make pb-build` to rebuild pb boot files
 #  * `make pb-stage` after updating `PB_BRANCH`
 #  * `make pb-push` to upload the branch after checking that
 #    the staged branch looks right
 # If you don't have push access to `PB_REPO`, you may need to
 # change the origin of your "pb" checkout.
+pb-build:
+	cd racket/src/ChezScheme && racket rktboot/main.rkt --machine pb
+
 pb-stage:
 	cd $(PB_DIR) && git branch $(PB_BRANCH)
 	cd $(PB_DIR) && git checkout $(PB_BRANCH)
@@ -473,8 +479,7 @@ win-bc-then-cs-base:
 CSBUILD_ARGUMENTS == --pull \
                      --racketcs-suffix "$(RACKETCS_SUFFIX)" $(DISABLE_STATIC_LIBS) \
                      --boot-mode "$(SETUP_BOOT_MODE)" \
-                     --extra-repos-base "$(EXTRA_REPOS_BASE)" \
-                     -- $(GIT_CLONE_ARGS_qq)
+                     --extra-repos-base "$(EXTRA_REPOS_BASE)"
 
 win-just-cs-base:
 	IF NOT EXIST racket\src\build cmd /c mkdir racket\src\build
@@ -517,32 +522,13 @@ win-both:
 	$(MAKE) win-also-bc
 
 win-plain-also:
-	$(MAKE) $(VM) INITIAL_SETUP_MODE=skip PLT_SETUP_OPTIONS="-D $(PLT_SETUP_OPTIONS)"
+	$(MAKE) win-$(VM) INITIAL_SETUP_MODE=skip PLT_SETUP_OPTIONS="-D $(PLT_SETUP_OPTIONS)"
 
 win-also-cs:
 	$(MAKE) win-plain-also VM=cs
 
 win-also-bc:
 	$(MAKE) win-plain-also VM=bc
-
-# ------------------------------------------------------------
-# Get/update the "bootstrapped" Git submodule
-
-bootstrapped-repo:
-	if [ "$(EXTRA_REPOS_BASE)" = "" ] ; \
-         then $(MAKE) update-bootstrapped-normal ; \
-         else $(MAKE) update-bootstrapped-as-extra GIT_CLONE_ARGS_qq="" ; fi
-
-update-bootstrapped-normal:
-	git submodule -q init && git submodule -q update $(GIT_UPDATE_ARGS_qq)
-
-# For this target, `EXTRA_REPOS_BASE` is likely to be a dumb transport
-# (that does not support shallow copies, for example)
-update-bootstrapped-as-extra:
-	if [ ! -d racket/src/bootstrapped ] ; \
-	 then cd racket/src && git clone -q $(GIT_CLONE_ARGS_qq) $(EXTRA_REPOS_BASE)bootstrapped/.git ; \
-	fi
-	cd racket/src/bootstrapped && git pull -q $(GIT_PULL_ARGS_qq)
 
 # ------------------------------------------------------------
 # Clean (which just gives advice)
@@ -648,7 +634,7 @@ DIST_DESC =
 # Package catalog URLs (individually quoted as needed, separated by
 # spaces) to install as the initial configuration in generated
 # installers, where "" is replaced by the default configuration:
-DIST_CATALOGS_q = ""
+DIST_CATALOGS_q := ""
 
 # An identifier for this build; if not specified, a build identifier
 # is inferred from the date and git repository
@@ -661,7 +647,13 @@ INSTALL_NAME =
 
 # For Mac OS, a signing identity (spaces allowed) for binaries in an
 # installer:
-SIGN_IDENTITY = 
+SIGN_IDENTITY =
+
+# For Mac OS, set to a notarization configuration as a base64-encoded
+# hash table <config> in `--notarization-config <config>`, where the
+# distro-build documentation for `#:notarization-config` describes the
+# keys and values:
+NOTARIZATION_CONFIG =
 
 # For Windows, `osslsigncode' arguments other than `-n', `-t', `-in',
 # and `-out' as a Base64-encoded, S-expression, list of strings:
@@ -939,6 +931,7 @@ DIST_ARGS_q == $(UPLOAD_q) $(RELEASE_MODE) $(SOURCE_MODE) $(VERSIONLESS_MODE) \
                $(MAC_PKG_MODE) $(TGZ_MODE) --packed-options "$(INSTALLER_OPTIONS)" \
                --pre-process "$(INSTALLER_PRE_PROCESS_BASE64)" \
                --post-process "$(INSTALLER_POST_PROCESS_BASE64)" \
+               $(NOTARIZATION_CONFIG) \
                "$(DIST_NAME)" $(DIST_BASE) $(DIST_DIR) "$(DIST_SUFFIX)" \
                "$(SIGN_IDENTITY)" "$(OSSLSIGNCODE_ARGS_BASE64)"
 

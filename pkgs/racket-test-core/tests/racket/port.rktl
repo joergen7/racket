@@ -978,7 +978,7 @@
 ;; Text mode, file positions, and buffers
 
 (let ()
-  (define path (build-path (find-system-path 'temp-dir) "test.txt"))
+  (define path (make-temporary-file "test~a.txt"))
 
   (define ofile (open-output-file path #:mode 'text #:exists 'replace))
   (fprintf ofile "abc\ndef\nghi\n")
@@ -1099,6 +1099,44 @@
   (check-srcloc #f 3 29)
   (check-srcloc #f 3 #f)
   (check-srcloc 1 3 29))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Regression test for interaction of `read-line`, "\r\n", and
+;; input buffering
+
+(let ()
+  (define f1 (make-temporary-file "line-feed1~a.txt"))
+  (define f2 (make-temporary-file "line-feed2~a.txt"))
+
+  (define p1 (open-output-file f1 #:exists 'truncate))
+  (define p2 (open-output-file f2 #:exists 'truncate))
+
+  (define (write-prefix p)
+    (for ([i 1364])
+      (write-bytes #"x\r\n" p)))
+
+  (write-prefix p1)
+  (write-prefix p2)
+  (write-bytes #"\r\ny\r\ny\r\n" p1)
+  (write-bytes #"y\r\ny\r\ny\r\n" p2)
+
+  (close-output-port p1)
+  (close-output-port p2)
+
+  (define (count f)
+    (call-with-input-file f
+                          (lambda (in)
+                            (let loop ()
+                              (define v (read-line in 'any))
+                              (if (eof-object? v)
+                                  0
+                                  (add1 (loop)))))))
+
+  (test 1367 count f1)
+  (test 1367 count f2)
+
+  (delete-file f1)
+  (delete-file f2))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

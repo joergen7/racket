@@ -221,9 +221,11 @@ Since \scheme{__cdecl} is the default, specifying \scheme{__cdecl} is
 equivalent to specifying \scheme{#f} or no convention.
 Finally, \var{conv} can be \scheme{__collect_safe} to indicate that garbage
 collection is allowed concurrent to a call of the foreign procedure, or it
-can be \var{conv} can be \scheme{__varargs} to indicate that the procedure
-uses a convention that works with a variable number of arguments (which
-differs from the fixed-argument variant for some platforms and conventions).
+can be \var{conv} can be \scheme{__varargs} or \scheme{(__varargs_after \var{n})} to indicate
+that the procedure uses a convention that works with a variable number of arguments
+after the first \var{n} (which
+differs from the fixed-argument variant for some platforms and conventions),
+where \scheme{__varargs} is a shorthand for \scheme{(__varargs_after 1)}.
 
 Use \scheme{__stdcall} to access most Windows API procedures.
 Use \scheme{__cdecl} for Windows API varargs procedures,
@@ -1293,7 +1295,7 @@ the C stack is reset to its original value.
 
 The procedures described in this section directly create and manipulate
 foreign data, i.e., data that resides outside of the Scheme heap.
-With the exception of \scheme{foreign-alloc} and \scheme{foreign-sizeof},
+With the exception of \scheme{foreign-alloc}, \scheme{foreign-sizeof}, and \scheme{foreign-alignof},
 these procedures are inherently unsafe in the sense that they do not (and
 cannot) check the validity of the addresses they are passed.
 Improper use of these procedures can result in invalid memory references,
@@ -1465,6 +1467,17 @@ For multiple-byte values, the native endianness of the machine is assumed.
 \entryheader
 \formdef{foreign-sizeof}{\categoryprocedure}{(foreign-sizeof \var{type})}
 \returns the size in bytes of \var{type}
+\listlibraries
+\endentryheader
+
+\var{type} must be one of the symbols listed in the description
+of \scheme{foreign-ref} above.
+
+
+%----------------------------------------------------------------------------
+\entryheader
+\formdef{foreign-alignof}{\categoryprocedure}{(foreign-alignof \var{type})}
+\returns the alignment in bytes of \var{type}
 \listlibraries
 \endentryheader
 
@@ -2807,6 +2820,9 @@ cause problems.
 \xdef\cfunction#1#2#3{\noindent\index{\scheme{#2}}%
 [func] \scheme{#1} \scheme{#2}\scheme{(#3)}\\}
 
+\xdef\cfunctTwo#1#2#3#4{\noindent\index{\scheme{#2}}%
+[func] \scheme{#1} \scheme{#2}\scheme{(#3}\\\hphantom{[func] \scheme{#1} \scheme{#2}\scheme{(}}\scheme{#4)}\\}
+
 \parheader{Customization}
 The functions described here are used to initialize the Scheme system,
 build the Scheme heap, and run the Scheme system from a separate
@@ -2817,6 +2833,7 @@ program.
 \cfunction{void}{Sset_verbose}{int \var{v}}
 \cfunction{void}{Sregister_boot_file}{const char *\var{name}}
 \cfunction{void}{Sregister_boot_file_fd}{const char *\var{name}, int \var{fd}}
+\cfunctTwo{void}{Sregister_boot_file_fd_segment}{const char *\var{name}, int \var{fd},}{iptr \var{offset}, iptr \var{len}, int \var{close}_\var{after}}
 \cfunction{void}{Sbuild_heap}{const char *\var{exec}, void (*\var{custom}_\var{init})(void)}
 \cfunction{void}{Senable_expeditor}{const char *\var{history}_\var{file}}
 \cfunction{void}{Sretain_static_relocation}{void}
@@ -2857,6 +2874,19 @@ is used only for error reporting.
 For the first boot file registered only, the system also
 searches for the boot files upon which the named file
 depends, either directly or indirectly.
+
+The \scheme{Sregister_boot_file_fd_region} function is an alternative
+to \scheme{Sregister_boot_file_fd} that allows the same file
+descriptor to be used for multiple boot files using different offsets
+into the file. The \var{len} argument is used as a hint, but it can be
+0 to mean that the size is unknown, or it can be larger than the
+actual boot content; it must not be non-0 and smaller than the boot
+content, and the boot content must be self-terminating independent
+of]var{len}. No search is performed for dependencies. If the same file
+descriptor is used for multiple boot files, then
+\scheme{\var{close}_\var{after}} should be non-zero only for the last
+one. The boot file content is read only when \scheme{Sbuild_heap} is
+called.
 
 \scheme{Sbuild_heap} creates the Scheme heap from the registered boot
 files.
@@ -3048,6 +3078,20 @@ the pointer points and may copy other data over the object.
 \begin{flushleft}
 \cmacro{octet *}{Sbytevector_data}{ptr \var{bytevec}}
 \end{flushleft}
+
+\begin{flushleft}
+\cfunction{ptr}{Srecord_type}{ptr \var{rec}}
+\cfunction{ptr}{Srecord_type_parent}{ptr \var{rtd}}
+\cfunction{uptr}{Srecord_type_size}{ptr \var{rtd}}
+\cfunction{int}{Srecord_type_uniformp}{ptr \var{rtd}}
+\cmacro{ptr}{Srecord_uniform_ref}{ptr \var{rec}, iptr \var{i}}
+\end{flushleft}
+
+\noindent
+The \scheme{Srecord_uniform_ref} accessor should be used only on
+records whose fields are all Scheme values, which is a record
+for which \scheme{Srecord_type_uniformp} composed with
+\scheme{Srecord_type} returns true.
 
 \parheader{Mutators}
 Changes to mutable objects that contain pointers, such as pairs and

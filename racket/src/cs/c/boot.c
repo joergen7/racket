@@ -114,24 +114,41 @@ void racket_boot(racket_boot_arguments_t *ba)
   if ((ba->argc == 4) && !strcmp(ba->argv[0], "--cross-server"))
     cross_server = 1;
 
+  /* Open boot files, but reuse file descriptors when possible */
   {
-    int fd1, fd2;
+    int fd1, fd2, close_fd1 = 0, close_fd2 = 0;
+
+    if ((ba->boot2_offset == 0)
+        || ((ba->boot1_path != ba->boot2_path)
+            && strcmp(ba->boot1_path, ba->boot2_path)))
+      close_fd1 = 1;
+# ifdef RACKET_AS_BOOT
+    if ((ba->boot3_offset == 0)
+        || ((ba->boot2_path != ba->boot3_path)
+            && strcmp(ba->boot2_path, ba->boot3_path)))
+      close_fd2 = 1;
+#else
+    close_fd2 = 1;
+#endif
 
     fd1 = open(ba->boot1_path, O_RDONLY | BOOT_O_BINARY);
-    lseek(fd1, ba->boot1_offset, SEEK_SET);    
-    Sregister_boot_file_fd("petite", fd1);
-    
-    fd2 = open(ba->boot2_path, O_RDONLY | BOOT_O_BINARY);
-    lseek(fd2, ba->boot2_offset, SEEK_SET);
-    Sregister_boot_file_fd("scheme", fd2);
+    Sregister_boot_file_fd_region("petite", fd1, ba->boot1_offset, ba->boot1_len, close_fd1);
+
+    if (!close_fd1)
+      fd2 = fd1;
+    else
+      fd2 = open(ba->boot2_path, O_RDONLY | BOOT_O_BINARY);
+    Sregister_boot_file_fd_region("scheme", fd2, ba->boot2_offset, ba->boot2_len, close_fd2);
 
 # ifdef RACKET_AS_BOOT
     if (!cross_server) {
       int fd3;
-      
-      fd3 = open(ba->boot3_path, O_RDONLY | BOOT_O_BINARY);
-      lseek(fd3, ba->boot3_offset, SEEK_SET);
-      Sregister_boot_file_fd("racket", fd3);
+
+      if (!close_fd2)
+        fd3 = fd2;
+      else
+        fd3 = open(ba->boot3_path, O_RDONLY | BOOT_O_BINARY);
+      Sregister_boot_file_fd_region("racket", fd3, ba->boot3_offset, ba->boot3_len, 1);
     }
 # endif
   }
@@ -280,4 +297,38 @@ void racket_embedded_load_file(const char *path, int as_predefined)
 void racket_embedded_load_file_region(const char *path, uptr start, uptr end, int as_predefined)
 {
   embedded_load(Sbytevector((char *)path), Sfixnum(start), Sfixnum(end), Sfalse, as_predefined);
+}
+
+void *racket_cpointer_address(ptr cptr) {
+  void *p;
+  iptr offset;
+  p = racket_cpointer_base_address(cptr);
+  offset = racket_cpointer_offset(cptr);
+  return (char *)p + offset;
+}
+
+void *racket_cpointer_base_address(ptr cptr) {
+  if (Srecordp(cptr)) {
+    cptr = Srecord_uniform_ref(cptr, 0);
+
+    if (Sbytevectorp(cptr))
+      return &Sbytevector_u8_ref(cptr, 0);
+    else if (Svectorp(cptr))
+      return &Svector_ref(cptr, 0);
+    else if (Sfixnump(cptr) || Sbignump(cptr))
+      return TO_VOIDP(Sinteger_value(cptr));
+  }
+
+  return NULL;
+}
+
+iptr racket_cpointer_offset(ptr cptr) {
+  if (Srecordp(cptr)) {
+    if (Srecord_type_parent(Srecord_type(cptr)) != Sfalse) {
+      /* assume that it's a cpointer+offset */
+      return Sinteger_value(Srecord_uniform_ref(cptr, 2));
+    }
+  }
+
+  return 0;
 }

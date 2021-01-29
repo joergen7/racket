@@ -36,11 +36,10 @@ void S_thread_init() {
     S_tc_mutex.count = 0;
     s_thread_cond_init(&S_collect_cond);
     s_thread_cond_init(&S_collect_thread0_cond);
-    S_tc_mutex_depth = 0;
-    s_thread_mutex_init(&S_gc_tc_mutex.pmutex);
-    S_tc_mutex.owner = 0;
-    S_tc_mutex.count = 0;
-    S_use_gc_tc_mutex = 0;
+    s_thread_mutex_init(&S_alloc_mutex.pmutex);
+    s_thread_cond_init(&S_terminated_cond);
+    S_alloc_mutex.owner = 0;
+    S_alloc_mutex.count = 0;
 
 # ifdef IMPLICIT_ATOMIC_AS_EXPLICIT
     s_thread_mutex_init(&S_implicit_mutex);
@@ -65,6 +64,8 @@ ptr S_create_thread_object(who, p_tc) const char *who; ptr p_tc; {
   if (S_threads == Snil) {
     tc = TO_PTR(S_G.thread_context);
     tgc = &S_G.main_thread_gc;
+    GCDATA(tc) = TO_PTR(tgc);
+    tgc->tc = tc;
   } else { /* clone parent */
     ptr p_v = PARAMETERS(p_tc);
     iptr i, n = Svector_length(p_v);
@@ -81,6 +82,9 @@ ptr S_create_thread_object(who, p_tc) const char *who; ptr p_tc; {
       S_error(who, "unable to malloc thread data structure");
     memcpy(TO_VOIDP(tc), TO_VOIDP(p_tc), size_tc);
 
+    GCDATA(tc) = TO_PTR(tgc);
+    tgc->tc = tc;
+
     {
       IGEN g; ISPC s;
       for (g = 0; g <= static_generation; g++) {
@@ -89,11 +93,19 @@ ptr S_create_thread_object(who, p_tc) const char *who; ptr p_tc; {
           tgc->next_loc[g][s] = (ptr)0;
           tgc->bytes_left[g][s] = 0;
           tgc->sweep_loc[g][s] = (ptr)0;
+          tgc->sweep_next[g][s] = NULL;
         }
         tgc->bitmask_overhead[g] = 0;
       }
     }
- 
+
+    tgc->during_alloc = 0;
+    tgc->pending_ephemerons = (ptr)0;
+    for (i = 0; i < (int)DIRTY_SEGMENT_LISTS; i++)
+      tgc->dirty_segments[i] = NULL;
+    tgc->queued_fire = 0;
+    tgc->preserve_ownership = 0;
+
     v = S_vector_in(tc, space_new, 0, n);
 
     for (i = 0; i < n; i += 1)
@@ -103,10 +115,9 @@ ptr S_create_thread_object(who, p_tc) const char *who; ptr p_tc; {
     CODERANGESTOFLUSH(tc) = Snil;
   }
 
-  GCDATA(tc) = TO_PTR(tgc);
-  tgc->tc = tc;
+  tgc->sweeper = main_sweeper_index;
 
- /* override nonclonable tc fields */
+  /* override nonclonable tc fields */
   THREADNO(tc) = S_G.threadno;
   S_G.threadno = S_add(S_G.threadno, FIX(1));
 
@@ -123,7 +134,11 @@ ptr S_create_thread_object(who, p_tc) const char *who; ptr p_tc; {
   FRAME(tc,0) = TO_PTR(&CODEIT(S_G.dummy_code_object,size_rp_header));
 
  /* S_reset_allocation_pointer initializes ap and eap */
+  alloc_mutex_acquire();
   S_reset_allocation_pointer(tc);
+  alloc_mutex_release();
+  S_maybe_fire_collector(tgc);
+
   RANDOMSEED(tc) = most_positive_fixnum < 0xffffffff ? most_positive_fixnum : 0xffffffff;
   X(tc) = Y(tc) = U(tc) = V(tc) = W(tc) = FIX(0);
 
@@ -159,16 +174,8 @@ ptr S_create_thread_object(who, p_tc) const char *who; ptr p_tc; {
 
   LZ4OUTBUFFER(tc) = 0;
 
-  tgc->sweeper = main_sweeper_index;
-  tgc->remote_range_start = (ptr)(uptr)-1;
-  tgc->remote_range_end = (ptr)0;
-  tgc->pending_ephemerons = (ptr)0;
-  tgc->ranges_to_send = NULL;
-  tgc->ranges_received = NULL;
-  for (i = 0; i < (int)DIRTY_SEGMENT_LISTS; i++)
-    tgc->dirty_segments[i] = NULL;
-  tgc->thread = (ptr)0;
-  
+  CP(tc) = 0;
+
   tc_mutex_release();
 
   return thread;
@@ -181,7 +188,7 @@ IBOOL Sactivate_thread() { /* create or reactivate current thread */
   if (tc == (ptr)0) { /* thread created by someone else */
     ptr thread;
 
-   /* borrow base thread for now */
+   /* borrow base thread to clone */
     thread = S_create_thread_object("Sactivate_thread", TO_PTR(S_G.thread_context));
     s_thread_setspecific(S_tc_key, TO_VOIDP(THREADTC(thread)));
     return 1;
@@ -244,10 +251,13 @@ static IBOOL destroy_thread(tc) ptr tc; {
       *ls = Scdr(*ls);
       S_nthreads -= 1;
 
+      alloc_mutex_acquire();
+
      /* process remembered set before dropping allocation area */
       S_scan_dirty((ptr *)EAP(tc), (ptr *)REAL_EAP(tc));
 
      /* close off thread-local allocation */
+      S_thread_start_code_write(tc, static_generation, 0, NULL);
       {
         ISPC s; IGEN g;
         thread_gc *tgc = THREAD_GC(tc);
@@ -256,6 +266,9 @@ static IBOOL destroy_thread(tc) ptr tc; {
             if (tgc->next_loc[g][s])
               S_close_off_thread_local_segment(tc, s, g);
       }
+      S_thread_end_code_write(tc, static_generation, 0, NULL);
+
+      alloc_mutex_release();
 
      /* process guardian entries */
       {
@@ -286,6 +299,9 @@ static IBOOL destroy_thread(tc) ptr tc; {
       if (LZ4OUTBUFFER(tc) != (ptr)0) free(TO_VOIDP(LZ4OUTBUFFER(tc)));
       if (SIGNALINTERRUPTQUEUE(tc) != (ptr)0) free(TO_VOIDP(SIGNALINTERRUPTQUEUE(tc)));
 
+      if (THREAD_GC(tc)->preserve_ownership)
+        --S_num_preserve_ownership_threads;
+
       /* Never free a thread_gc, since it may be recorded in a segment
          as the segment's creator. Recycle manually, instead. */
       THREAD_GC(tc)->sweeper = main_sweeper_index;
@@ -297,6 +313,8 @@ static IBOOL destroy_thread(tc) ptr tc; {
       
       THREADTC(thread) = 0; /* mark it dead */
       status = 1;
+
+      s_thread_cond_broadcast(&S_terminated_cond);
       break;
     }
     ls = &Scdr(*ls);
@@ -361,7 +379,7 @@ void S_mutex_free(m) scheme_mutex_t *m; {
   free(m);
 }
 
-void S_mutex_acquire(m) scheme_mutex_t *m; {
+void S_mutex_acquire(scheme_mutex_t *m) NO_THREAD_SANITIZE {
   s_thread_t self = s_thread_self();
   iptr count;
   INT status;
@@ -379,7 +397,7 @@ void S_mutex_acquire(m) scheme_mutex_t *m; {
   m->count = 1;
 }
 
-INT S_mutex_tryacquire(m) scheme_mutex_t *m; {
+INT S_mutex_tryacquire(scheme_mutex_t *m) NO_THREAD_SANITIZE {
   s_thread_t self = s_thread_self();
   iptr count;
   INT status;
@@ -401,7 +419,12 @@ INT S_mutex_tryacquire(m) scheme_mutex_t *m; {
   return status;
 }
 
-void S_mutex_release(m) scheme_mutex_t *m; {
+IBOOL S_mutex_is_owner(scheme_mutex_t *m) NO_THREAD_SANITIZE {
+  s_thread_t self = s_thread_self();
+  return ((m->count > 0) && s_thread_equal(m->owner, self));
+}
+
+void S_mutex_release(scheme_mutex_t *m) NO_THREAD_SANITIZE {
   s_thread_t self = s_thread_self();
   iptr count;
   INT status;
@@ -433,11 +456,11 @@ void S_condition_free(c) s_thread_cond_t *c; {
 
 #ifdef FEATURE_WINDOWS
 
-static inline int s_thread_cond_timedwait(s_thread_cond_t *cond, s_thread_mutex_t *mutex, int typeno, long sec, long nsec) {
+static inline int s_thread_cond_timedwait(s_thread_cond_t *cond, s_thread_mutex_t *mutex, int typeno, I64 sec, long nsec) {
   if (typeno == time_utc) {
     struct timespec now;
     S_gettime(time_utc, &now);
-    sec -= (long)now.tv_sec;
+    sec -= now.tv_sec;
     nsec -= now.tv_nsec;
     if (nsec < 0) {
       sec -= 1;
@@ -448,7 +471,7 @@ static inline int s_thread_cond_timedwait(s_thread_cond_t *cond, s_thread_mutex_
     sec = 0;
     nsec = 0;
   }
-  if (SleepConditionVariableCS(cond, mutex, sec*1000 + nsec/1000000)) {
+  if (SleepConditionVariableCS(cond, mutex, (DWORD)(sec*1000 + (nsec+500000)/1000000))) {
     return 0;
   } else if (GetLastError() == ERROR_TIMEOUT) {
     return ETIMEDOUT;
@@ -459,12 +482,12 @@ static inline int s_thread_cond_timedwait(s_thread_cond_t *cond, s_thread_mutex_
 
 #else /* FEATURE_WINDOWS */
 
-static inline int s_thread_cond_timedwait(s_thread_cond_t *cond, s_thread_mutex_t *mutex, int typeno, long sec, long nsec) {
+static inline int s_thread_cond_timedwait(s_thread_cond_t *cond, s_thread_mutex_t *mutex, int typeno, I64 sec, long nsec) {
   struct timespec t;
   if (typeno == time_duration) {
     struct timespec now;
     S_gettime(time_utc, &now);
-    t.tv_sec = now.tv_sec + sec;
+    t.tv_sec = (time_t)(now.tv_sec + sec);
     t.tv_nsec = now.tv_nsec + nsec;
     if (t.tv_nsec >= 1000000000) {
       t.tv_sec += 1;
@@ -486,7 +509,7 @@ IBOOL S_condition_wait(c, m, t) s_thread_cond_t *c; scheme_mutex_t *m; ptr t; {
   s_thread_t self = s_thread_self();
   iptr count;
   INT typeno;
-  long sec;
+  I64 sec;
   long nsec;
   INT status;
   IBOOL is_collect;
@@ -501,7 +524,7 @@ IBOOL S_condition_wait(c, m, t) s_thread_cond_t *c; scheme_mutex_t *m; ptr t; {
   if (t != Sfalse) {
     /* Keep in sync with ts record in s/date.ss */
     typeno = Sinteger32_value(Srecord_ref(t,0));
-    sec = Sinteger32_value(Scar(Srecord_ref(t,1)));
+    sec = Sinteger64_value(Scar(Srecord_ref(t,1)));
     nsec = Sinteger32_value(Scdr(Srecord_ref(t,1)));
   } else {
     typeno = 0;

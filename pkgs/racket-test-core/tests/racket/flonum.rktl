@@ -47,6 +47,9 @@
         (test #t same-results (list-ref line 0) (list-ref line 1) (list i k j))
         (test #t same-results (list-ref line 0) (list-ref line 1) (cons i more-flonums))))))
 
+(err/rt-test (flvector-ref (flvector 4.0 5.0 6.0) 4) exn:fail:contract? #rx"[[]0, 2[]]")
+(err/rt-test (flvector-set! (flvector 4.0 5.0 6.0) 4 0.0) exn:fail:contract? #rx"[[]0, 2[]]")
+
 (define (flonum-close? fl1 fl2)
   (<= (flabs (fl- fl1 fl2))
       1e-8))
@@ -382,6 +385,39 @@
 (let ([v (flvector 1.0 2.0 3.0)])
   (unsafe-flvector-set! v 0 10.0)
   (test 10.0 'ref (unsafe-flvector-ref v 0)))
+
+;; ----------------------------------------
+;; Regression test for a compiler bug that happened to be exposed
+;; by flvector combinations
+
+(let ()
+  (define l '(1 2 3 4 5))
+  (define expected (flvector 1.0 2.0 3.0 4.0 5.0))
+
+  (define xs (make-flvector (length l)))
+  (define slow (if (zero? (random 1))
+                   real->double-flonum
+                   values))
+
+  (define (list->flvector vs)
+    (let ([n 5])
+      (let/ec break
+        (let loop ([i 0] [vs vs])
+          (unless (null? vs)
+            (define v (car vs))
+            (unsafe-flvector-set! xs i (slow v))
+            (loop (+ i 1) (cdr vs)))))
+      xs))
+
+  (for ([i 1000000])
+    (flvector-set! xs 0 0.0)
+    (flvector-set! xs 1 0.0)
+    (flvector-set! xs 2 0.0)
+    (flvector-set! xs 3 0.0)
+    (flvector-set! xs 4 0.0)
+    (define v (list->flvector l))
+    (unless (equal? v expected)
+      (error 'regression "~a: bad flvector: ~s\n" i v))))
 
 ;; ----------------------------------------
 
