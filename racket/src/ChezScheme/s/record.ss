@@ -26,7 +26,8 @@
 
 (let ()
   (define (rtd-ancestry x) ($object-ref 'scheme-object x (constant record-type-ancestry-disp)))
-  (define (rtd-parent x) (vector-ref (rtd-ancestry x) 0))
+  (define (rtd-parent x) (let ([a (rtd-ancestry x)])
+                           (vector-ref a (fx- (vector-length a) (constant ancestry-parent-offset)))))
   (define (rtd-size x) ($object-ref 'scheme-object x (constant record-type-size-disp)))
   (define (rtd-pm x) ($object-ref 'scheme-object x (constant record-type-pm-disp)))
   (define (rtd-mpm x) ($object-ref 'scheme-object x (constant record-type-mpm-disp)))
@@ -554,8 +555,8 @@
     (define ($mrt who base-rtd name parent uid flags fields mutability-mask extras)
       (include "layout.ss")
       (when parent
-        (when (record-type-sealed? parent)
-          ($oops who "cannot extend sealed record type ~s" parent))
+        (when ($record-type-act-sealed? parent)
+          ($oops who "cannot extend sealed record type ~s as ~s" parent name))
         (if (fixnum? fields)
             (unless (fixnum? (rtd-flds parent))
               ($oops who "cannot make anonymous-field record type ~s from named-field parent record type ~s" name parent))
@@ -619,14 +620,15 @@
                  (unless (eq? (rtd-size rtd) size) (squawk "different size")))
                rtd)]
             [else
-             (let* ([len (if (not parent) 0 (vector-length (rtd-ancestry parent)))]
-                    [ancestry (make-vector (fx+ 1 len) parent)])
-               (let loop ([i 0])
+             (let* ([len (if (not parent) 1 (vector-length (rtd-ancestry parent)))]
+                    [ancestry (make-vector (fx+ 1 len) #f)])
+               (let loop ([i 1])
                  (unless (fx= i len)
-                   (vector-set! ancestry (fx+ i 1) (vector-ref (rtd-ancestry parent) i))
+                   (vector-set! ancestry i (vector-ref (rtd-ancestry parent) i))
                    (loop (fx+ i 1))))
                (let ([rtd (apply #%$record base-rtd ancestry size pm mpm name
                                  (if (pair? flds) (cdr flds) (fx- flds 1)) flags uid #f extras)])
+                 (vector-set! ancestry len rtd)
                  (with-tc-mutex ($sputprop uid '*rtd* rtd))
                  rtd))]))))
 
@@ -639,18 +641,40 @@
                     [ancestry (rtd-ancestry rtd)]
                     [name (rtd-name rtd)]
                     [flags (rtd-flags rtd)]
-                    [flds (rtd-flds rtd)])
+                    [old-flds (rtd-flds rtd)])
                 (let-values ([(pm mpm flds size)
-                              (if (fixnum? flds)
+                              (if (fixnum? old-flds)
                                   (compute-field-offsets who
                                     (constant record-type-disp)
-                                    (fx+ flds 1) (rtd-mpm rtd))
+                                    (fx+ old-flds 1) (rtd-mpm rtd))
                                   (let ([fields (csv7:record-type-field-decls rtd)])
                                     (compute-field-offsets who
                                       (constant record-type-disp)
                                       (cons `(immutable scheme-object ,uid) fields))))])
+                  (define (share-with-remade-parent flds)
+                    (let ([old-parent (rtd-parent rtd)])
+                      (if (and old-parent
+                               (not (eq? old-parent #!base-rtd)))
+                          (let ([parent ($remake-rtd old-parent compute-field-offsets)])
+                            (let loop ([flds flds]
+                                       [old-flds old-flds]
+                                       [parent-flds (rtd-flds parent)]
+                                       [parent-old-flds (rtd-flds old-parent)])
+                              (cond
+                                [(null? parent-flds) flds]
+                                [else
+                                 (safe-assert (equal? (car flds) (car parent-flds)))
+                                 (safe-assert (equal? (car old-flds) (car parent-old-flds)))
+                                 (cons (if (eq? (car old-flds) (car parent-old-flds))
+                                           (car parent-flds)
+                                           (car flds))
+                                       (loop (cdr flds) (cdr old-flds) (cdr parent-flds) (cdr parent-old-flds)))])))
+                          flds)))
                   (let ([rtd (apply #%$record base-rtd ancestry size pm mpm name
-                               (if (pair? flds) (cdr flds) (fx- flds 1)) flags uid #f
+                               (if (pair? flds)
+                                   (share-with-remade-parent (cdr flds))
+                                   (fx- flds 1))
+                               flags uid #f
                                (let* ([n (length (rtd-flds ($record-type-descriptor base-rtd)))]
                                       [ls (list-tail (rtd-flds base-rtd) n)])
                                  (let f ([n n] [ls ls])
@@ -837,7 +861,7 @@
             ($oops who "~s is a record type descriptor with anonymous fields" rtd)
             (list->vector (map (lambda (x) (fld-name x)) flds))))))
 
-  (set-who! #(csv7: record-type-field-indices)
+  (set-who! $record-type-field-indices
     (lambda (rtd)
       (unless (record-type-descriptor? rtd)
         ($oops who "~s is not a record type descriptor" rtd))
@@ -898,6 +922,20 @@
       (unless (record-type-descriptor? rtd)
         ($oops 'record-type-sealed? "~s is not a record type descriptor" rtd))
       (#3%record-type-sealed? rtd)))
+
+  (set-who! $record-type-act-sealed!
+    (lambda (rtd)
+      (unless (record-type-descriptor? rtd)
+        ($oops who "~s is not a record type descriptor" rtd))
+      (unless ($record-type-act-sealed? rtd)
+        ($object-set! 'scheme-object rtd (constant record-type-flags-disp)
+                      (fxior (rtd-flags rtd) (constant rtd-act-sealed))))))
+
+  (set-who! $record-type-act-sealed?
+    (lambda (rtd)
+      (unless (record-type-descriptor? rtd)
+        ($oops who "~s is not a record type descriptor" rtd))
+      (#3%$record-type-act-sealed? rtd)))
 
   (set! record-type-generative?
     (lambda (rtd)

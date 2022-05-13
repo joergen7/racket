@@ -17,15 +17,25 @@
 
 ;; Definitons like `os-symbol` are also parsed by "../c/gen-system.rkt"
 
+(define-syntax (reflect-machine-type stx)
+  (case (#%$target-machine)
+    [(pb tpb
+         pb64l tpb64l pb64b tpb64b
+         pb32l tpb32l pb32b tpb32b)
+     (let ([s (getenv "PLT_CS_MACHINE_TYPE")])
+       (unless s (error 'machine-type "need PLT_CS_MACHINE_TYPE"))
+       #`(quote #,(#%datum->syntax #'here (string->symbol s))))]
+    [else #'(machine-type)]))
+
 (define os-symbol
-  (case (machine-type)
+  (case (reflect-machine-type)
     [(a6osx ta6osx i3osx ti3osx arm64osx tarm64osx ppc32osx tppc32osx)
      (if unix-style-macos? 'unix 'macosx)]
-    [(a6nt ta6nt i3nt ti3nt) 'windows]
+    [(a6nt ta6nt i3nt ti3nt arm64nt tarm64nt) 'windows]
     [else 'unix]))
 
 (define os*-symbol
-  (case (machine-type)
+  (case (reflect-machine-type)
     [(a6osx ta6osx
             i3osx ti3osx
             arm64osx tarm64osx
@@ -33,24 +43,38 @@
      (if unix-style-macos?
          'darwin
          'macosx)]
-    [(a6nt ta6nt i3nt ti3nt) 'windows]
+    [(a6nt ta6nt i3nt ti3nt arm64nt tarm64nt) 'windows]
     [(a6le ta6le i3le ti3le
            arm32le tarm32le arm64le tarm64le
            ppc32le tppc32le)
      'linux]
-    [(a6ob ta6ob i3ob ti3ob) 'openbsd]
-    [(a6fb ta6fb i3fb ti3fb) 'freebsd]
-    [(a6nb ta6nb i3nb ti3nb) 'netbsd]
+    [(a6fb ta6fb i3fb ti3fb
+           arm32fb tarm32fb arm64fb tarm64fb
+           ppc32fb tppc32fb)
+     'freebsd]
+    [(a6ob ta6ob i3ob ti3ob
+           arm32ob tarm32ob arm64ob tarm64ob
+           ppc32ob tppc32ob)
+     'openbsd]
+    [(a6nb ta6nb i3nb ti3nb
+           arm32nb tarm32nb arm64nb tarm64nb
+           ppc32nb tppc32nb)
+     'netbsd]
     [(a6s2 ta6s2 i3s2 ti3s2) 'solaris]
     [(i3qnx) 'qnx]
+    [(pb tpb
+         pb64l tpb64l pb64b tpb64b
+         pb32l tpb32l pb32b tpb32b)
+     'unknown]
     [else (error 'system-type "internal error: unknown operating system")]))
 
 (define arch-symbol
-  (case (machine-type)
+  (case (reflect-machine-type)
     [(a6osx ta6osx
             a6nt ta6nt
             a6le ta6le
             a6ob ta6ob
+            a6nb ta6nb
             a6fb ta6fb
             a6s2 ta6s2)
      'x86_64]
@@ -58,36 +82,54 @@
             i3nt ti3nt
             i3le ti3le
             i3ob ti3ob
+            i3nb ti3nb
             i3fb ti3fb
             i3s2 ti3s2
             i3qnx)
      'i386]
-    [(arm32le tarm32le) 'arm]
-    [(arm64le tarm64le arm64osx tarm64osx) 'aarch64]
+    [(arm32le tarm32le
+              arm32fb tarm32fb
+              arm32ob tarm32ob
+              arm32nb tarm32nb)
+     'arm]
+    [(arm64le tarm64le
+              arm64osx tarm64osx
+              arm64fb tarm64fb
+              arm64ob tarm64ob
+              arm64nb tarm64nb
+	      arm64nt tarm64nt)
+     'aarch64]
     [(ppc32le tppc32le
-              ppc32osx tppc32osx)
+              ppc32osx tppc32osx
+              ppc32fb tppc32fb
+              ppc32ob tppc32ob
+              ppc32nb tppc32nb)
      'ppc]
+    [(pb tpb
+         pb64l tpb64l pb64b tpb64b
+         pb32l tpb32l pb32b tpb32b)
+     'unknown]
     [else (error 'system-type "internal error: unknown architecture")]))
 
 (define link-symbol
-  (case (machine-type)
+  (case (reflect-machine-type)
     [(a6osx ta6osx i3osx ti3osx arm64osx tarm64osx)
      (if unix-style-macos?
          'static
          'framework)]
-    [(a6nt ta6nt i3nt ti3nt) 'windows]
+    [(a6nt ta6nt i3nt ti3nt arm64nt tarm64nt) 'windows]
     [else (if unix-link-shared?
               'shared
               'static)]))
 
 (define so-suffix-bytes
-  (case (machine-type)
+  (case (reflect-machine-type)
     [(a6osx ta6osx i3osx ti3osx arm64osx tarm64osx ppc32osx tppc32osx) (string->utf8 ".dylib")]
-    [(a6nt ta6nt i3nt ti3nt) (string->utf8 ".dll")]
+    [(a6nt ta6nt i3nt ti3nt arm64nt tarm64nt) (string->utf8 ".dll")]
     [else (string->utf8 ".so")]))
 
 (define so-mode
-  (case (machine-type)
+  (case (reflect-machine-type)
     [(arm64osx tarm64osx) 'global]
     [else 'local]))
 
@@ -134,15 +176,16 @@
                                    mode)])])))
 
 (define (system-path-convention-type)
-  (case (machine-type)
-    [(a6nt ta6nt i3nt ti3nt) 'windows]
+  (case (reflect-machine-type)
+    [(a6nt ta6nt i3nt ti3nt arm64nt tarm64nt) 'windows]
     [else 'unix]))
 
 (define system-library-subpath-string
   (string-append
-   (case (machine-type)
+   (case (reflect-machine-type)
      [(a6nt ta6nt) "win32\\x86_64"]
      [(i3nt ti3nt) "win32\\i386"]
+     [(arm64nt tarm64nt) "win32\\arm64"]
      [else (string-append (symbol->string arch-symbol)
                           "-"
                           (symbol->string os*-symbol))])

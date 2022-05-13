@@ -12,6 +12,7 @@
 
          start-atomic
          end-atomic
+         abort-atomic
 
          atomically/no-interrupts
          start-atomic/no-interrupts
@@ -57,11 +58,16 @@
 
 ;; inlined in Chez Scheme embedding:
 (define (start-atomic)
+  ;; Althogh it's adjusting atomicity for the thread scheduler,
+  ;; this function is documented as working in any Scheme thread.
+  ;; The current implementation relies on parameters like
+  ;; `future-barrier` and `current-atomic` being virtual registers
   (future-barrier)
   (current-atomic (fx+ (current-atomic) 1)))
 
 ;; inlined in Chez Scheme embedding:
 (define (end-atomic)
+  ;; See `start-atomic` note on calls from any Scheme thread
   (define n (fx- (current-atomic) 1))
   (cond
     [(fx= n 0)
@@ -75,6 +81,13 @@
      ;; before we exit atomic mode. Make sure that rare
      ;; possibility remains ok.
      (current-atomic n)]))
+
+;; intended to avoid an infinite loop of "can't do that in atomic
+;; mode" exceptions when things have gone terribly wrong, assume that
+;; we're in a state where anything can happen, anyway
+(define (abort-atomic)
+  (current-atomic 0)
+  (end-atomic-callback 0))
 
 (define (do-end-atomic-callback)
   (define cbs (end-atomic-callback))

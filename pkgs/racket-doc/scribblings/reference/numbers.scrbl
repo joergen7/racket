@@ -68,12 +68,12 @@ other than @racket[+nan.0] or @racketvalfont{+nan.f} by an inexact zero returns 
 @racketvalfont{+inf.f}, @racket[-inf.0]
 or @racketvalfont{-inf.f}, depending on the sign and precision of the dividend. The
 @racket[+nan.0] value is not @racket[=] to itself, but @racket[+nan.0]
-is @racket[eqv?] to itself, and @racketvalfont{+nan.f} is similarly @racket[eqv?] but 
+is @racket[eqv?] to itself, and @racketvalfont{+nan.f} is similarly @racket[eqv?] but
 not @racket[=] to itself. Conversely, @racket[(= 0.0 -0.0)] is
-@racket[#t], but @racket[(eqv? 0.0 -0.0)] is @racket[#f], and the 
-same for @racket[0.0f0] and @racket[-0.0f0] (which are single-precision variants). The datum
-@racketvalfont{-nan.0} refers to the same constant as @racket[+nan.0],
-and @racketvalfont{-nan.f} is the same as @racketvalfont{+nan.f}.
+@racket[#t], but @racket[(eqv? 0.0 -0.0)] is @racket[#f], and the
+same for @racketvalfont{0.0f0} and @racketvalfont{-0.0f0} (which are single-precision variants). The datum
+@as-index{@racketvalfont{-nan.0}} refers to the same constant as @racket[+nan.0],
+and @as-index{@racketvalfont{-nan.f}} is the same as @racketvalfont{+nan.f}.
 
 Calculations with infinities produce results consistent with IEEE
 double- or single-precision floating point where IEEE specifies the result; in
@@ -100,7 +100,7 @@ when they are @racket[eqv?].
 
 Two real numbers are @racket[eqv?] when they are both inexact with the same precision or both
 exact, and when they are @racket[=] (except for @racket[+nan.0], @racketvalfont{+nan.f},
-@racket[+0.0], @racket[+0.0f0], @racket[-0.0], and @racket[-0.0f0], as noted above). 
+@racket[+0.0], @racketvalfont{+0.0f0}, @racket[-0.0], and @racketvalfont{-0.0f0}, as noted above).
 Two complex numbers are @racket[eqv?] when their real and imaginary parts are @racket[eqv?].
 Two numbers are @racket[equal?] when they are @racket[eqv?].
 
@@ -124,7 +124,7 @@ because all numbers are @tech{complex numbers}.}
 @defproc[(real? [v any/c]) boolean?]{ Returns @racket[#t] if @racket[v] is
  a @techlink{real number}, @racket[#f] otherwise.
 
-@mz-examples[(real? 1) (real? +inf.0) (real? 2+3i) 
+@mz-examples[(real? 1) (real? +inf.0) (real? 2+3i)
              (real? 2+0.0i) (real? "hello")]}
 
 
@@ -137,7 +137,7 @@ because all numbers are @tech{complex numbers}.}
 @defproc[(integer? [v any/c]) boolean?]{ Returns @racket[#t] if @racket[v]
  is a number that is an @techlink{integer}, @racket[#f] otherwise.
 
-@mz-examples[(integer? 1) (integer? 2.3) (integer? 4.0) (integer? +inf.0) 
+@mz-examples[(integer? 1) (integer? 2.3) (integer? 4.0) (integer? +inf.0)
              (integer? 2+3i) (integer? "hello")]}
 
 
@@ -268,7 +268,7 @@ produces @racket[#f] for all arguments.
 @; ----------------------------------------
 @section[#:tag "generic-numbers"]{Generic Numerics}
 
-Most Racket numeric operations work on any kind of number. 
+Most Racket numeric operations work on any kind of number.
 
 @; ----------------------------------------
 @subsection{Arithmetic}
@@ -351,7 +351,7 @@ Returns @racket[(values (quotient n m) (remainder n m))], but the
 ]}
 
 
-@defproc[(modulo [n integer?] [m integer?]) integer?]{ 
+@defproc[(modulo [n integer?] [m integer?]) integer?]{
 
 Returns @racket[_q] with the same sign as @racket[m] where
 
@@ -401,7 +401,7 @@ Returns the smallest of the @racket[x]s, or @racket[+nan.0] if any
 Returns the @as-index{greatest common divisor} (a non-negative
  number) of the @racket[n]s; for non-integer @racket[n]s, the result
  is the @racket[gcd] of the numerators divided
- by the @racket[lcm] of the denominators. 
+ by the @racket[lcm] of the denominators.
  If no arguments are provided, the result
  is @racket[0]. If all arguments are zero, the result is zero.
 
@@ -601,6 +601,10 @@ If @racket[z] is exact @racket[0], the result is as follows:
 
  @item{otherwise --- result is @racket[0]}
 ]
+
+If @racket[w] is exact @racket[1/2], the result is the same as @racket[(sqrt z)],
+which can be exact. Other fractional powers are not treated specially in this manner:
+@mz-examples[(expt 9 1/2) (expt 9 0.5) (expt 16 1/4) (expt 16 0.25)]
 
 Further special cases when @racket[w] is a @tech{real number}:
 @margin-note*{These special cases correspond to @tt{pow} in C99 @cite["C99"],
@@ -807,7 +811,7 @@ Returns the imaginary part of the complex number @racket[z] in
 
 @defproc[(angle [z number?]) real?]{ Returns the angle of
  the complex number @racket[z] in polar coordinates.
- 
+
  The result is guaranteed to be between @racket[(- pi)] and
  @racket[pi], possibly equal to @racket[pi] (but never equal
  to @racket[(- pi)]).
@@ -855,7 +859,7 @@ Returns the imaginary part of the complex number @racket[z] in
 
 Returns @racket[#t] when the @racket[m]th bit of @racket[n] is set in @racket[n]'s
         (semi-infinite) two's complement representation.
-                   
+
 This operation is equivalent to
 @racket[(not (zero? (bitwise-and n (arithmetic-shift 1 m))))],
 but it is faster and runs in constant time when @racket[n] is positive.
@@ -863,8 +867,8 @@ but it is faster and runs in constant time when @racket[n] is positive.
 @mz-examples[(bitwise-bit-set? 5 0) (bitwise-bit-set? 5 2) (bitwise-bit-set? -5 (expt 2 700))]}
 
 
-@defproc[(bitwise-bit-field [n exact-integer?] 
-                            [start exact-nonnegative-integer?] 
+@defproc[(bitwise-bit-field [n exact-integer?]
+                            [start exact-nonnegative-integer?]
                             [end (and/c exact-nonnegative-integer?
                                         (>=/c start))])
          exact-integer?]{
@@ -927,8 +931,8 @@ both in binary and as integers.
                               (current-pseudo-random-generator)])
             exact-nonnegative-integer?]
            [(random [rand-gen pseudo-random-generator?
-                              (current-pseudo-random-generator)]) 
-            (and/c real? inexact? (>/c 0) (</c 1))])]{  
+                              (current-pseudo-random-generator)])
+            (and/c real? inexact? (>/c 0) (</c 1))])]{
 
 When called with an integer argument @racket[k], returns a random
 exact integer in the range @racket[0] to @math{@racket[k]-1}.
@@ -943,8 +947,8 @@ In each case, the number is provided by the given pseudo-random number
 generator (which defaults to the current one, as produced by
 @racket[current-pseudo-random-generator]). The generator maintains an
 internal state for generating numbers. The random number generator
-uses a 54-bit version of L'Ecuyer's MRG32k3a algorithm
-@cite["L'Ecuyer02"].
+uses L'Ecuyer's MRG32k3a algorithm @cite["L'Ecuyer02"] that has a
+state space of practically 192 bits.
 
 @history[#:changed "6.4"]{Added support for ranges.}}
 
@@ -1149,8 +1153,8 @@ padded with trailing zeros if necessary).
 
 If @racket[n] is a real number with no decimal representation (e.g.
 @racket[+nan.0], @racket[+inf.0]), then the @exnraise[exn:fail:contract].
-(Any real number that is convertible to decimal notation is rational, 
-so @racket[n] must be @racket[rational?], despite the name of the 
+(Any real number that is convertible to decimal notation is rational,
+so @racket[n] must be @racket[rational?], despite the name of the
 function.)
 
 @mz-examples[
@@ -1365,7 +1369,7 @@ Hence also:
 @racketblock[(< (inexact->exact r)
                 (expt 10 (add1 m)))]
 
-@mz-examples[#:eval math-eval 
+@mz-examples[#:eval math-eval
                     (order-of-magnitude 999)
                     (order-of-magnitude 1000)
                     (order-of-magnitude 1/100)
@@ -1411,4 +1415,3 @@ Returns @racket[#t] if @racket[x] is @racket[+inf.0], @racket[-inf.0], @racketva
 @include-section["extflonums.scrbl"]
 
 @; ----------------------------------------------------------------------
-

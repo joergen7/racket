@@ -270,8 +270,21 @@ to @racket[write] or @racket[display]); defaults to @racket[#t]. See
 A @tech{parameter} that controls printing of @tech{syntax objects}. Up to
 @racket[width] characters are used to show the datum form of a syntax
 object within @litchar{#<syntax}...@litchar{>} (after the
-@tech{syntax object}'s source location, if any).}
+@tech{syntax object}'s source location, if any), where @litchar{...} is
+used as the last three characters if the printed form would otherwise be longer
+than @racket[width] characters. A value of @racket[0] for
+@racket[width] means that the datum is not shown at all.}
 
+@defparam[print-value-columns columns (or/c +inf.0 (and/c exact-integer? (>/c 5)))]{
+
+A @tech{parameter} that contains a recommendation for the number of
+columns that should be used for printing values via @racket[print].
+May or may not be respected by @racket[print] - the current default
+handler for @racket[print] does not.  It is expected that REPLs that use
+some form of pretty-printing for values respect this parameter.
+
+@history[#:added "8.0.0.13"]
+}
 
 @defparam*[current-write-relative-directory path 
                                             (or/c (and/c path-string? complete-path?) 

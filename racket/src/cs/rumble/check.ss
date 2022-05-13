@@ -50,7 +50,7 @@
 
 (define (check-range who what in-value start end len)
   (unless (<= start len)
-    (raise-range-error who what "starting " start in-value 0 len))
+    (raise-range-error who what (if (eq? end 'none) "" "starting ") start in-value 0 len))
   (when end
     (unless (<= start end len)
       (raise-range-error who what "ending " end in-value start len 0))))
@@ -59,7 +59,7 @@
   (check who
          :test (and (pair? errno)
                     (exact-integer? (car errno))
-                    (chez:memq (cdr errno) '(posix windows gai)))
+                    (#%memq (cdr errno) '(posix windows gai)))
          :contract "(cons/c exact-integer? (or/c 'posix 'windows 'gai))"
          errno))
 

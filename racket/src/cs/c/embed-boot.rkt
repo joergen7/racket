@@ -6,21 +6,21 @@
          compiler/private/elf
          "adjust-compress.rkt")
 
-(define expect-elf? #f)
 (define alt-dests '())
+(define rewrites '())
 (define target #f)
 
 (command-line
  #:once-each
  [("--compress") "Leave compiled code files as compressed"
   (enable-compress!)]
- [("--expect-elf") "Record offset from ELF section"
-  (set! expect-elf? #t)]
  [("--target") machine "Select target machine"
   (set! target machine)]
  #:multi
  [("++exe") src dest "Select an alternative executable"
   (set! alt-dests (cons (cons src dest) alt-dests))]
+ [("++rewrite") from to "Add an arbitrary string replacement"
+  (set! rewrites (cons (cons from to) rewrites))]
  #:args (src-file dest-file petite.boot scheme.boot racket.boot)
 
  ;; If `src-file` is "", then `dest-file` is used as the src, too
@@ -32,7 +32,7 @@
  (define use-src-file
    (if (equal? src-file "")
        (let ([src-file (path-add-suffix dest-file #"_tmp")])
-         (rename-file-or-directory dest-file src-file)
+         (rename-file-or-directory dest-file src-file #t)
          src-file)
        src-file))
  (define (clean-src)
@@ -53,10 +53,15 @@
                    bstr3 terminator))
    (define pos
      (case (or target (path->string (system-library-subpath #f)))
-       [("x86_64-darwin" "i386-darwin" "aarch64-darwin"
+       [("ta6osx" "ti3osx" "tarm64osx"
+         "x86_64-darwin" "i386-darwin" "aarch64-darwin"
          "x86_64-macosx" "i386-macosx" "aarch64-macosx")
         ;; Mach-O
-        (copy-file use-src-file dest-file #t)
+        (when (file-exists? dest-file)
+          ;; explicit delete to avoid signature unhappiness
+          (delete-file dest-file))
+        (copy-file use-src-file dest-file)
+        (remove-signature dest-file)
         (add-plt-segment dest-file data #:name #"__RKTBOOT")
         ;; Find segment at run time:
         0]
@@ -84,12 +89,8 @@
           [start-pos
            ;; Success as ELF
            (file-or-directory-permissions dest-file (file-or-directory-permissions use-src-file 'bits))
-           (cond
-             [expect-elf?
-              ;; Find ".rackboot" at run time:
-              0]
-             [else
-              start-pos])]
+           ;; Find ".rackboot" at run time:
+           0]
           [else
            ;; Not ELF; just append to the end
            (copy-file use-src-file dest-file #t)
@@ -100,15 +101,27 @@
             (lambda (o)
               (file-position o pos)
               (write-bytes data o)))
-           (when expect-elf?
-             (error 'embed-boot "expected ELF"))
            pos])]))
+
+   (for ([rewrite (in-list rewrites)])
+     (define from (car rewrite))
+     (define to (cdr rewrite))
+     (let loop ()
+       (define i (open-input-file dest-file))
+       (define m (regexp-match-positions from i))
+       (close-input-port i)
+       (when m
+         (define o (open-output-file dest-file #:exists 'update))
+         (file-position o (caar m))
+         (display to o)
+         (close-output-port o)
+         (loop))))
 
    (define (write-offsets dest-file)
      (define-values (i o) (open-input-output-file dest-file #:exists 'update))
      (define m (regexp-match-positions #rx"BooT FilE OffsetS:" i))
      (unless m
-       (error 'embed-boot "cannot file boot-file offset tag"))
+       (error 'embed-boot "cannot find boot-file offset tag"))
 
      (define terminator-len (bytes-length terminator))
 
@@ -133,7 +146,7 @@
      (write-offsets dest-file)]
     [else
      (for ([alt (in-list alt-dests)])
-	  (copy-file (car alt) (cdr alt) #t)
-	  (write-offsets (cdr alt)))])
+       (copy-file (car alt) (cdr alt) #t)
+       (write-offsets (cdr alt)))])
 
    (clean-src)))

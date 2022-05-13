@@ -307,18 +307,22 @@ with timeouts that have not yet expired. The system-idle event's
 ]}
 
 
-@defproc[(alarm-evt [msecs real?]) evt?]{
+@defproc[(alarm-evt [msecs real?] [monotonic? any/c #f]) evt?]{
 
 Returns a @tech{synchronizable event} that is not @tech{ready for synchronization} when
-@racket[(current-inexact-milliseconds)] would return a value that is
+@racket[(_milliseconds)] would return a value that is
 less than @racket[msecs], and it is @tech{ready for synchronization} when
-@racket[(current-inexact-milliseconds)] would return a value that is
-more than @racket[msecs]. @ResultItself{alarm event}.
+@racket[(_milliseconds)] would return a value that is
+more than @racket[msecs]. The value of @racket[_milliseconds] is
+@racket[current-inexact-milliseconds] when @racket[monotonic?] is @racket[#f],
+or @racket[current-inexact-monotonic-milliseconds] otherwise. @ResultItself{alarm event}.
 
 @examples[#:eval evt-eval
   (define alarm (alarm-evt (+ (current-inexact-milliseconds) 100)))
   (sync alarm)
-]}
+]
+
+@history[#:changed "8.3.0.9" @elem{Added the @racket[monotonic?] argument.}]}
 
 
 @defproc[(handle-evt? [evt evt?]) boolean?]{
@@ -379,20 +383,21 @@ and the @racket[prop:input-port] property takes precedence over
 @racket[prop:output-port] for synchronization.
 
 @examples[
-(define-struct wt (base val)
-               #:property prop:evt (struct-field-index base))
+(struct wt (base val)
+  #:property prop:evt (struct-field-index base))
 
 (define sema (make-semaphore))
-(sync/timeout 0 (make-wt sema #f))
+(sync/timeout 0 (wt sema #f))
 (semaphore-post sema)
-(sync/timeout 0 (make-wt sema #f))
+(sync/timeout 0 (wt sema #f))
 (semaphore-post sema)
-(sync/timeout 0 (make-wt (lambda (self) (wt-val self)) sema))
+(sync/timeout 0 (wt (lambda (self) (wt-val self)) sema))
 (semaphore-post sema)
-(define my-wt (make-wt (lambda (self) (wrap-evt
-                                       (wt-val self)
-                                       (lambda (x) self)))
-                       sema))
+(define my-wt (wt (lambda (self)
+                    (wrap-evt
+                     (wt-val self)
+                     (lambda (x) self)))
+                  sema))
 (sync/timeout 0 my-wt)
 (sync/timeout 0 my-wt)
 ]}

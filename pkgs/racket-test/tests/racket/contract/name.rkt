@@ -36,6 +36,8 @@
   (test-name 'boolean? (or/c #f #t))
   (test-name 'boolean? (or/c #t #f))
   (test-name '(or/c #t #f 'x) (or/c #t #f 'x))
+  (test-name '(or/c any/c #f) (or/c any/c #f))
+  (test-name '(or/c #f any/c) (or/c #f any/c))
 
   (test-name '(if/c integer? odd? (-> integer? integer?))
              (if/c integer? odd? (-> integer? integer?)))
@@ -241,6 +243,7 @@
   (test-name '(and/c real? (not/c positive?)) (and/c real? (not/c positive?)))
   (test-name '(and/c real? negative?) (and/c real? negative?))
   (test-name '(and/c real? (not/c negative?)) (and/c real? (not/c negative?)))
+  (test-name 'and/c and/c) ;; technically, this tests the `object-name` of `and/c`
   (test-name '(>/c 0) (>/c 0))
   (test-name '(<=/c 0) (<=/c 0))
   (test-name '(</c 0) (</c 0))
@@ -359,6 +362,7 @@
   (test-name '(box/c boolean?) (box/c boolean?))
   (test-name '(box/c boolean?) (box/c (flat-contract boolean?)))
   (test-name 'the-name (flat-rec-contract the-name))
+  (test-name 'the-name (flat-murec-contract ([the-name none/c]) the-name))
 
   (test-name '(object-contract) (object-contract))
   (test-name '(object-contract (field x integer?)) (object-contract (field x integer?)))

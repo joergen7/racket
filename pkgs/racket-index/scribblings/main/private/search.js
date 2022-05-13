@@ -455,13 +455,22 @@ function CompileTerm(term) {
   /* a case for "Q" is not needed -- same as the default case below */
   default:
     var compare_words = CompileWordCompare(term);
-    return function(x) {
-      var r = Compare(term,x[0]);
-      // only bindings can be used for rexact matches
-      if (r >= C_rexact) return (x[3] ? r : C_exact);
-      if (r > C_words3) return r;
-      else return compare_words(x[0]);
-    };
+    return CompileOrTerms([
+      function(x) {
+        var r = Compare(term,x[0]);
+        // only bindings can be used for rexact matches
+        if (r >= C_rexact) return (x[3] ? r : C_exact);
+        if (r > C_words3) return r;
+        else return compare_words(x[0]);
+      },
+      function(x) {
+        if (x[1].search(/\/index\.html$/) > 0) {
+          return Compare(term,UrlToManual(x[1]));
+        } else {
+          return C_fail;
+        }
+      }
+    ]);
   }
 }
 
@@ -679,11 +688,23 @@ function UncompactHtml(x) {
   }
 }
 
+function StripQArg(args) {
+  // Don't propagate the `q=...` argument that is used to communicate
+  // to this search page
+  if (!args)
+      return false;
+  args = args.replace(/^[?]q=[^&]*&/,"?").replace(/^[?]q=[^&]*$/,"?").replace(/&q=[^&]*/,"");
+  if (args == "?")
+    return false;
+  else
+    return args;
+}
+
 function UpdateResults() {
   if (first_search_result < 0 ||
       first_search_result >= search_results.length)
     first_search_result = 0;
-  var link_args = (page_query_string && ("?"+page_query_string));
+  var link_args = page_query_string && StripQArg("?"+page_query_string);
   for (var i=0; i<result_links.length; i++) {
     var n = i + first_search_result;
     if (n < search_results.length) {

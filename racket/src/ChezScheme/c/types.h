@@ -92,8 +92,8 @@ typedef int IFASLCODE;      /* fasl type codes */
 
 #define find_room(tc, s, g, t, n, x) find_gc_room_T(THREAD_GC(tc), s, g, t, n, ALREADY_PTR, x)
 #define find_gc_room(tgc, s, g, t, n, x) find_gc_room_T(tgc, s, g, t, n, ALREADY_PTR, x)
-#define find_room_voidp(tc, s, g, n, x) find_gc_room_T(THREAD_GC(tc), s, g, typemod, n, TO_VOIDP, x)
-#define find_gc_room_voidp(tgc, s, g, n, x) find_gc_room_T(tgc, s, g, typemod, n, TO_VOIDP, x)
+#define find_room_voidp(tc, s, g, n, x) find_gc_room_T(THREAD_GC(tc), s, g, type_untyped, n, TO_VOIDP, x)
+#define find_gc_room_voidp(tgc, s, g, n, x) find_gc_room_T(tgc, s, g, type_untyped, n, TO_VOIDP, x)
 
 /* new-space inline allocation --- no mutex required */
 /* Like `find_room`, but always `space_new` and generation 0,
@@ -111,7 +111,7 @@ typedef int IFASLCODE;      /* fasl type codes */
  } while(0)
 
 #define newspace_find_room(tc, t, n, x) newspace_find_room_T(tc, t, n, ALREADY_PTR, x)
-#define newspace_find_room_voidp(tc, n, x) newspace_find_room_T(tc, typemod, n, TO_VOIDP, x)
+#define newspace_find_room_voidp(tc, n, x) newspace_find_room_T(tc, type_untyped, n, TO_VOIDP, x)
 
 #ifndef NO_PRESERVE_FLONUM_EQ
 # define PRESERVE_FLONUM_EQ
@@ -282,7 +282,7 @@ typedef struct _bucket_pointer_list {
 #define size_record_inst(n) ptr_align(n)
 #define unaligned_size_record_inst(n) (n)
 
-#define rtd_parent(x) INITVECTIT(RECORDDESCANCESTRY(x), 0)
+#define rtd_parent(x) INITVECTIT(RECORDDESCANCESTRY(x), Svector_length(RECORDDESCANCESTRY(x)) - ancestry_parent_offset)
 
 /* type tagging macros */
 
@@ -362,7 +362,7 @@ typedef struct {
   s_thread_mutex_t pmutex;
 } scheme_mutex_t;
 
-#define get_thread_context() (ptr)s_thread_getspecific(S_tc_key)
+#define get_thread_context() TO_PTR(s_thread_getspecific(S_tc_key))
 /* deactivate thread prepares the thread for a possible collection.
    if it's the last active thread, it signals one of the threads
    waiting on the collect condition, if any, so that a collection
@@ -518,7 +518,7 @@ typedef struct thread_gc {
 
 #define main_sweeper_index maximum_parallel_collect_threads
 
-#ifdef __MINGW32__
+#if defined(__MINGW32__) && !defined(HAND_CODED_SETJMP_SIZE)
 /* With MinGW on 64-bit Windows, setjmp/longjmp is not reliable. Using
    __builtin_setjmp/__builtin_longjmp is reliable, but
    __builtin_longjmp requires 1 as its second argument. So, allocate
@@ -528,6 +528,11 @@ typedef struct thread_gc {
 # define FREEJMPBUF(jb) free(jb)
 # define SETJMP(jb) (JMPBUF_RET(jb) = 0, __builtin_setjmp(jb), JMPBUF_RET(jb))
 # define LONGJMP(jb,n) (JMPBUF_RET(jb) = n, __builtin_longjmp(jb, 1))
+#elif defined(HAND_CODED_SETJMP_SIZE)
+# define CREATEJMPBUF() malloc(sizeof(ptr) * HAND_CODED_SETJMP_SIZE)
+# define FREEJMPBUF(jb) free(jb)
+# define SETJMP(jb) S_setjmp(jb)
+# define LONGJMP(jb,n) S_longjmp(jb, n)
 #else
 /* assuming malloc will give us required alignment */
 # define CREATEJMPBUF() malloc(sizeof(jmp_buf))
@@ -552,9 +557,20 @@ typedef struct thread_gc {
 #define SETPTRFIELD(x,disp,y) DIRTYSET(((ptr *)TO_VOIDP((uptr)(x)+disp)),(y))
 
 #define INCRGEN(g) (g = g == S_G.max_nonstatic_generation ? static_generation : g+1)
-#define IMMEDIATE(x) (Sfixnump(x) || Simmediatep(x))
+#define FIXMEDIATE(x) (Sfixnump(x) || Simmediatep(x))
+
+#define Sbytevector_reference_length(p) (Sbytevector_length(p) >> log2_ptr_bytes)
+#define INITBVREFIT(p, i) (*(ptr *)(&BVIT(p, (i) << log2_ptr_bytes)))
 
 /* For `memcpy_aligned, that the first two arguments are word-aligned
    and it would be ok to round up the length to a word size. But
    probably the compiler does a fine job with plain old `mempcy`. */
 #define memcpy_aligned memcpy
+
+#define USE_TRAP_FUEL(tc, n) do {                         \
+    uptr _amt_ = (uptr)(n);                               \
+    if ((uptr)TRAP(tc) > _amt_)                           \
+      TRAP(tc) = (ptr)((uptr)TRAP(tc) - _amt_);           \
+     else                                                 \
+       TRAP(tc) = (ptr)1;                                 \
+  } while (0)

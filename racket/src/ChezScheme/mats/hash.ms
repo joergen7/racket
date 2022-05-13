@@ -4594,6 +4594,8 @@
 
 (mat ht
   (begin
-    (display-string (separate-eval '(parameterize ([source-directories '("." "../s" "../../s")]) (load "ht.ss"))))
+    (display-string (separate-eval `(parameterize ([source-directories
+                                                    ',(source-directories)])
+                                      (load ,(find-source "ht.ss")))))
     #t)
 )

@@ -122,11 +122,21 @@
   ;; Remove `e` from the thread in `check-breaks-prefix`, in case
   ;; a GC happens between here and there, because `e` needs to
   ;; be attached to the thread for accounting purposes at a GC.
-  (set-thread-sched-info! t #f)
+  (clear-sched-info! t)
   (current-future (thread-future t))
   (set-place-current-thread! current-place t)
   (set! thread-swap-count (add1 thread-swap-count))
   (run-callbacks-in-engine e callbacks t leftover-ticks))
+
+(define (clear-sched-info! t)
+  (define sched-info (thread-sched-info t))  
+  (when sched-info
+    (set-thread-sched-info! t #f)
+    ;; Maybe `sched-info` wasn't used by `process-sleep`, in which
+    ;; case the conservative assumption is that we might make progress
+    ;; if `sched-info` waits on anything
+    (when (schedule-info-repoll? sched-info)
+      (thread-poll-not-done! t))))
 
 (define (current-thread-now-running!)
   (set-thread-engine! (current-thread/in-atomic) 'running))
@@ -149,6 +159,7 @@
           (set-place-current-thread! current-place #f)
           (current-future #f)
           (unless (zero? (current-atomic))
+            (abort-atomic)
             (internal-error "terminated in atomic mode!"))
           (flush-end-atomic-callbacks!)
           (thread-dead! t)
@@ -185,7 +196,7 @@
 
 (define (check-for-atomic-timeout)
   (when atomic-timeout-callback
-    (when (positive? (current-atomic))
+    (when (eq? atomic-timeout-level (current-atomic))
       (atomic-timeout-callback #f))))
 
 (define (maybe-done callbacks)
@@ -222,6 +233,8 @@
                     (thread-reschedule! t))
                   (set! did? #t)))
   (when did?
+    ;; We've lost track of exactly which thread might get a different
+    ;; poll result, so just mark them all as needing polling
     (thread-did-work!))
   did?)
 
@@ -316,16 +329,18 @@
 ;; ----------------------------------------
 
 (define-place-local atomic-timeout-callback #f)
+(define-place-local atomic-timeout-level #f)
 
 (define (set-atomic-timeout-callback! cb)
   (begin0
     atomic-timeout-callback
+    (set! atomic-timeout-level (current-atomic))
     (set! atomic-timeout-callback cb)))
-
 
 (void (set-force-atomic-timeout-callback!
        (lambda ()
          (and atomic-timeout-callback
+              (eq? atomic-timeout-level (current-atomic))
               (begin
                 (atomic-timeout-callback #t)
                 #t)))))

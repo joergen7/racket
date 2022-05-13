@@ -172,12 +172,12 @@
 (define (check-bound-id-subset i1 i2)
   (let ((ht (make-bound-identifier-mapping)))
     (for-each (lambda (id)
-                (bound-identifier-mapping-put! ht (syntax-local-identifier-as-binding id) #t))
+                (bound-identifier-mapping-put! ht id #t))
               i2)
     (for-each
      (lambda (id)
        (check-id id)
-       (unless (bound-identifier-mapping-get ht (syntax-local-identifier-as-binding id) (lambda () #f))
+       (unless (bound-identifier-mapping-get ht id (lambda () #f))
          (raise-stx-err "listed identifier not present in signature specification" id)))
      i1)))
 
@@ -191,15 +191,14 @@
     (for-each
      (lambda (int ext)
        (check-id int)
-       (let ([ext (syntax-local-identifier-as-binding ext)])
-         (when (bound-identifier-mapping-get ht ext (lambda () #f))
-           (raise-stx-err "duplicate renamings" ext))
-         (bound-identifier-mapping-put! ht ext int)))
+       (when (bound-identifier-mapping-get ht ext (lambda () #f))
+         (raise-stx-err "duplicate renamings" ext))
+       (bound-identifier-mapping-put! ht ext int))
      (syntax->list internals)
      (syntax->list externals))
     (map-sig
      (lambda (id)
-       (bound-identifier-mapping-get ht (syntax-local-identifier-as-binding id) (lambda () id)))
+       (bound-identifier-mapping-get ht id (lambda () id)))
      (lambda (x) x)
      sig)))
 
@@ -575,16 +574,16 @@
       #`(tag #,(link-record-tag lr) #,(link-record-linkid lr))
       (link-record-linkid lr)))
 
-(define (make-id-mappers . unbox-stxes)
-  (apply values (map make-id-mapper unbox-stxes)))
+(define (make-id-mappers . make-unbox-stxes)
+  (apply values (map make-id-mapper make-unbox-stxes)))
 
-(define (make-id-mapper unbox-stx)
+(define (make-id-mapper make-unbox-stx)
   (make-set!-transformer
    (lambda (sstx)
      (syntax-case sstx (set!)
        [x
         (identifier? #'x) 
-        unbox-stx]
+        (make-unbox-stx sstx)]
        [(set! . x)
         (raise-syntax-error
          'unit
@@ -593,7 +592,7 @@
        [(_ . x)
         (datum->syntax
          sstx
-         (cons unbox-stx #'x)
+         (cons (make-unbox-stx sstx) #'x)
          sstx)]))))
 
 ;; This utility function returns a list of natural numbers for use as a syntax

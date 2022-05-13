@@ -600,12 +600,20 @@
         (with-output-language (L15d Effect)
           (define add-offset
             (lambda (r)
-              (if (eqv? (nanopass-case (L15d Triv) w [(immediate ,imm) imm]) 0)
-                  (k r)
-                  (let ([u (make-tmp 'u)])
-                    (seq
+              (let ([i (nanopass-case (L15d Triv) w [(immediate ,imm) imm])])
+                (cond
+                  [(eqv? i 0) (k r)]
+                  [(unsigned12? i)
+                   (let ([u (make-tmp 'u)])
+                     (seq
                       `(set! ,(make-live-info) ,u (asm ,null-info ,(asm-add #f) ,r ,w))
-                      (k u))))))
+                      (k u)))]
+                  [else
+                   (let ([u (make-tmp 'u)])
+                     (seq
+                      `(set! ,(make-live-info) ,u ,w)
+                      `(set! ,(make-live-info) ,u (asm ,null-info ,(asm-add #f) ,r ,u))
+                      (k u)))]))))
           (if (eq? y %zero)
               (add-offset x)
               (let ([u (make-tmp 'u)])
@@ -614,7 +622,7 @@
                   (add-offset u)))))))
     ;; NB: compiler implements init-lock! and unlock! as word store of zero 
     (define-instruction pred (lock!)
-      [(op (x ur) (y ur) (w unsigned12))
+      [(op (x ur) (y ur) (w imm-constant))
        (let ([u (make-tmp 'u)]
              [u2 (make-tmp 'u2)])
          (values
@@ -627,7 +635,7 @@
                    `(asm ,null-info ,asm-lock ,r ,u ,u2)))))
            `(asm ,info-cc-eq ,asm-eq ,u (immediate 0))))])
     (define-instruction effect (locked-incr! locked-decr!)
-      [(op (x ur) (y ur) (w unsigned12))
+      [(op (x ur) (y ur) (w imm-constant))
        (lea->reg x y w
          (lambda (r)
            (let ([u1 (make-tmp 'u1)] [u2 (make-tmp 'u2)])
@@ -636,7 +644,7 @@
                `(set! ,(make-live-info) ,u2 (asm ,null-info ,asm-kill))
                `(asm ,null-info ,(asm-lock+/- op) ,r ,u1 ,u2)))))])
     (define-instruction effect (cas)
-      [(op (x ur) (y ur) (w unsigned12) (old ur) (new ur))
+      [(op (x ur) (y ur) (w imm-constant) (old ur) (new ur))
        (lea->reg x y w
          (lambda (r)
 	   (let ([u1 (make-tmp 'u1)] [u2 (make-tmp 'u2)])
@@ -2408,10 +2416,10 @@
 		    (or (andmap double-member? members)
 			(andmap float-member? members)))))]
 	[else #f]))
-    (define int-argument-regs (lambda () (list %Carg1 %Carg2 %Carg3 %Carg4
-                                               %Carg5 %Carg6 %Carg7 %Carg8)))
-    (define fp-argument-regs (lambda () (list %Cfparg1 %Cfparg2 %Cfparg3 %Cfparg4
-                                              %Cfparg5 %Cfparg6 %Cfparg7 %Cfparg8)))
+    (define int-argument-regs (list %Carg1 %Carg2 %Carg3 %Carg4
+                                    %Carg5 %Carg6 %Carg7 %Carg8))
+    (define fp-argument-regs (list %Cfparg1 %Cfparg2 %Cfparg3 %Cfparg4
+                                   %Cfparg5 %Cfparg6 %Cfparg7 %Cfparg8))
     (define save-and-restore
       (lambda (regs e)
         (safe-assert (andmap reg? regs))
@@ -2499,19 +2507,27 @@
 
     (define categorize-arguments
       (lambda (types varargs-after)
-        (let loop ([types types] [int* (int-argument-regs)] [fp* (fp-argument-regs)]
+        (let loop ([types types] [int* int-argument-regs] [fp* fp-argument-regs]
                    [varargs-after varargs-after]
                    ;; accumulate alignment from previous args so we can compute any
                    ;; needed padding and alignment after this next argument
                    [stack-align 0])
-          (let ([next-varargs-after (and varargs-after (if (fx> varargs-after 0) (fx- varargs-after 1) 0))])
+          (let ([next-varargs-after (and varargs-after (if (fx> varargs-after 0) (fx- varargs-after 1) 0))]
+                [fp-in-int? (constant-case machine-type-name
+                              [(arm64nt tarm64nt) (and varargs-after #t)]
+                              [else #f])])
             (if (null? types)
                 '()
                 (nanopass-case (Ltype Type) (car types)
                   [(fp-double-float)
                    (cond
-                     [(null? fp*)
+                     [(if fp-in-int? (null? int*) (null? fp*))
                       (cons (make-cat 'stack '() 8 0 #f) (loop (cdr types) int* '() next-varargs-after 0))]
+                     [fp-in-int?
+                      (cons (make-cat 'int (list (car int*)) 8 0 #f)
+                            (loop (cdr types) (rest-of int* 1 next-varargs-after) (rest-of fp* 0 next-varargs-after)
+                                  next-varargs-after
+                                  stack-align))]
                      [else
                       (cons (make-cat 'fp (list (car fp*)) 8 0 #f)
                             (loop (cdr types) (rest-of int* 0 next-varargs-after) (rest-of fp* 1 next-varargs-after)
@@ -2519,11 +2535,16 @@
                                   stack-align))])]
                   [(fp-single-float)
                    (cond
-                     [(null? fp*)
+                     [(if fp-in-int? (null? int*) (null? fp*))
                       (alignment-via-lookahead
                        4 (cdr types) stack-align varargs-after
                        (lambda (bytes pad stack-align)
                          (cons (make-cat 'stack '() bytes pad #f) (loop (cdr types) int* '() next-varargs-after stack-align))))]
+                     [fp-in-int?
+                      (cons (make-cat 'int (list (car int*)) 8 0 #f)
+                            (loop (cdr types) (rest-of int* 1 next-varargs-after) (rest-of fp* 0 next-varargs-after)
+                                  next-varargs-after
+                                  stack-align))]
                      [else
                       (cons (make-cat 'fp (list (car fp*)) 8 0 #f)
                             (loop (cdr types) (rest-of int* 0 next-varargs-after)(rest-of fp* 1 next-varargs-after)
@@ -2540,7 +2561,7 @@
                                         (fx<= num-members 4)
                                         (andmap float-member? members))])
                      (cond
-                       [doubles?
+                       [(and doubles? (not fp-in-int?))
                         ;; Sequence of up to 4 doubles that may fit in registers
                         (cond
                           [(fx>= (length fp*) num-members)
@@ -2553,7 +2574,7 @@
                            ;; Stop using fp registers, put on stack
                            (cons (make-cat 'stack '() size 0 #f)
                                  (loop (cdr types) int* '() next-varargs-after 0))])]
-                       [floats?
+                       [(and floats? (not fp-in-int?))
                         ;; Sequence of up to 4 floats that may fit in registers
                         (cond
                           [(fx>= (length fp*) num-members)
@@ -2729,6 +2750,18 @@
                   (lambda (fpreg)
                     (lambda (x) ; unboxed
                       `(set! ,fpreg ,(%inline double->single ,x))))]
+                 [load-double-into-int-reg
+                  (lambda (reg)
+                    (lambda (x) ; unboxed
+                      `(set! ,reg ,(%inline fpcastto ,x))))]
+                 [load-single-into-int-reg
+                  (lambda (reg)
+                    (lambda (x) ; unboxed
+                      ;; used only when arguments are not put in fp registers,
+                      ;; so ok to use `%Cfparg1`
+                      `(seq
+                        (set! ,%Cfparg1 ,(%inline double->single ,x))
+                        (set! ,reg ,(%inline fpcastto ,%Cfparg1)))))]
                  [load-boxed-double-reg
                   (lambda (fpreg fp-disp)
                     (lambda (x) ; address (always a var) of a flonum
@@ -2779,6 +2812,10 @@
                                   (loop types cats 
                                         (cons (load-double-reg (car (cat-regs cat))) locs)
                                         isp ind-sp)]
+                                 [(eq? 'int (cat-place cat))
+                                  (loop types cats 
+                                        (cons (load-double-into-int-reg (car (cat-regs cat))) locs)
+                                        isp ind-sp)]
                                  [else
                                   (loop types cats 
                                         (cons (load-double-stack isp) locs)
@@ -2788,6 +2825,10 @@
                                  [(eq? 'fp (cat-place cat))
                                   (loop types cats 
                                         (cons (load-single-reg (car (cat-regs cat))) locs)
+                                        isp ind-sp)]
+                                 [(eq? 'int (cat-place cat))
+                                  (loop types cats 
+                                        (cons (load-single-into-int-reg (car (cat-regs cat))) locs)
                                         isp ind-sp)]
                                  [else
                                   (loop types cats 
@@ -2874,12 +2915,13 @@
                                         (fx+ isp (cat-size cat) (cat-pad cat)) ind-sp)])])))))]
 		 [add-fill-result
                   ;; may destroy the values in result registers
-		  (lambda (result-cat result-type args-frame-size e)
+		  (lambda (result-cat result-type args-frame-size fill-result-here? e)
                     (nanopass-case (Ltype Type) result-type
                       [(fp-ftd& ,ftd)
                        (let* ([size ($ftd-size ftd)]
                               [tmp %argtmp])
-                         (case (cat-place result-cat)
+                         (case (and fill-result-here?
+                                    (cat-place result-cat))
                            [(int)
                             ;; result is in integer registers
                             (let loop ([int* (cat-regs result-cat)] [offset 0] [size size])
@@ -2963,7 +3005,7 @@
                     (cons (lambda (rhs) `(set! ,%r8 ,rhs)) locs)]
                    [else locs]))
                (lambda (t0 not-varargs?)
-                 (add-fill-result result-cat result-type (fx+ arg-stack-bytes indirect-stack-bytes)
+                 (add-fill-result result-cat result-type (fx+ arg-stack-bytes indirect-stack-bytes) fill-result-here?
                                   (add-deactivate adjust-active? t0 live* result-reg*
                                                   (lambda (t0)
                                                     `(inline ,(make-info-kill*-live* (add-caller-save-registers result-reg*) live*) ,%c-call ,t0)))))
@@ -3091,6 +3133,10 @@
                               (loop types cats
                                     (cons (load-double-stack float-reg-offset) locs)
                                     int-reg-offset (fx+ float-reg-offset 8) stack-arg-offset)]
+                             [(int)
+                              (loop types cats
+                                    (cons (load-double-stack int-reg-offset) locs)
+                                    (fx+ int-reg-offset 8) float-reg-offset stack-arg-offset)]
                              [else
                               (loop types cats
                                     (cons (load-double-stack stack-arg-offset) locs)
@@ -3101,6 +3147,10 @@
                               (loop types cats
                                     (cons (load-single-stack float-reg-offset) locs)
                                     int-reg-offset (fx+ float-reg-offset 8) stack-arg-offset)]
+                             [(int)
+                              (loop types cats
+                                    (cons (load-single-stack int-reg-offset) locs)
+                                    (fx+ int-reg-offset 8) float-reg-offset stack-arg-offset)]
                              [else
                               (loop types cats
                                     (cons (load-single-stack stack-arg-offset) locs)
@@ -3267,7 +3317,6 @@
                                            (not (eq? 'stack (cat-place result-cat))))]
                    [indirect-result? (and ftd-result? (not synthesize-first?))]
                    [adjust-active? (if-feature pthreads (memq 'adjust-active conv*) #f)]
-
                    [arg-regs (let ([regs (get-registers arg-cat* 'int)])
                                (if indirect-result?
                                    (cons %r8 regs)

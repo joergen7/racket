@@ -41,7 +41,7 @@
 (test 'a 'stream* (stream-first (stream* 'a (stream (/ 0)))))
 (test 4 'stream* (stream-length (stream* 'a 'b 'c (stream (/ 0)))))
 (test 'c 'stream* (stream-first (stream-rest (stream-rest (stream* 'a 'b 'c (stream (/ 0)))))))
-(err/rt-test (stream* 2) exn:fail:contract? "stream*")
+(err/rt-test (stream-force (stream* 2)) exn:fail:contract? "stream*")
 (test #true 'stream* (stream? (stream* 1 0)))
 (err/rt-test (stream-length (stream* 1 2)) exn:fail:contract? "stream*")
 
@@ -133,5 +133,97 @@
           (sequence->stream
            (in-parallel '(1 3) '(2 4))))))
       list)
+
+;; check `#:eager`
+(test #t stream? (stream-cons (/ 1 0) (/ 1 0)))
+(test #t stream? (stream-cons #:eager 1 (/ 1 0)))
+(test #t stream? (stream-cons (/ 1 0) #:eager '(1)))
+(test #t stream? (stream-cons #:eager 0 #:eager '(1)))
+(err/rt-test (stream-cons 1 #:eager (/ 1 0)))
+(err/rt-test (stream-cons #:eager (/ 1 0) '(1)))
+(err/rt-test (stream-cons #:eager (/ 1 0) #:eager '(1)))
+(err/rt-test (stream-cons #:eager 1 #:eager (/ 1 0)))
+(err/rt-test (stream-cons #:eager 1 #:eager 1))
+
+;; stream-rest doesn't force rest expr
+(test #t stream? (stream-rest (stream-cons 1 'oops)))
+
+;; stream-force does force
+(err/rt-test (stream-force (stream-rest (stream-cons 1 'oops))))
+(err/rt-test (stream-empty? (stream-rest (stream-cons 1 'oops))))
+(err/rt-test (stream-first (stream-rest (stream-cons 1 'oops))))
+(err/rt-test (stream-rest (stream-rest (stream-cons 1 'oops))))
+
+(test #t stream? (stream-lazy 'oops))
+(err/rt-test (stream-force (stream-lazy 'oops)))
+(err/rt-test (stream-empty? (stream-lazy 'oops)))
+(err/rt-test (stream-first (stream-lazy 'oops)))
+(err/rt-test (stream-rest (stream-lazy 'oops)))
+
+(test #t stream? (stream* 'oops))
+(err/rt-test (stream-force (stream* 'oops)))
+(err/rt-test (stream-empty? (stream* 'oops)))
+(err/rt-test (stream-first (stream* 'oops)))
+(err/rt-test (stream-rest (stream* 'oops)))
+
+(err/rt-test (stream-force (stream-lazy #:who 'alice 'oops))
+             exn:fail:contract?
+             #rx"^alice: ")
+
+(test #f null? (stream-lazy '()))
+(test #t null? (stream-force (stream-lazy '())))
+(test #t stream-empty? (stream-lazy '()))
+
+;; lazy forcing errors => stays erroring
+(let ([s (stream-cons (error "oops") null)])
+  (err/rt-test/once (stream-first s) exn:fail?)
+  (err/rt-test (stream-first s) exn:fail:contract? #rx"reentrant or broken"))
+(let ([s (stream-cons 0 (error "oops"))])
+  (test #t stream? (stream-rest s))
+  (err/rt-test/once (stream-empty? (stream-rest s)) exn:fail?)
+  (err/rt-test (stream-empty? (stream-rest s)) exn:fail:contract? #rx"reentrant or broken"))
+
+;; lazy forcing is non-reentrant
+(letrec ([s (stream-cons (stream-first s) null)])
+  (err/rt-test (stream-first s) exn:fail:contract? #rx"reentrant or broken"))
+(letrec ([s (stream-cons 1 (stream-force (stream-rest s)))])
+  (err/rt-test (stream-empty? (stream-rest s)) exn:fail:contract? #rx"reentrant or broken"))
+
+;; regression test for chain of lazy streams
+(test 1 stream-first (stream-lazy
+                      (stream-lazy
+                       (stream-lazy '(1)))))
+
+;; Make sure certain operations that could encounter a too-short stream don't
+;; retain the original stream just in case of the error:
+(unless (eq? 'cgc (system-type 'gc))
+  (let ([check (lambda (op)
+                 (define s (stream-cons
+                            1
+                            (stream-cons
+                             2
+                             (begin
+                               (collect-garbage)
+                               (let ([v (weak-box-value wb)])
+                                 (stream-cons
+                                  3
+                                  (stream-cons
+                                   v
+                                   empty)))))))
+                 (define wb (make-weak-box s))
+                 (test #f 'check-stream-no-retain (op s 3)))])
+    (check stream-ref)
+    (check (lambda (s n) (stream-first (stream-tail s n))))
+    (check (lambda (s n) (stream-ref (stream-take s (add1 n)) n)))))
+
+;; match tests
+(test #t 'stream (match '() [(stream) #t]))
+(test 1 'stream (match '(1) [(stream x) x]))
+(test 3 'stream (match '(1 2) [(stream x y) (+ x y)]))
+(test '(1 2) 'stream* (match '(1 2) [(stream* xs) xs]))
+(test 1 'stream* (match '(1 2) [(stream* hd _) hd]))
+(test '(2) 'stream* (match '(1 2) [(stream* _ tl) tl]))
+(test -1 'stream* (match '(1 2 3 4) [(stream* x y tl) (- x y)]))
+(test '(3 4) 'stream* (match '(1 2 3 4) [(stream* x y tl) tl]))
 
 (report-errs)

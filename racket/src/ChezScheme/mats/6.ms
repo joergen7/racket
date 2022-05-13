@@ -15,6 +15,9 @@
 
 ;;; sections 6-1 and 6-2:
 
+(define prettytest.ss (find-source "prettytest.ss"))
+(define build-area-testfile.ss (path-build-normal (current-directory) "testfile.ss"))
+
 (mat current-input-port
    (port? (current-input-port))
    (input-port? (current-input-port))
@@ -422,21 +425,21 @@
                 mode2))
             mode1))))
     (and
-      (cmp '() "prettytest.ss" '() "prettytest.ss")
-      (cmp '(compressed) "prettytest.ss" '() "prettytest.ss")
-      (cmp '() "prettytest.ss" '(compressed) "prettytest.ss")
-      (cmp '(compressed) "prettytest.ss" '(compressed) "prettytest.ss")
+      (cmp '() prettytest.ss '() prettytest.ss)
+      (cmp '(compressed) prettytest.ss '() prettytest.ss)
+      (cmp '() prettytest.ss '(compressed) prettytest.ss)
+      (cmp '(compressed) prettytest.ss '(compressed) prettytest.ss)
       (begin
-        (cp '(replace compressed) "prettytest.ss" "testfile.ss")
+        (cp '(replace compressed) prettytest.ss "testfile.ss")
         #t)
-      (cmp '(compressed) "testfile.ss" '() "prettytest.ss")
-      (not (= (call-with-input-file "testfile.ss" file-length) (call-with-input-file "prettytest.ss" file-length)))
+      (cmp '(compressed) "testfile.ss" '() prettytest.ss)
+      (not (= (call-with-input-file "testfile.ss" file-length) (call-with-input-file prettytest.ss file-length)))
      ; the following test could cause an error with anything but latin-1 codec
-      #;(not (cmp '() "testfile.ss" '() "prettytest.ss"))
+      #;(not (cmp '() "testfile.ss" '() prettytest.ss))
       (begin
-        (cp '(compressed append) "prettytest.ss" "testfile.ss")
+        (cp '(compressed append) prettytest.ss "testfile.ss")
         #t)
-      (not (cmp '(compressed) "testfile.ss" '() "prettytest.ss"))
+      (not (cmp '(compressed) "testfile.ss" '() prettytest.ss))
     ))
   (error? (open-output-file "testfile.ss" '(replace append)))
   (error? (open-output-file "testfile.ss" '(append truncate)))
@@ -819,8 +822,8 @@
                    (lambda ()
                       (close-input-port ip)
                       (close-output-port op)))))])
-      (pretty-copy "prettytest.ss" "testfile.ss"))
-   (let ([p1 (open-input-file "prettytest.ss")]
+      (pretty-copy prettytest.ss "testfile.ss"))
+   (let ([p1 (open-input-file prettytest.ss)]
          [p2 (open-input-file "testfile.ss")])
       (dynamic-wind
          (lambda () #f)
@@ -877,8 +880,8 @@
                    (lambda ()
                       (close-input-port ip)
                       (close-output-port op)))))])
-      (unpretty-copy "prettytest.ss" "testfile.ss"))
-   (let ([p1 (open-input-file "prettytest.ss")]
+      (unpretty-copy prettytest.ss "testfile.ss"))
+   (let ([p1 (open-input-file prettytest.ss)]
          [p2 (open-input-file "testfile.ss")])
       (dynamic-wind
          (lambda () #f)
@@ -921,7 +924,7 @@
         (lambda (p) (fasl-write +nan.0 p)))
       (call-with-port (open-file-input-port "testfile.ss") fasl-read))
     (/ 0.0 0.0))
-  (let ([ls (with-input-from-file "prettytest.ss"
+  (let ([ls (with-input-from-file prettytest.ss
               (rec f
                 (lambda ()
                   (let ([x (read)])
@@ -971,8 +974,8 @@
           (open-bytevector-input-port
             (call-with-bytevector-output-port put-stuff))
           (get-stuff fasl-read)))))
-  (eqv? (fasl-file "prettytest.ss" "testfile.ss") (void))
-  (let ([ls (with-input-from-file "prettytest.ss"
+  (eqv? (fasl-file prettytest.ss "testfile.ss") (void))
+  (let ([ls (with-input-from-file prettytest.ss
               (rec f
                 (lambda ()
                   (let ([x (read)])
@@ -1731,6 +1734,30 @@
                            (lambda () (close-input-port ip))))])
       vals)
     '(atomic eat 1 4))
+  (equal?
+    (call-with-values (lambda () (with-input-from-string "#t" read-token)) list)
+    '(atomic #t 0 2))
+  (equal?
+    (call-with-values (lambda () (with-input-from-string "#true" read-token)) list)
+    '(atomic #t 0 5))
+  (equal?
+    (call-with-values (lambda () (with-input-from-string "#True" read-token)) list)
+    '(atomic #t 0 5))
+  (equal?
+    (call-with-values (lambda () (with-input-from-string "#TRUE" read-token)) list)
+    '(atomic #t 0 5))
+  (equal?
+    (call-with-values (lambda () (with-input-from-string "#f" read-token)) list)
+    '(atomic #f 0 2))
+  (equal?
+    (call-with-values (lambda () (with-input-from-string "#false" read-token)) list)
+    '(atomic #f 0 6))
+  (equal?
+    (call-with-values (lambda () (with-input-from-string "#False" read-token)) list)
+    '(atomic #f 0 6))
+  (equal?
+    (call-with-values (lambda () (with-input-from-string "#FALSE" read-token)) list)
+    '(atomic #f 0 6))
  )
 
 (define read-test
@@ -1843,6 +1870,31 @@
   "; Test error \"too many fxvector elements supplied\"\n\n(pretty-print '#3vfx(1 2 3 4))\n"
   "; Test error \"invalid value 2.0 found in bytevector\"\n\n(pretty-print '#vu8(1 2.0 3 4))\n"
   "; Test error \"invalid value -1 found in bytevector\"\n\n(pretty-print '#3vu8(1 -1 3 4))\n"
+  "; Test error \"invalid value #f found in bytevector\"\n\n#vu8(1 2 #f\n"
+  "; Test error \"invalid value #t found in bytevector\"\n\n#vu8(1 2 #t\n"
+  "; Test error \"invalid value \"foo\" found in bytevector\"\n\n#vu8(1 2 \"foo\")\n"
+  "; Test error \"non-octet found in bytevector\"\n\n#vu8(1 2 (\n"
+  "; Test error \"non-octet found in bytevector\"\n\n#vu8(1 2 #(\n"
+  "; Test error \"non-octet found in bytevector\"\n\n#vu8(1 2 #7(\n"
+  "; Test error \"non-octet found in bytevector\"\n\n#vu8(1 2 #4=\n"
+  "; Test error \"non-octet found in bytevector\"\n\n#vu8(1 2 #5#\n"
+  "; Test error \"non-octet found in bytevector\"\n\n#vu8(1 2 [\n"
+  "; Test error \"non-octet found in bytevector\"\n\n#vu8(1 2 #[\n"
+  "; Test error \"invalid value { found in bytevector\"\n\n#vu8(1 2 {\n"
+  "; Test error \"invalid value } found in bytevector\"\n\n#vu8(1 2 }\n"
+  "; Test error \"invalid value 3.4 found in bytevector\"\n\n#vu8(1 2 3.4\n"
+  "; Test error \"non-octet found in bytevector\"\n\n#vu8(1 2 '\n"
+  "; Test error \"non-octet found in bytevector\"\n\n#vu8(1 2 `\n"
+  "; Test error \"invalid value - found in bytevector\"\n\n#vu8(1 2 -\n"
+  "; Test error \"invalid value + found in bytevector\"\n\n#vu8(1 2 +\n"
+  "; Test error \"non-octet found in bytevector\"\n\n#vu8(1 2 .\n"
+  "; Test error \"invalid value .. found in bytevector\"\n\n#vu8(1 2 ..)\n"
+  "; Test error \"invalid value ... found in bytevector\"\n\n#vu8(1 2 ...)\n"
+  "; Test error \"non-octet found in bytevector\"\n\n#vu8(1 2 ,)\n"
+  "; Test error \"non-octet found in bytevector\"\n\n#vu8(1 2 #,@)\n"
+  "; Test error \"non-octet found in bytevector\"\n\n#vu8(1 2 #@)\n"
+  "; Test error \"non-octet found in bytevector\"\n\n#vu8(1 2 #vfx(3\n"
+  "; Test error \"non-octet found in bytevector\"\n\n#vu8(1 2 #vu8(3\n"
   "; Test error \"too many bytevector elements supplied\"\n\n(pretty-print '#3vu8(1 2 3 4))\n"
   "; Test error \"too few fields supplied for record ~s\"\n\n(define x '#[zinjanthropus 3])"
   "; Test error \"too many fields supplied for record ~s\"\n\n(define x '#[zinjanthropus 3 4 5])"
@@ -1863,6 +1915,11 @@
   "; Test error \"unexpected end-of-file reading character\"\n#\\"
   "; Test error \"unexpected end-of-file reading character\"\n#\\new"
   "; Test error \"unexpected end-of-file reading character\"\n#\\02"
+  "; Test error \"unexpected end-of-file reading boolean\"\n\n#tr"
+  "; Test error \"unexpected end-of-file reading boolean\"\n\n#tru"
+  "; Test error \"unexpected end-of-file reading boolean\"\n\n#fa"
+  "; Test error \"unexpected end-of-file reading boolean\"\n\n#fal"
+  "; Test error \"unexpected end-of-file reading boolean\"\n\n#fals"
   "; Test error \"unexpected end-of-file reading expression comment\"\n\n(define oops '#; ; that's all I've got!\n"
   "; Test error \"unexpected end-of-file reading gensym\"\n(pretty-print '#{"
   "; Test error \"unexpected end-of-file reading gensym\"\n(pretty-print '#{foo"
@@ -1931,6 +1988,13 @@
   "; Test error \"octal character syntax not allowed in #!r6rs mode\"\n\n#!r6rs #\\010\n"
   "; Test error \"invalid delimiter 1 for character\"\n\n#\\0001\n"
   "; Test error \"delimiter { is not allowed in #!r6rs mode\"\n\n#!r6rs #\\0{\n"
+  "; Test error \"invalid delimiter 2 for boolean\"\n\n#t2\n"
+  "; Test error \"invalid delimiter 2 for boolean\"\n\n#true2\n"
+  "; Test error \"invalid delimiter 3 for boolean\"\n\n#f3\n"
+  "; Test error \"invalid delimiter 3 for boolean\"\n\n#false3\n"
+  "; Test error \"invalid boolean\"\n\n#travis"
+  "; Test error \"invalid boolean\"\n\n#FALSIFY"
+  ;; NOTE: there's no "delimiter not allowed in #!r6rs mode" test for r7rs-style booleans because they are not r6rs!
   "; Test error \"#!eof syntax not allowed in #!r6rs mode\"\n\n#!r6rs #!eof\n"
   "; Test error \"#!bwp syntax not allowed in #!r6rs mode\"\n\n#!r6rs #!bwp\n"
   "; Test error \"#vfx(...) fxvector syntax not allowed in #!r6rs mode\"\n\n#!r6rs '#vfx(1 2 3)\n"
@@ -1944,7 +2008,12 @@
   "; Test error \"123# number syntax not allowed in #!r6rs mode\"\n\n#!r6rs 123#\n"
   "; Test error \"#x1/2e2 number syntax not allowed in #!r6rs mode\"\n\n#!r6rs 1/2e2\n"
   "; Test error \"#x.3 number syntax not allowed in #!r6rs mode\"\n\n#!r6rs #x.3\n"
-
+  "; Test error \"alternative boolean syntax not allowed in #!r6rs mode\"\n\n#!r6rs #true\n"
+  "; Test error \"alternative boolean syntax not allowed in #!r6rs mode\"\n\n#!r6rs #True\n"
+  "; Test error \"alternative boolean syntax not allowed in #!r6rs mode\"\n\n#!r6rs #TRUE\n"
+  "; Test error \"alternative boolean syntax not allowed in #!r6rs mode\"\n\n#!r6rs #false\n"
+  "; Test error \"alternative boolean syntax not allowed in #!r6rs mode\"\n\n#!r6rs #False\n"
+  "; Test error \"alternative boolean syntax not allowed in #!r6rs mode\"\n\n#!r6rs #FALSE\n"
  ; following tests adapted from the read0 benchmark distributed by Will
  ; Clinger, which as of 08/08/2009 appears to be in the public domain,
  ; with no license, copyright notice, author name, or date.
@@ -2573,9 +2642,13 @@
     (close-output-port p)
     #t)
   (begin
+    (define make-sure-this-symbol-stays '#{%foo %bar})
     (load "testfile.ss")
     #t)
   (record? (cadr $$rats) (type-descriptor #{%foo %bar}))
+  (begin
+    (define make-sure-this-symbol-stays #f)
+    #t)
   (let ([r (cadr $$rats)])
     (eq? (%foo-x r) (car $$rats))
     (equal? (%foo-y r) '(d e)))
@@ -2652,8 +2725,8 @@
   (eq? '\x23;foo\x7C;bar '\#foo\|bar)
  )
 
-(mat with-source-path
-  (equal? (source-directories) '("."))
+(mat with-source-path (parameters [current-directory *mats-dir*] [source-directories '(".")] [library-directories '(".")])
+  (equal? (separate-eval '(source-directories)) "(\".\")\n")
   (equal?
     (with-source-path 'test "I should not be here" list)
     '("I should not be here"))
@@ -2693,7 +2766,7 @@
   (equal?
     (parameterize ([source-directories '("." "../examples")])
       (with-source-path 'test "fatfib.ss" list))
-    '("../examples/fatfib.ss"))
+    (list (format "../examples~afatfib.ss" (directory-separator))))
   (equal?
     (parameterize ([source-directories '("." "../examples")])
       (with-source-path 'test "./fatfib.ss" list))
@@ -2707,13 +2780,13 @@
     (call-with-values
       (lambda () (((inspect/object fatfib) 'code) 'source-path))
       list)
-    '("../examples/fatfib.ss" 16 4))
+    (list (format "../examples~afatfib.ss" (directory-separator)) 16 4))
   (equal? 
     (parameterize ([source-directories '("." "../examples")])
       (call-with-values
         (lambda () (((inspect/object fatfib) 'code) 'source-path))
         list))
-    '("../examples/fatfib.ss" 16 4))
+    (list (format "../examples~afatfib.ss" (directory-separator)) 16 4))
   (begin
     (load "../examples/fatfib.ss" compile)
     (procedure? fatfib))
@@ -2745,7 +2818,7 @@
       (call-with-values
         (lambda () (((inspect/object fatfib) 'code) 'source-path))
         list))
-    (list (format "~a/examples/fatfib.ss" (parameterize ([cd ".."]) (cd))) 16 4))
+    (list (format "~a~aexamples/fatfib.ss" (parameterize ([cd ".."]) (cd)) (directory-separator)) 16 4))
   (equal?
     (parameterize ([cd ".."] [source-directories '("examples")])
       (call-with-values
@@ -2756,7 +2829,7 @@
       (begin
         (system "ln -s ../examples .")
         (load "examples/fatfib.ss" compile)
-        (system "/bin/rm examples")
+        (system "rm -f examples")
         #t))
   (or (windows?) (embedded?)
       (equal?
@@ -2988,6 +3061,22 @@
   (error? (get-mode "probably/not/there"))
   (error? (get-mode "probably/not/there" #f))
   (error? (get-mode "probably/not/there" #t))
+  (error? (file-access-time "probably/not/there"))
+  (error? (file-access-time "probably/not/there" #f))
+  (error? (file-access-time "probably/not/there" #t))
+  (error? (file-change-time "probably/not/there"))
+  (error? (file-change-time "probably/not/there" #f))
+  (error? (file-change-time "probably/not/there" #t))
+  (error? (file-modification-time "probably/not/there"))
+  (error? (file-modification-time "probably/not/there" #f))
+  (error? (file-modification-time "probably/not/there" #t))
+  )
+
+(mat filesystem-operations2 (parameters [current-directory *mats-dir*])
+  (begin
+    ;; we expct this to be newer than "mat.ss":
+    (close-port (open-output-file build-area-testfile.ss 'truncate))
+    #t)
   (if (or (windows?) (embedded?))
       (fixnum? (get-mode "mat.ss"))
       (let ([m (get-mode "mat.ss")])
@@ -3004,8 +3093,8 @@
        (eqv? (get-mode "../mats") (get-mode "../mats/.")))
   ; access times are unreliable on contemporary file systems
   (time? (file-access-time "mat.ss"))
-  (time<=? (file-change-time "mat.ss") (file-change-time "mat.so"))
-  (time<=? (file-modification-time "mat.ss") (file-modification-time "mat.so"))
+  (time<=? (file-change-time "mat.ss") (file-change-time build-area-testfile.ss))
+  (time<=? (file-modification-time "mat.ss") (file-modification-time build-area-testfile.ss))
   (equal?
     (list (time? (file-access-time "../mats"))
           (time? (file-change-time "../mats"))
@@ -3032,21 +3121,16 @@
       (and (time? (file-access-time "\\\\?\\c:\\"))
            (time? (file-change-time "\\\\?\\c:\\"))
            (time? (file-modification-time "\\\\?\\c:\\"))))
+  ;; We don't create links anymore, so these don't work as-is:
+  #;
   (or (windows?) (embedded?)
-      (time=? (file-access-time "Makefile") (file-access-time (format "Mf-~a" (machine-type)))))
+      (time=? (file-access-time "Makefile") (file-access-time "Mf-unix")))
+  #;
   (or (windows?) (embedded?)
-      (time=? (file-change-time "Makefile") (file-change-time (format "Mf-~a" (machine-type)))))
+      (time=? (file-change-time "Makefile") (file-change-time "Mf-unix")))
+  #;
   (or (windows?) (embedded?)
-      (time=? (file-modification-time "Makefile") (file-modification-time (format "Mf-~a" (machine-type)))))
-  (error? (file-access-time "probably/not/there"))
-  (error? (file-access-time "probably/not/there" #f))
-  (error? (file-access-time "probably/not/there" #t))
-  (error? (file-change-time "probably/not/there"))
-  (error? (file-change-time "probably/not/there" #f))
-  (error? (file-change-time "probably/not/there" #t))
-  (error? (file-modification-time "probably/not/there"))
-  (error? (file-modification-time "probably/not/there" #f))
-  (error? (file-modification-time "probably/not/there" #t))
+      (time=? (file-modification-time "Makefile") (file-modification-time "Mf-unix")))
 )
 
 (mat unicode-filesystem-operations

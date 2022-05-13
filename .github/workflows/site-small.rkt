@@ -1,5 +1,5 @@
 #lang distro-build/config
-(require racket/format racket/runtime-path racket/string)
+(require racket/format racket/runtime-path racket/string racket/date)
 
 (define-runtime-path here ".")
 
@@ -9,10 +9,14 @@
   (case (current-mode)
     [("release") "release-build"]
     [else "build"]))
+
+(define (stamp)
+  (substring (or (getenv "GITHUB_SHA") "0000000000000") 0 10))
+
 (define (dest-dir-name)
   (case (current-mode)
     [("release") "ci-release"]
-    [else (~a (current-stamp))]))
+    [else (~a (stamp))]))
 
 (define server-base-url (~a "https://ci-snapshot.racket-lang.org/" (dest-dir-name) "/"))
 
@@ -42,32 +46,36 @@
    (machine #:name (~a name " | {3} Tarball")
             #:tgz? #t)))
 
+(define (dist-base minimal?)
+  (if minimal? "racket-minimal" "racket"))
+
 (define (cs-machine #:name name #:pkgs [pkgs distro-content])
-  (machine
-   #:dist-suffix (if (null? pkgs) "min" "")
+  (sequential
+   #:dist-base (dist-base (null? pkgs))
    #:j 2
    #:log-file (convert-log-name name)
-   #:name name
    #:pkgs pkgs
    #:timeout (* 60 60 (if (null? pkgs) 1/2 2)) ;; 2 hours for the full build
    #:variant 'cs
-   #:versionless? #t))
+   #:dist-vm-suffix "cs"
+   #:dist-aliases '((#f #f ""))
+   (machine/sh+tgz #:name name)))
 
 (define (bc-machine #:name name #:pkgs [pkgs distro-content])
-  (machine
+  (sequential
    ;; these three lines are because it's the non-default build
    #:dir "bc-build"
    #:repo source-dir
    #:pull? #f
    ;; this is just usual configuration (mirrored for cs-machine)
-   #:dist-suffix (if (null? pkgs) "min-bc" "bc")
+   #:dist-base (dist-base (null? pkgs))
    #:j 2
    #:log-file (convert-log-name name)
-   #:name name
    #:pkgs pkgs
    #:timeout (* 60 60 (if (null? pkgs) 1/2 2)) ;; 2 hours for the full build
    #:variant 'bc
-   #:versionless? #t))
+   #:dist-vm-suffix "bc"
+   (machine/sh+tgz #:name name)))
 
 ;; The overall configuration:
 (sequential
@@ -75,8 +83,11 @@
  #:dist-base-url server-base-url
  #:site-dest (build-path (or (getenv "DISTRO_BUILD_SITE_DEST") "/tmp/racket-snapshots/") (dest-dir-name))
  #:plt-web-style? #t
- #:site-title (format "Snapshot: ~a" (current-stamp))
+ #:site-title (format "Snapshot: ~a ~a" (stamp) (parameterize ([date-display-format 'iso-8601]) (date->string (current-date))))
+ #:build-stamp (stamp)
  #:fail-on-client-failures #f
+ #:dist-base-version (stamp)
+ #:dist-suffix ""
  (sequential
   (bc-machine #:name "Racket BC (Ubuntu 18.04, x86_64)")
   (bc-machine #:name "Minimal Racket BC (Ubuntu 18.04, x86_64)" #:pkgs null))

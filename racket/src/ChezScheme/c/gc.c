@@ -196,49 +196,49 @@
 */
 
 /* locally defined functions */
-static IGEN copy PROTO((thread_gc *tgc, ptr pp, seginfo *si, ptr *dest));
-static IGEN mark_object PROTO((thread_gc *tgc, ptr pp, seginfo *si));
-static void sweep PROTO((thread_gc *tgc, ptr p, IGEN from_g));
-static void sweep_in_old PROTO((thread_gc *tgc, ptr p));
-static void sweep_object_in_old PROTO((thread_gc *tgc, ptr p));
-static IBOOL object_directly_refers_to_self PROTO((ptr p));
-static ptr copy_stack PROTO((thread_gc *tgc, ptr old, iptr *length, iptr clength));
-static void resweep_weak_pairs PROTO((seginfo *oldweakspacesegments));
-static void forward_or_bwp PROTO((ptr *pp, ptr p));
-static void sweep_generation PROTO((thread_gc *tgc));
-static iptr sweep_from_stack PROTO((thread_gc *tgc));
-static void enlarge_stack PROTO((thread_gc *tgc, ptr *stack, ptr *stack_start, ptr *stack_limit, uptr grow_at_least));
-static uptr size_object PROTO((ptr p));
-static iptr sweep_typed_object PROTO((thread_gc *tgc, ptr p, IGEN from_g));
-static void sweep_symbol PROTO((thread_gc *tgc, ptr p, IGEN from_g));
-static void sweep_port PROTO((thread_gc *tgc, ptr p, IGEN from_g));
-static void sweep_thread PROTO((thread_gc *tgc, ptr p));
-static void sweep_continuation PROTO((thread_gc *tgc, ptr p, IGEN from_g));
-static void sweep_record PROTO((thread_gc *tgc, ptr x, IGEN from_g));
-static IGEN sweep_dirty_record PROTO((thread_gc *tgc, ptr x, IGEN youngest));
-static IGEN sweep_dirty_port PROTO((thread_gc *tgc, ptr x, IGEN youngest));
-static IGEN sweep_dirty_symbol PROTO((thread_gc *tgc, ptr x, IGEN youngest));
-static void sweep_code_object PROTO((thread_gc *tgc, ptr co, IGEN from_g));
-static void record_dirty_segment PROTO((IGEN from_g, IGEN to_g, seginfo *si));
-static void setup_sweep_dirty PROTO((thread_gc *tgc));
-static uptr sweep_dirty_segments PROTO((thread_gc *tgc, seginfo **dirty_segments));
-static void resweep_dirty_weak_pairs PROTO((thread_gc *tgc));
-static void mark_typemod_data_object PROTO((thread_gc *tgc, ptr p, uptr len, seginfo *si));
-static void add_pending_guardian PROTO((ptr gdn, ptr tconc));
-static void add_trigger_guardians_to_recheck PROTO((ptr ls));
-static void add_ephemeron_to_pending PROTO((thread_gc *tgc, ptr p));
-static void add_trigger_ephemerons_to_pending PROTO((thread_gc *tgc, ptr p));
-static void check_triggers PROTO((thread_gc *tgc, seginfo *si));
-static void check_ephemeron PROTO((thread_gc *tgc, ptr pe));
-static void check_pending_ephemerons PROTO((thread_gc *tgc));
-static int check_dirty_ephemeron PROTO((thread_gc *tgc, ptr pe, int youngest));
-static void finish_pending_ephemerons PROTO((thread_gc *tgc, seginfo *si));
+static IGEN copy(thread_gc *tgc, ptr pp, seginfo *si, ptr *dest);
+static IGEN mark_object(thread_gc *tgc, ptr pp, seginfo *si);
+static void sweep(thread_gc *tgc, ptr p, IGEN from_g);
+static void sweep_in_old(thread_gc *tgc, ptr p);
+static void sweep_object_in_old(thread_gc *tgc, ptr p);
+static IBOOL object_directly_refers_to_self(ptr p);
+static ptr copy_stack(thread_gc *tgc, ptr old, iptr *length, iptr clength);
+static void resweep_weak_pairs(seginfo *oldweakspacesegments);
+static void forward_or_bwp(ptr *pp, ptr p);
+static void sweep_generation(thread_gc *tgc);
+static iptr sweep_from_stack(thread_gc *tgc);
+static void enlarge_stack(thread_gc *tgc, ptr *stack, ptr *stack_start, ptr *stack_limit, uptr grow_at_least);
+static uptr size_object(ptr p);
+static iptr sweep_typed_object(thread_gc *tgc, ptr p, IGEN from_g);
+static void sweep_symbol(thread_gc *tgc, ptr p, IGEN from_g);
+static void sweep_port(thread_gc *tgc, ptr p, IGEN from_g);
+static void sweep_thread(thread_gc *tgc, ptr p);
+static void sweep_continuation(thread_gc *tgc, ptr p, IGEN from_g);
+static void sweep_record(thread_gc *tgc, ptr x, IGEN from_g);
+static IGEN sweep_dirty_record(thread_gc *tgc, ptr x, IGEN youngest);
+static IGEN sweep_dirty_port(thread_gc *tgc, ptr x, IGEN youngest);
+static IGEN sweep_dirty_symbol(thread_gc *tgc, ptr x, IGEN youngest);
+static void sweep_code_object(thread_gc *tgc, ptr co, IGEN from_g);
+static void record_dirty_segment(IGEN from_g, IGEN to_g, seginfo *si);
+static void setup_sweep_dirty(thread_gc *tgc);
+static uptr sweep_dirty_segments(thread_gc *tgc, seginfo **dirty_segments);
+static void resweep_dirty_weak_pairs(thread_gc *tgc);
+static void mark_untyped_data_object(thread_gc *tgc, ptr p, uptr len, seginfo *si);
+static void add_pending_guardian(ptr gdn, ptr tconc);
+static void add_trigger_guardians_to_recheck(ptr ls);
+static void add_ephemeron_to_pending(thread_gc *tgc, ptr p);
+static void add_trigger_ephemerons_to_pending(thread_gc *tgc, ptr p);
+static void check_triggers(thread_gc *tgc, seginfo *si);
+static void check_ephemeron(thread_gc *tgc, ptr pe);
+static void check_pending_ephemerons(thread_gc *tgc);
+static int check_dirty_ephemeron(thread_gc *tgc, ptr pe, int youngest);
+static void finish_pending_ephemerons(thread_gc *tgc, seginfo *si);
 static void init_fully_marked_mask(thread_gc *tgc, IGEN g);
 static void copy_and_clear_list_bits(thread_gc *tgc, seginfo *oldspacesegments);
 
 #ifdef ENABLE_OBJECT_COUNTS
 static uptr total_size_so_far();
-static uptr list_length PROTO((ptr ls));
+static uptr list_length(ptr ls);
 #endif
 static uptr target_generation_space_so_far(thread_gc *tgc);
 
@@ -456,7 +456,7 @@ static int num_sweepers;
 # define parallel_sweep_dirty_and_generation(tgc) do { sweep_dirty(tgc); sweep_generation(tgc); } while (0)
 # define send_and_receive_remote_sweeps(tgc) do { } while (0)
 # define teardown_sweepers() do { } while (0)
-static void sweep_dirty PROTO((thread_gc *tgc));
+static void sweep_dirty(thread_gc *tgc);
 
 # define PARALLEL_UNUSED    /* empty */
 # define NO_PARALLEL_UNUSED UNUSED
@@ -563,7 +563,7 @@ static int flonum_is_forwarded_p(ptr p, seginfo *si) {
 
 #define relocate_pure_help(ppp, pp) do {     \
     seginfo *SI;                             \
-    if (!IMMEDIATE(pp) && (SI = MaybeSegInfo(ptr_get_segment(pp))) != NULL) {  \
+    if (!FIXMEDIATE(pp) && (SI = MaybeSegInfo(ptr_get_segment(pp))) != NULL) {  \
       if (SI->old_space)                      \
         relocate_pure_help_help(ppp, pp, SI); \
       ELSE_MEASURE_NONOLDSPACE(pp)            \
@@ -609,7 +609,7 @@ static int flonum_is_forwarded_p(ptr p, seginfo *si) {
 static void do_relocate_pure_in_owner(thread_gc *tgc, ptr *ppp) {
   seginfo *si;
   ptr pp = *ppp;
-  if (!IMMEDIATE(pp)
+  if (!FIXMEDIATE(pp)
       && (si = MaybeSegInfo(ptr_get_segment(pp))) != NULL
       && si->old_space) {
     BLOCK_SET_THREAD(si->creator);
@@ -639,7 +639,7 @@ static void do_relocate_pure_in_owner(thread_gc *tgc, ptr *ppp) {
 
 #define relocate_impure_help(ppp, pp, from_g) do {                      \
     seginfo *SI;                                                        \
-    if (!IMMEDIATE(pp) && (SI = MaybeSegInfo(ptr_get_segment(pp))) != NULL) { \
+    if (!FIXMEDIATE(pp) && (SI = MaybeSegInfo(ptr_get_segment(pp))) != NULL) { \
       if (SI->old_space)                                                \
         relocate_impure_help_help(ppp, pp, from_g, SI);                 \
       ELSE_MEASURE_NONOLDSPACE(pp)                                      \
@@ -673,7 +673,7 @@ static void do_relocate_pure_in_owner(thread_gc *tgc, ptr *ppp) {
 
 #define relocate_dirty(PPP, YOUNGEST) do {                              \
     seginfo *_si; ptr *_ppp = PPP, _pp = *_ppp; IGEN _pg;               \
-    if (!IMMEDIATE(_pp) && (_si = MaybeSegInfo(ptr_get_segment(_pp))) != NULL) { \
+    if (!FIXMEDIATE(_pp) && (_si = MaybeSegInfo(ptr_get_segment(_pp))) != NULL) { \
       if (!_si->old_space) {                                            \
         _pg = _si->generation;                                          \
       } else {                                                          \
@@ -697,6 +697,24 @@ static void do_relocate_pure_in_owner(thread_gc *tgc, ptr *ppp) {
     }                                                                   \
   } while (0)
 
+#define relocate_reference(ppp, from_g) do {                    \
+    ptr* rPPP = ppp; ptr rPP = *rPPP;                           \
+    if (!FOREIGN_REFERENCEP(rPP)) {                             \
+      *rPPP = S_reference_to_object(rPP);                       \
+      relocate_impure(rPPP, from_g);                            \
+      *rPPP = S_object_to_reference(*rPPP);                     \
+    }                                                           \
+  } while (0)
+
+#define relocate_reference_dirty(ppp, YOUNGEST) do {            \
+    ptr* rPPP = ppp;                                            \
+    if (!FOREIGN_REFERENCEP(*rPPP)) {                           \
+      *rPPP = S_reference_to_object(*rPPP);                     \
+      relocate_dirty(rPPP, YOUNGEST);                           \
+      *rPPP = S_object_to_reference(*rPPP);                     \
+    }                                                           \
+  } while (0)
+
 #ifdef ENABLE_OBJECT_COUNTS
 # define is_counting_root(si, p) (si->counting_mask && (si->counting_mask[segment_bitmap_byte(p)] & segment_bitmap_bit(p)))
 #endif
@@ -704,6 +722,14 @@ static void do_relocate_pure_in_owner(thread_gc *tgc, ptr *ppp) {
 # define relocate_indirect(p) do { \
     ptr _P = p;                    \
     relocate_pure(&_P);            \
+  } while (0)
+
+# define relocate_reference_indirect(p) do {   \
+    ptr _P = p;                                \
+    if (!FOREIGN_REFERENCEP(_P)) {             \
+      _P = S_reference_to_object(_P);          \
+      relocate_pure(&_P);                      \
+    }                                          \
   } while (0)
 
 FORCEINLINE void check_triggers(thread_gc *tgc, seginfo *si) {
@@ -779,7 +805,7 @@ static ptr copy_stack(thread_gc *tgc, ptr old, iptr *length, iptr clength) {
 #ifndef NO_NEWSPACE_MARKS
   if (si->use_marks) {
     if (!marked(si, old)) {
-      mark_typemod_data_object(tgc, old, n, si);
+      mark_untyped_data_object(tgc, old, n, si);
     
 #ifdef ENABLE_OBJECT_COUNTS
       S_G.countof[newg][countof_stack] += 1;
@@ -805,7 +831,7 @@ static ptr copy_stack(thread_gc *tgc, ptr old, iptr *length, iptr clength) {
   if (n == 0) {
     return (ptr)0;
   } else {
-    find_gc_room(tgc, space_data, newg, typemod, n, new);
+    find_gc_room(tgc, space_data, newg, type_untyped, n, new);
     n = ptr_align(clength);
     /* warning: stack may have been left non-double-aligned by split_and_resize */
     memcpy_aligned(TO_VOIDP(new), TO_VOIDP(old), n);
@@ -815,7 +841,7 @@ static ptr copy_stack(thread_gc *tgc, ptr old, iptr *length, iptr clength) {
   }
 }
 
-#define NONSTATICINHEAP(si, x) (!IMMEDIATE(x) && (si = MaybeSegInfo(ptr_get_segment(x))) != NULL && si->generation != static_generation)
+#define NONSTATICINHEAP(si, x) (!FIXMEDIATE(x) && (si = MaybeSegInfo(ptr_get_segment(x))) != NULL && si->generation != static_generation)
 #define ALWAYSTRUE(si, x) (si = SegInfo(ptr_get_segment(x)), 1)
 #define partition_guardians(LS, FILTER) do {                    \
     ptr ls; seginfo *si;                                        \
@@ -870,7 +896,7 @@ ptr GCENTRY(ptr tc, ptr count_roots_ls) {
 
     GET_REAL_TIME(astart);
 
-    S_thread_start_code_write(tc, MAX_TG, 0, NULL);
+    S_thread_start_code_write(tc, MAX_TG, 0, NULL, 0);
 
    /* flush instruction cache: effectively clear_code_mod but safer */
     for (ls = S_threads; ls != Snil; ls = Scdr(ls)) {
@@ -1070,7 +1096,7 @@ ptr GCENTRY(ptr tc, ptr count_roots_ls) {
 
        for (ls = count_roots_ls, i = 0; ls != Snil; ls = Scdr(ls), i++) {
          ptr p = Scar(ls);
-         if (IMMEDIATE(p)) {
+         if (FIXMEDIATE(p)) {
            count_roots[i].p = p;
            count_roots[i].weak = 0;
          } else {
@@ -1106,7 +1132,7 @@ ptr GCENTRY(ptr tc, ptr count_roots_ls) {
        for (i = 0; i < count_roots_len; i++) {
          uptr total;
          ptr p = count_roots[i].p;
-         if (IMMEDIATE(p)) {
+         if (FIXMEDIATE(p)) {
            /* nothing to do */
          } else {
            seginfo *si = SegInfo(ptr_get_segment(p));
@@ -1152,7 +1178,7 @@ ptr GCENTRY(ptr tc, ptr count_roots_ls) {
        /* clear `counting_mask`s */
        for (i = 0; i < count_roots_len; i++) {
          ptr p = count_roots[i].p;
-         if (!IMMEDIATE(p)) {
+         if (!FIXMEDIATE(p)) {
            seginfo *si = SegInfo(ptr_get_segment(p));
            si->counting_mask = NULL;
          }
@@ -1368,7 +1394,7 @@ ptr GCENTRY(ptr tc, ptr count_roots_ls) {
                     pend_hold_ls = ls;
                   } else {
                     seginfo *si;
-                    if (!IMMEDIATE(rep) && (si = MaybeSegInfo(ptr_get_segment(rep))) != NULL && si->old_space) {
+                    if (!FIXMEDIATE(rep) && (si = MaybeSegInfo(ptr_get_segment(rep))) != NULL && si->old_space) {
                       /* mark things reachable from `rep`, but not `rep` itself, unless
                          `rep` is immediately reachable from itself */
                       PUSH_BACKREFERENCE(ls)
@@ -1440,7 +1466,7 @@ ptr GCENTRY(ptr tc, ptr count_roots_ls) {
                 /* In backreference mode, we rely on sweep of the guardian
                    entry not registering any backreferences. Otherwise,
                    bogus pair pointers would get created. */
-                find_gc_room(tgc, space_pure, g, typemod, size_guardian_entry, p);
+                find_gc_room(tgc, space_pure, g, type_untyped, size_guardian_entry, p);
                 INITGUARDIANOBJ(p) = GUARDIANOBJ(ls);
                 INITGUARDIANREP(p) = rep;
                 INITGUARDIANTCONC(p) = tconc;
@@ -1651,7 +1677,8 @@ ptr GCENTRY(ptr tc, ptr count_roots_ls) {
         si->forwarded_flonums = 0;
 #endif
       } else {
-        chunkinfo *chunk = si->chunk, **chunks = ((si->space == space_code) ? S_code_chunks : S_chunks);
+        IBOOL for_code = (si->space == space_code);
+        chunkinfo *chunk = si->chunk, **chunks = (for_code ? S_code_chunks : S_chunks);
         S_G.number_of_nonstatic_segments -= 1;
         S_G.number_of_empty_segments += 1;
         si->space = space_empty;
@@ -1664,7 +1691,7 @@ ptr GCENTRY(ptr tc, ptr count_roots_ls) {
           if (chunk->bytes != (minimum_segment_request + 1) * bytes_per_segment) {
             /* release oversize chunks back to the O/S immediately to avoid allocating
              * small stuff into them and thereby invite fragmentation */
-            S_free_chunk(chunk);
+            S_free_chunk(chunk, for_code);
           } else {
             S_move_to_chunk_list(chunk, &chunks[PARTIAL_CHUNK_POOLS]);
           }
@@ -1679,7 +1706,7 @@ ptr GCENTRY(ptr tc, ptr count_roots_ls) {
     if (MAX_CG >= S_G.min_free_gen) S_free_chunks();
 
     S_flush_instruction_cache(tc);
-    S_thread_end_code_write(tc, MAX_TG, 0, NULL);
+    S_thread_end_code_write(tc, MAX_TG, 0, NULL, 0);
 
 #ifndef NO_DIRTY_NEWSPACE_POINTERS
     /* mark dirty those newspace cards to which we've added wrong-way pointers */
@@ -1882,10 +1909,10 @@ static void resweep_weak_pairs(seginfo *oldweakspacesegments) {
    }
 }
 
-static void forward_or_bwp(pp, p) ptr *pp; ptr p; {
+static void forward_or_bwp(ptr *pp, ptr p) {
   seginfo *si;
  /* adapted from relocate */
-  if (!IMMEDIATE(p) && (si = MaybeSegInfo(ptr_get_segment(p))) != NULL && si->old_space && !new_marked(si, p)) {
+  if (!FIXMEDIATE(p) && (si = MaybeSegInfo(ptr_get_segment(p))) != NULL && si->old_space && !new_marked(si, p)) {
     if (FORWARDEDP(p, si)) {
       *pp = GET_FWDADDRESS(p);
     } else {
@@ -1914,7 +1941,7 @@ static iptr sweep_generation_pass(thread_gc *tgc) {
           ppn = pp + 1;
           p = *ppn;
           relocate_impure_help(ppn, p, from_g);
-          FLUSH_REMOTE(tgc, TYPE(TO_PTR(pp), type_pair));
+          FLUSH_REMOTE(tgc, TYPE(TO_PTR(pp), type_pair)); /* can always treat as a pair to sweep words */
           pp = ppn + 1;
         });
       SET_BACKREFERENCE(Sfalse);
@@ -1996,6 +2023,12 @@ static iptr sweep_generation_pass(thread_gc *tgc) {
           sweep(tgc, p, from_g);
           pp = TO_VOIDP((uptr)TO_PTR(pp) + size_object(p));
         });
+
+      sweep_space(space_reference_array, from_g, {
+          p = TYPE(TO_PTR(pp), type_typed_object);
+          pp = TO_VOIDP((uptr)TO_PTR(pp) + sweep_typed_object(tgc, p, from_g));
+        });
+
     }
 
     /* May add to the sweep stack: */
@@ -2028,7 +2061,7 @@ void enlarge_stack(thread_gc *tgc, ptr *stack, ptr *stack_start, ptr *stack_limi
   uptr new_sz = 2 * ((sz == 0) ? (uptr)sweep_stack_min_size : sz);
   ptr new_stack;
   if (new_sz - sz < grow_at_least) new_sz += grow_at_least;
-  find_gc_room(tgc, space_data, 0, typemod, ptr_align(new_sz), new_stack);
+  find_gc_room(tgc, space_data, 0, type_untyped, ptr_align(new_sz), new_stack);
   if (sz != 0)
     memcpy(TO_VOIDP(new_stack), TO_VOIDP(*stack_start), sz);
   tgc->bitmask_overhead[0] += ptr_align(new_sz);
@@ -2448,6 +2481,33 @@ static uptr sweep_dirty_segments(thread_gc *tgc, seginfo **dirty_segments) {
                       youngest = check_dirty_ephemeron(tgc, p, youngest);
                     pp += size_ephemeron / sizeof(ptr);
                   }
+                } else if (s == space_reference_array) {
+                  /* the same as space_impure and others above, but for object references */
+                  if (dirty_si->marked_mask) {
+                    while (pp < ppend) {
+                      /* handle two pointers at a time */
+                      if (marked(dirty_si, TO_PTR(pp))) {
+                        FLUSH_REMOTE_BLOCK
+                        relocate_reference_dirty(pp, youngest);
+                        ppn = pp + 1;
+                        relocate_reference_dirty(ppn, youngest);
+                        FLUSH_REMOTE(tgc, TYPE(TO_PTR(pp), type_pair)); /* can treat as a pair for resweep */
+                        pp = ppn + 1;
+                      } else {
+                        pp += 2;
+                      }
+                    }
+                  } else {
+                    while (pp < ppend && *pp != forward_marker) {
+                      /* handle two pointers at a time */
+                      FLUSH_REMOTE_BLOCK
+                      relocate_reference_dirty(pp, youngest);
+                      ppn = pp + 1;
+                      relocate_reference_dirty(ppn, youngest);
+                      FLUSH_REMOTE(tgc, TYPE(TO_PTR(pp), type_pair));
+                      pp = ppn + 1;
+                    }
+                  }
                 } else {
                   S_error_abort("sweep_dirty(gc): unexpected space");
                 }
@@ -2526,7 +2586,7 @@ static void resweep_dirty_weak_pairs(thread_gc *tgc) {
                 seginfo *si;
 
                 /* handle car field */
-                if (!IMMEDIATE(p) && (si = MaybeSegInfo(ptr_get_segment(p))) != NULL) {
+                if (!FIXMEDIATE(p) && (si = MaybeSegInfo(ptr_get_segment(p))) != NULL) {
                   if (si->old_space) {
                     if (new_marked(si, p)) {
                       youngest = TARGET_GENERATION(si);
@@ -2637,7 +2697,7 @@ static void check_ephemeron(thread_gc *tgc, ptr pe) {
   from_g = GENERATION(pe);
   
   p = Scar(pe);
-  if (!IMMEDIATE(p) && (si = MaybeSegInfo(ptr_get_segment(p))) != NULL && si->old_space) {
+  if (!FIXMEDIATE(p) && (si = MaybeSegInfo(ptr_get_segment(p))) != NULL && si->old_space) {
     if (SEGMENT_IS_LOCAL(si, p)) {
       if (new_marked(si, p)) {
 #ifndef NO_DIRTY_NEWSPACE_POINTERS
@@ -2696,7 +2756,7 @@ static IGEN check_dirty_ephemeron(thread_gc *tgc, ptr pe, IGEN youngest) {
   PUSH_BACKREFERENCE(pe);
  
   p = Scar(pe);
-  if (!IMMEDIATE(p) && (si = MaybeSegInfo(ptr_get_segment(p))) != NULL) {
+  if (!FIXMEDIATE(p) && (si = MaybeSegInfo(ptr_get_segment(p))) != NULL) {
     if (si->old_space) {
       if (SEGMENT_IS_LOCAL(si, p)) {
         if (new_marked(si, p)) {
@@ -2951,7 +3011,7 @@ static s_thread_rv_t start_sweeper(void *_sweeper) {
   gc_sweeper *sweeper = _sweeper;
 
 #if !defined(WRITE_XOR_EXECUTE_CODE)
-  S_thread_start_code_write((ptr)0, static_generation, 0, NULL); /* never ended */
+  S_thread_start_code_write((ptr)0, static_generation, 0, NULL, 0); /* never ended */
 #endif
 
   (void)s_thread_mutex_lock(&sweep_mutex);
@@ -3167,7 +3227,7 @@ static void send_and_receive_remote_sweeps(thread_gc *tgc) {
     if (((uptr)tgc->sweep_stack + len) > (uptr)tgc->sweep_stack_limit)
       enlarge_stack(tgc, &tgc->sweep_stack, &tgc->sweep_stack_start, &tgc->sweep_stack_limit, len);
 
-    memcpy(tgc->sweep_stack, tgc->receive_remote_sweep_stack_start, len);
+    memcpy(TO_VOIDP(tgc->sweep_stack), TO_VOIDP(tgc->receive_remote_sweep_stack_start), len);
     tgc->sweep_stack = (ptr)((uptr)tgc->sweep_stack + len);
     if ((uptr)tgc->sweep_stack > (uptr)tgc->sweep_stack_limit)
       abort();
@@ -3305,7 +3365,7 @@ static void add_ephemeron_to_pending_measure(thread_gc *tgc, ptr pe) {
   seginfo *si;
   ptr p = Scar(pe);
 
-  if (!IMMEDIATE(p) && (si = MaybeSegInfo(ptr_get_segment(p))) != NULL && si->old_space)
+  if (!FIXMEDIATE(p) && (si = MaybeSegInfo(ptr_get_segment(p))) != NULL && si->old_space)
     add_ephemeron_to_pending(tgc, pe);
   else {
     if (EPHEMERONPREVREF(pe))
@@ -3326,7 +3386,7 @@ static void check_ephemeron_measure(thread_gc *tgc, ptr pe) {
   EPHEMERONNEXT(pe) = 0;
 
   p = Scar(pe);
-  if (!IMMEDIATE(p) && (si = MaybeSegInfo(ptr_get_segment(p))) != NULL
+  if (!FIXMEDIATE(p) && (si = MaybeSegInfo(ptr_get_segment(p))) != NULL
       && (si->generation <= max_measure_generation)
       && (si->generation >= min_measure_generation)
       && (!(si->old_space) || !FORWARDEDP(p, si))
@@ -3341,7 +3401,7 @@ static void check_ephemeron_measure(thread_gc *tgc, ptr pe) {
   }
 
   p = Scdr(pe);
-  if (!IMMEDIATE(p))
+  if (!FIXMEDIATE(p))
     push_measure(tgc, p);
 }
 
@@ -3398,7 +3458,7 @@ ptr S_count_size_increments(ptr ls, IGEN generation) {
 
   for (l = ls; l != Snil; l = Scdr(l)) {
     ptr p = Scar(l);
-    if (!IMMEDIATE(p)) {
+    if (!FIXMEDIATE(p)) {
       seginfo *si = SegInfo(ptr_get_segment(p));
 
       if (!si->measured_mask)
@@ -3416,7 +3476,7 @@ ptr S_count_size_increments(ptr ls, IGEN generation) {
 
     measure_total = 0;
 
-    if (!IMMEDIATE(p)) {
+    if (!FIXMEDIATE(p)) {
       seginfo *si = SegInfo(ptr_get_segment(p));
       measure_mask_unset(si->counting_mask, si, p);
       gc_measure_one(tgc, p);
@@ -3432,7 +3492,7 @@ ptr S_count_size_increments(ptr ls, IGEN generation) {
 
   for (l = ls; l != Snil; l = Scdr(l)) {
     ptr p = Scar(l);
-    if (!IMMEDIATE(p)) {
+    if (!FIXMEDIATE(p)) {
       seginfo *si = SegInfo(ptr_get_segment(p));
       si->counting_mask = NULL;
     }

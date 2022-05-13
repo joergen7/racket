@@ -83,9 +83,12 @@ available.}
                                               [msecs flonum?])
          void?]{
 
-Causes the Racket process will wake up and resume polling at the point
-when @racket[(current-inexact-milliseconds)] starts returning a value
-that is @racket[msecs] or greater.}
+Causes the Racket process to wake up and resume polling at the point
+when @racket[(current-inexact-monotonic-milliseconds)] starts returning
+a value that is @racket[msecs] or greater.}
+
+@history[#:changed "8.3.0.9" @elem{@racket[unsafe-poll-ctx-milliseconds-wakeup] previously used
+                                   @racket[current-inexact-milliseconds].}]
 
 @defproc[(unsafe-set-sleep-in-thread! [foreground-sleep (-> any/c)]
                                       [fd fixnum?])
@@ -109,3 +112,21 @@ For use with @racket[unsafe-set-sleep-in-thread!] by
 @racket[_foreground-sleep] or something that it triggers, causes the
 default sleeping function to request @racket[_foreground-sleep] to
 return.}
+
+@defproc[(unsafe-make-signal-received) (-> void?)]{
+
+Returns a function that is like @racket[unsafe-signal-received], but
+it can be called in any @tech[#:doc reference.scrbl]{place} or in any
+OS thread as supported by @racketmodname[ffi/unsafe/os-thread] to
+ensure a subsequent round of polling by the thread scheduler in the
+@tech[#:doc reference.scrbl]{place} where
+@racket[unsafe-make-signal-received] was called.
+
+Synchronizaiton between the result of
+@racket[unsafe-make-signal-received] and the scheduler will ensure the
+equivalent of @racket[(memory-order-release)] before the call to the
+function produced by @racket[unsafe-make-signal-received] and the
+equivalent of @racket[(memory-order-acquire)] before the scheduler's
+invocation of pollers.
+
+@history[#:added "8.0.0.4"]}

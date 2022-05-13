@@ -22,6 +22,7 @@
          "record.rkt"
          (for-syntax "record.rkt")
          "constant.rkt"
+         "machine-def.rkt"
          (only-in "r6rs-lang.rkt"
                   make-record-constructor-descriptor
                   set-car!
@@ -85,7 +86,7 @@
          record-type-field-names
          record-type-field-indices
          csv7:record-type-field-names
-         csv7:record-type-field-indices
+         $record-type-field-indices
          csv7:record-type-field-decls
          (rename-out [record-rtd $record-type-descriptor])
          record?
@@ -333,6 +334,7 @@
          priminfo-libraries
          $c-bufsiz
          $foreign-procedure
+         $separator-character
          make-guardian
          $lambda/lift-barrier)
 
@@ -345,15 +347,14 @@
 (define-syntax include
   (lambda (stx)
     (syntax-case stx ()
-      [(form "machine.def") #`(form ,(string-append target-machine ".def"))]
-      [(form p) #'(r:include-at/relative-to form form p)])))
+      [(form p)
+       #'(r:include-at/relative-to form form p)])))
 
 ;; If we have to avoid `read-syntax`:
 #;
 (define-syntax include
   (lambda (stx)
     (syntax-case stx ()
-      [(form "machine.def") #`(form #,(string-append target-machine ".def"))]
       [(form p)
        (let ([r (call-with-input-file*
                  (syntax->datum #'p)
@@ -706,6 +707,7 @@
            [(prelex-sticky-mask) prelex-sticky-mask]
            [(prelex-is-mask) prelex-is-mask]
            [(code-flag-lift-barrier) code-flag-lift-barrier]
+           [(machine-type-name) `(quote ,machine-type-name)]
            [else (error 'constant "unknown: ~s" #'id)])]))
 
 (define $target-machine (make-parameter (string->symbol target-machine)))
@@ -1167,11 +1169,10 @@
 (define who 'some-who)
 
 (define (with-source-path who name procedure)
-  (cond
-    [(equal? name "machine.def")
-     (procedure (string-append target-machine ".def"))]
-    [else
-     (procedure name)]))
+  (procedure (if (or (equal? name "unicode-char-cases.ss")
+                     (equal? name "unicode-charinfo.ss"))
+                 (string-append "../unicode/" name)
+                 name)))
 
 (define ($make-source-oops . args) #f)
 
@@ -1192,7 +1193,7 @@
 (define (interpret e) (eval e))
 
 (define ($open-file-input-port who filename [options #f])
-  (open-input-file filename))
+  (open-file-with-machine.def-redirect filename target-machine 'same))
 
 (define ($open-file-output-port who filename options)
   (open-output-file filename #:exists (if (eval `(enum-set-subset? (file-options replace) ',options))
@@ -1285,6 +1286,11 @@
 (define-syntax ($foreign-procedure stx)
   (syntax-case stx ()
     [(_ _ name . _) #'name]))
+
+(define ($separator-character)
+  (if (eq? (system-type) 'windows)
+      #\;
+      #\:))
 
 (define (make-guardian)
   (case-lambda

@@ -7,13 +7,15 @@
                   optimize-level)
          (only-in "scheme-lang.rkt"
                   current-expand
-                  with-source-path)
+                  with-source-path
+                  getprop)
          (submod "scheme-lang.rkt" callback)
          "syntax-mode.rkt"
          "r6rs-readtable.rkt"
          "scheme-readtable.rkt"
          "parse-makefile.rkt"
          "config.rkt"
+         "machine-def.rkt"
          "strip.rkt")
 
 ;; Set `SCHEME_SRC` and `MACH` to specify the ChezScheme source
@@ -243,18 +245,20 @@
                (loop
                 #`(begin #,@(with-source-path 'include (syntax->datum #'fn)
                               (lambda (n)
-                                (call-with-input-file*
-                                 n
-                                 (lambda (i)
-                                   (let loop ()
-                                     (define r (read-syntax n i))
-                                     (if (eof-object? r)
-                                         '()
-                                         (cons r (loop))))))))))]
+                                (define i (open-file-with-machine.def-redirect n target-machine 'same))
+                                (begin0
+                                  (let loop ()
+                                    (define r (read-syntax n i))
+                                    (if (eof-object? r)
+                                        '()
+                                        (cons r (loop))))
+                                  (close-input-port i))))))]
               [(constant-case architecture [else e ...])
                (loop #`(begin e ...))]
               [(constant-case architecture [(arch ...) e ...] . _)
-               (memq (string->symbol target-machine) (syntax->datum #'(arch ...)))
+               (memq (or (getprop 'architecture '*constant*)
+                         (error "architecture is used before being defined"))
+                     (syntax->datum #'(arch ...)))
                (loop #`(begin e ...))]
               [(constant-case architecture _ . clauses)
                (loop #`(constant-case architecture . clauses))]
@@ -426,6 +430,7 @@
                       "cpletrec.ss"
                       "cpcommonize.ss"
                       "cpnanopass.ss"
+                      "cpprim.ss"
                       "compile.ss"
                       "back.ss"))])
     (status (format "Load ~a" s))

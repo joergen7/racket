@@ -1,5 +1,11 @@
 #lang scribble/doc
-@(require "mz.rkt" scribble/bnf (for-label racket/pretty racket/gui/base setup/dirs))
+@(require "mz.rkt"
+          scribble/bnf
+          (for-label racket/pretty
+                     racket/gui/base
+                     setup/dirs
+                     racket/interaction-info
+                     compiler/cm))
 
 @(define (FlagFirst n) (as-index (Flag n)))
 @(define (DFlagFirst n) (as-index (DFlag n)))
@@ -195,11 +201,18 @@ flags:
         @nonterm{m} and from @nonterm{m} to @nonterm{p}. (On Mac OS,
         @nonterm{n}, @nonterm{m}, and @nonterm{p} are relative to a
         @tt{__PLTSCHEME} segment in the executable. On Windows,
-        they are relative to a resource of type 257 and ID 1.) The first range
+        they are relative to a resource of type 257 and ID 1. On Unix
+        using ELF, they are relative to the @tt{.rackprog} segment
+        in the executable.) The first range
         is loaded in every new @tech{place}, and any modules declared
         in that range are considered predefined in the sense of
         @racket[module-predefined?]. This option is normally embedded
         in a stand-alone binary that also embeds Racket code.}
+
+  @item{@FlagFirst{Y} @nonterm{file} @nonterm{n} @nonterm{m} @nonterm{p} :
+        Like @Flag{k} @nonterm{n} @nonterm{m} @nonterm{p}, but reading
+        from @nonterm{file} (without any adjustment
+        for a segment or resource offset).}
 
   @item{@FlagFirst{m} or @DFlagFirst{main} : Evaluates a call to
         @racketidfont{main} as bound in the top-level environment. All
@@ -253,8 +266,22 @@ flags:
 
  @itemize[
 
+  @item{@FlagFirst{y} or @DFlagFirst{make} : Enables automatic
+        generation and update of compiled @filepath{.zo} files for
+        modules loaded in the initial namespace. Specifically, the
+        result of
+        @racket[(make-compilation-manager-load/use-compiled-handler)]
+        is installed as the @tech{compiled-load handler} before other
+        module-loading actions. @bold{Caution:} This flag is intended
+        for use in interactive settings; using it in a script is
+        probably a bad idea, because concurrent invocations of the
+        script may collide attempting to update compiled files, or
+        there may be filesystem-permission issues. Using
+        @FlagFirst{c}/@DFlagFirst{no-compiled} cancels the effect of
+        @FlagFirst{y}/@DFlagFirst{make}.}
+
   @item{@FlagFirst{c} or @DFlagFirst{no-compiled} : Disables loading
-        of compiled byte-code @filepath{.zo} files, by initializing
+        of compiled @filepath{.zo} files, by initializing
         @racket[use-compiled-file-paths] to @racket[null].
         Use judiciously: this effectively ignores the content of all
         @filepath{compiled} subdirectories, so that any used modules are
@@ -331,6 +358,11 @@ flags:
   @item{@FlagFirst{N} @nonterm{file} or @DFlagFirst{name}
         @nonterm{file} : sets the name of the executable as reported
         by @racket[(find-system-path 'run-file)] to
+        @nonterm{file}.}
+
+  @item{@FlagFirst{E} @nonterm{file} or @DFlagFirst{exe}
+        @nonterm{file} : sets the name of the executable as reported
+        by @racket[(find-system-path 'exec-file)] to
         @nonterm{file}.}
 
   @item{@FlagFirst{J} @nonterm{name} or @DFlagFirst{wm-class}
@@ -467,7 +499,10 @@ Extra arguments following the last option are available from the
 
 @history[#:changed "6.90.0.17" @elem{Added @Flag{O}/@DFlag{stdout}.}
          #:changed "7.1.0.5" @elem{Added @Flag{M}/@DFlag{compile-any}.}
-         #:changed "7.8.0.6" @elem{Added @Flag{Z}.}]
+         #:changed "7.8.0.6" @elem{Added @Flag{Z}.}
+         #:changed "8.0.0.10" @elem{Added @Flag{E}.}
+         #:changed "8.0.0.11" @elem{Added @Flag{Y}.}
+         #:changed "8.4.0.1" @elem{Added @Flag{y}/@DFlag{make}.}]
 
 @; ----------------------------------------------------------------------
 
@@ -480,7 +515,9 @@ A module can have a @racket[configure-runtime] submodule that is
 the main module of a program. Normally, a @racket[configure-runtime]
 submodule is added to a module by the module's language (i.e., by the
 @racket[#%module-begin] form among a @racket[module]'s initial
-bindings).
+bindings). The body of a @racket[configure-runtime] submodule
+typically sets parameters, possibly including
+@racket[current-interaction-info].
 
 Alternatively or in addition, an older protocol is in place.
 When a module is implemented using @hash-lang{}, the language after

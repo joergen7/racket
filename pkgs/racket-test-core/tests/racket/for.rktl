@@ -5,15 +5,49 @@
 
 (require "for-util.rkt")
 
+;; These are copied from
+;; https://github.com/racket/r6rs/blob/master/r6rs-lib/rnrs/arithmetic/fixnums-6.rkt
+(define CS? (eq? 'chez-scheme (system-type 'vm)))
+(define 64-bit? (fixnum? (expt 2 33)))
+(define (least-fixnum) (if CS?
+                           (if 64-bit? (- (expt 2 60)) -536870912)
+                           (if 64-bit? (- (expt 2 62)) -1073741824)))
+(define (greatest-fixnum) (if CS?
+                              (if 64-bit? (- (expt 2 60) 1) +536870911)
+                              (if 64-bit? (- (expt 2 62) 1) +1073741823)))
+
+(define (five) 5)
+
 (test-sequence [(0 1 2)] 3)
 (test-sequence [(0 1 2)] (in-range 3))
 (test-sequence [(3 4 5)] (in-range 3 6))
 (test-sequence [(7 6 5)] (in-range 7 4 -1))
+(test-sequence [(5 6)] (in-range (five) 7))
+(test-sequence [(3 4)] (in-range 3 (five)))
+(test-sequence [(0 5)] (in-range 0 10 (five)))
 (test-sequence [(3.0 4.0 5.0)] (in-range 3.0 6.0))
 (test-sequence [(3.0 3.5 4.0 4.5 5.0 5.5)] (in-range 3.0 6.0 0.5))
 (test-sequence [(3.0 3.1 3.2)] (in-range 3.0 3.3 0.1))
+(test-sequence [(6 7)] (in-inclusive-range 6 7))
+(test-sequence [(3 4 5 6)] (in-inclusive-range 3 6))
+(test-sequence [(7 6 5 4)] (in-inclusive-range 7 4 -1))
+(test-sequence [(5 6 7)] (in-inclusive-range (five) 7))
+(test-sequence [(3 4 5)] (in-inclusive-range 3 (five)))
+(test-sequence [(0 5 10)] (in-inclusive-range 0 10 (five)))
+(test-sequence [(3.0 4.0 5.0 6.0)] (in-inclusive-range 3.0 6.0))
+(test-sequence [(3.0 3.5 4.0 4.5 5.0 5.5 6.0)] (in-inclusive-range 3.0 6.0 0.5))
+(test-sequence [(#e3.0 #e3.1 #e3.2 #e3.3)] (in-inclusive-range #e3.0 #e3.3 #e0.1))
+(test-sequence [(,(least-fixnum)
+                 ,(+ (least-fixnum) 1))]
+               (in-inclusive-range (least-fixnum)
+                                   (+ (least-fixnum) 1)))
+(test-sequence [(,(- (greatest-fixnum) 1)
+                 ,(greatest-fixnum))]
+               (in-inclusive-range (- (greatest-fixnum) 1)
+                                   (greatest-fixnum)))
 (err/rt-test (for/list ([x (in-range)]) x))
 (err/rt-test (in-range))
+(err/rt-test (for/list ([x (in-inclusive-range 1)]) x))
 (err/rt-test (for/list ([x (in-naturals 0 1)]) x))
 (err/rt-test (in-naturals 0 1))
 
@@ -71,6 +105,10 @@
 ;; Test optimized:
 (test '(2) 'in-list-of-list (for/list ([v (in-list (list 1))]) (add1 v)))
 (test '(0) 'in-mlist-of-mlist (for/list ([v (in-mlist (mlist 1))]) (sub1 v)))
+(test '() 'in-mlist-of-mlist (for/list ([v (in-mlist null)]) v))
+
+;; `in-mlist` only checks listness as much as explored
+(test 1 'in-mlist-of-mlist (for/first ([v (in-mlist (mcons 1 2))]) v))
 
 (test-sequence [(1 2 3)] (in-port read (open-input-string "1 2 3")))
 (test-sequence [((123) 4)] (in-port read (open-input-string "(123) 4")))
@@ -393,6 +431,33 @@
                    [y (in-range 3)])
         (+ x y)))
 
+;; Check #:do:
+(test (vector 0 0 1 0 1 2)
+      'do
+      (for/vector #:length 6
+                  ([x (in-range 3)]
+                   #:do [(define z (+ x 1))]
+                   [y (in-range z)])
+                  y))
+(test (vector 0 0 1 0 1 2)
+      'do
+      (for/vector #:length 6
+                  ([x (in-range 3)]
+                   #:do [(define-syntax-rule (z) (+ x 1))]
+                   [x (in-list '(oops))]
+                   #:when #t
+                   [y (in-range (z))])
+                  y))
+(test (vector 0 0 0 1 1 1)
+      'do
+      (for/vector #:length 6
+                  ([x (in-range 3)]
+                   #:do [(struct pt (x y))
+                         (define (mk x y) (pt x y))]
+                   #:when #t
+                   [y (in-range 3)])
+        (pt-x (mk x y))))
+
 (test #hash((a . 1) (b . 2) (c . 3)) 'mk-hash
       (for/hash ([v (in-naturals)]
                  [k '(a b c)])
@@ -434,6 +499,25 @@
   (test #t more?)
   (test 13 next)
   (test #f more?))
+
+(test 1 'in-value-bind-correctly (for/fold ([x #f])
+                                           ([x (in-value 1)])
+                                   x))
+(test 2 'in-value-bind-correctly (for/fold ([x #f])
+                                           ([x (values (in-value 2))])
+                                   x))
+
+(let ([x 'out]
+      [prints '()])
+  (for/fold ([x (begin
+                  (set! prints (cons (list 'top x) prints))
+                  'top)])
+            ([x (in-list (begin
+                           (set! prints (cons (list 'rhs x) prints))
+                           (list 1 2 3)))])
+    (set! prints (cons x prints))
+    x)
+  (test '(3 2 1 (top out) (rhs out)) values prints))
 
 ;; check ranges on `in-vector', especially as a value
 (test '() 'in-empty-vector (let ([v (in-vector '#())]) (for/list ([e v]) e)))
@@ -717,13 +801,13 @@
              #rx"expected\\: vector")
 (err/rt-test (for ([x (in-vector (vector 1 2) -1)]) x)
              exn:fail:contract?
-             #rx"starting index is out of range")
+             #rx"expected\\: exact-nonnegative-integer\\?")
 (err/rt-test (for ([x (in-vector (vector 1 2) 10)]) x)
              exn:fail:contract?
              #rx"starting index is out of range")
 (err/rt-test (for ([x (in-vector (vector 1 2) 1.1)]) x)
              exn:fail:contract?
-             #rx"expected\\: exact-integer\\?")
+             #rx"expected\\: exact-nonnegative-integer\\?")
 (err/rt-test (for ([x (in-vector (vector 1 2) 0 1.1)]) x)
              exn:fail:contract?
              #rx"expected\\: exact-integer\\?")
@@ -769,7 +853,7 @@
              #rx"starting index is out of range")
 (err/rt-test (for/sum ([x (in-vector (vector) -1 -1 -1)]) x)
              exn:fail:contract?
-             #rx"starting index is out of range")
+             #rx"expected: exact-nonnegative-integer?")
 (err/rt-test (for/sum ([x (in-vector (vector) 1 1 1)]) x)
              exn:fail:contract?
              #rx"starting index is out of range")
@@ -1073,6 +1157,14 @@
                    #:final (and (= x 2) (= y 3)))
         (cons (list x y) lst)))
 
+(test (list 0 0 1 0 1 2)
+      'do
+      (for/foldr ([acc null])
+                 ([x (in-range 3)]
+                  #:do [(define-syntax-rule (z) (+ x 1))]
+                  [y (in-range (z))])
+         (cons y acc)))
+
 (test '(408 . 20400)
       'for/foldr-two-accs
       (for/foldr ([a 1] [b 1] #:result (cons a b))
@@ -1158,7 +1250,7 @@
 (let ()
   (test #t 'same-expansion-for-integer-clause
         (equal? (syntax->datum (expand #'(for ([j 100]) j)))
-                (syntax->datum (expand #'(for ([j (in-range 100)]) j)))))
+                (syntax->datum (expand #'(for ([j (in-range '100)]) j)))))
 
   (test #t 'same-expansion-for-list-clause
         (equal? (syntax->datum (expand #'(for ([j '(1 2 3)]) j)))
@@ -1201,6 +1293,64 @@
 
 (err/rt-test (for/list ([x -1]) x))
 (err/rt-test (for/list ([x 1.5]) x))
+
+;; ----------------------------------------
+;; splicing clauses
+
+(define-splicing-for-clause-syntax parallel3
+  (lambda (stx)
+    (syntax-case stx ()
+      [(_ n m) #'([n (in-range 3)]
+                  [m (in-range 3)])])))
+
+(define-splicing-for-clause-syntax cross3
+  (lambda (stx)
+    (syntax-case stx ()
+      [(_ n m) #'([n (in-range 3)]
+                  #:when #t
+                  [m (in-range 3)])])))
+
+(test '((0 0) (1 1) (2 2))
+      'parallel3
+      (for/list (#:splice (parallel3 n m))
+        (list n m)))
+(test '((0 0) (1 1) (2 2))
+      'parallel3
+      (for*/list (#:splice (parallel3 n m))
+        (list n m)))
+
+(test '((0 0) (0 1) (0 2) (1 0) (1 1) (1 2) (2 0) (2 1) (2 2))
+      'cross3
+      (for/list (#:splice (cross3 n m))
+        (list n m)))
+(test '((0 0) (0 1) (0 2) (1 0) (1 1) (1 2) (2 0) (2 1) (2 2))
+      'cross3
+      (for*/list (#:splice (cross3 n m))
+        (list n m)))
+
+(define-splicing-for-clause-syntax final-if-7
+  (lambda (stx)
+    (syntax-case stx ()
+      [(_ i) #'(#:final (= i 7))])))
+(test '(0 1 2 3 4 5 6 7)
+      'final-if-7
+      (for/list ([i (in-range 10)] #:splice (final-if-7 i)) i))
+
+;; ----------------------------------------
+;; Make sure explicitly quoted datum doesn't need to have a `#%datum` binding
+
+(test '(0)
+      eval-syntax #`(for/list ([i (quote #,(datum->syntax #f 1))]) i))
+(test '(1)
+      eval-syntax #`(for/list ([i (quote #,(datum->syntax #f '(1)))]) i))
+(test '(1)
+      eval-syntax #`(for/list ([i (quote #,(datum->syntax #f '#(1)))]) i))
+(test '(#\1)
+      eval-syntax #`(for/list ([i (quote #,(datum->syntax #f "1"))]) i))
+(test '(49)
+      eval-syntax #`(for/list ([i (quote #,(datum->syntax #f #"1"))]) i))
+(test '(1)
+      eval-syntax #`(for/list ([(k v) (quote #,(datum->syntax #f #hash((1 . 0))))]) k))
 
 ;; ----------------------------------------
 

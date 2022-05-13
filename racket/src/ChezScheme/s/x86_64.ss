@@ -636,7 +636,11 @@
     [(op (x fpur) (y ur)) `(set! ,(make-live-info) ,x (asm ,info ,asm-fpcast ,y))])
 
   (define-instruction value (fp+ fp- fp* fp/)
-    [(op (x fpur) (y fpmem fpur) (z fpmem fpur))
+    [(op (x fpur) (y fpur) (z fpmem fpur))
+     (seq
+      `(move-related ,x ,y)
+      `(set! ,(make-live-info) ,x (asm ,info ,(asm-fpop-2 op) ,y ,z)))]
+    [(op (x fpur) (y fpmem) (z fpmem fpur))
      `(set! ,(make-live-info) ,x (asm ,info ,(asm-fpop-2 op) ,y ,z))])
 
   (define-instruction value (fpsqrt)
@@ -735,58 +739,89 @@
   (define-instruction pred (condition-code)
     [(op) (values '() `(asm ,info ,(asm-condition-code info)))])
 
-  (let* ([info-cc-eq (make-info-condition-code 'eq? #f #t)]
-         [asm-eq (asm-relop info-cc-eq)])
-    (define-instruction pred (type-check?)
-      [(op (x ur mem) (mask imm32 ur) (type imm32 ur))
-       (let ([tmp (make-tmp 'u)])
-         (values
-           (with-output-language (L15d Effect)
-             (seq
+  (let ()
+    (define imm->imm32
+      (lambda (y w k)
+        (nanopass-case (L15d Triv) w
+          [(immediate ,imm)
+           (if (signed-32? imm)
+               (k y w)
+               (let ([tmp (make-tmp 'u)]
+                     [zero (with-output-language (L15d Triv)
+                             `(immediate 0))])
+                 (with-output-language (L15d Effect)
+                   (seq
+                    `(set! ,(make-live-info) ,tmp ,w)
+                    (if (eq? y %zero)
+                        (k tmp zero)
+                        (seq
+                         `(set! ,(make-live-info) ,tmp (asm ,null-info ,asm-add ,tmp ,y))
+                         (k tmp zero)))))))])))
+
+    (let* ([info-cc-eq (make-info-condition-code 'eq? #f #t)]
+           [asm-eq (asm-relop info-cc-eq)])
+      (define-instruction pred (type-check?)
+        [(op (x ur mem) (mask imm32 ur) (type imm32 ur))
+         (let ([tmp (make-tmp 'u)])
+           (values
+            (with-output-language (L15d Effect)
+              (seq
                `(set! ,(make-live-info) ,tmp ,x)
                `(set! ,(make-live-info) ,tmp (asm ,null-info ,asm-logand ,tmp ,mask))))
-           `(asm ,info-cc-eq ,asm-eq ,tmp ,type)))])
+            `(asm ,info-cc-eq ,asm-eq ,tmp ,type)))])
 
-    (define-instruction pred (logtest log!test)
-      [(op (x mem) (y ur imm32))
-       (values '() `(asm ,info-cc-eq ,(asm-logtest (eq? op 'log!test) info-cc-eq) ,x ,y))]
-      [(op (x ur imm32) (y mem))
-       (values '() `(asm ,info-cc-eq ,(asm-logtest (eq? op 'log!test) info-cc-eq) ,y ,x))]
-      [(op (x imm32) (y ur))
-       (values '() `(asm ,info-cc-eq ,(asm-logtest (eq? op 'log!test) info-cc-eq) ,y ,x))]
-      [(op (x ur) (y ur imm32))
-       (values '() `(asm ,info-cc-eq ,(asm-logtest (eq? op 'log!test) info-cc-eq) ,x ,y))])
+      (define-instruction pred (logtest log!test)
+        [(op (x mem) (y ur imm32))
+         (values '() `(asm ,info-cc-eq ,(asm-logtest (eq? op 'log!test) info-cc-eq) ,x ,y))]
+        [(op (x ur imm32) (y mem))
+         (values '() `(asm ,info-cc-eq ,(asm-logtest (eq? op 'log!test) info-cc-eq) ,y ,x))]
+        [(op (x imm32) (y ur))
+         (values '() `(asm ,info-cc-eq ,(asm-logtest (eq? op 'log!test) info-cc-eq) ,y ,x))]
+        [(op (x ur) (y ur imm32))
+         (values '() `(asm ,info-cc-eq ,(asm-logtest (eq? op 'log!test) info-cc-eq) ,x ,y))])
 
-    (define-instruction pred (lock!)
-      [(op (x ur) (y ur) (w imm32))
-       (let ([uts (make-precolored-unspillable 'uts %ts)])
-         (values
-           (nanopass-case (L15d Triv) w
-             [(immediate ,imm)
-              (with-output-language (L15d Effect)
-                (seq
-                  `(set! ,(make-live-info) ,uts (immediate 1))
-                  `(set! ,(make-live-info) ,uts
-                     (asm ,info ,asm-exchange ,uts
-                       (mref ,x ,y ,imm uptr)))))])
-           `(asm ,info-cc-eq ,asm-eq ,uts (immediate 0))))]))
+      (define-instruction pred (lock!)
+        [(op (x ur) (y ur) (w imm))
+         (imm->imm32
+          y w
+          (lambda (y w)
+            (let ([uts (make-precolored-unspillable 'uts %ts)])
+              (values
+               (nanopass-case (L15d Triv) w
+                 [(immediate ,imm)
+                  (with-output-language (L15d Effect)
+                    (seq
+                     `(set! ,(make-live-info) ,uts (immediate 1))
+                     `(set! ,(make-live-info) ,uts
+                            (asm ,info ,asm-exchange ,uts
+                                 (mref ,x ,y ,imm uptr)))))])
+               `(asm ,info-cc-eq ,asm-eq ,uts (immediate 0))))))]))
 
-  (define-instruction effect (locked-incr!)
-    [(op (x ur) (y ur) (w imm32))
-     `(asm ,info ,asm-locked-incr ,x ,y ,w)])
+    (define-instruction effect (locked-incr!)
+      [(op (x ur) (y ur) (w imm))
+       (imm->imm32
+        y w
+        (lambda (y w)
+          `(asm ,info ,asm-locked-incr ,x ,y ,w)))])
 
-  (define-instruction effect (locked-decr!)
-    [(op (x ur) (y ur) (w imm32))
-     `(asm ,info ,asm-locked-decr ,x ,y ,w)])
+    (define-instruction effect (locked-decr!)
+      [(op (x ur) (y ur) (w imm))
+       (imm->imm32
+        y w
+        (lambda (y w)
+          `(asm ,info ,asm-locked-decr ,x ,y ,w)))])
 
-  (define-instruction effect (cas)
-    [(op (x ur) (y ur) (w imm32) (old ur) (new ur))
-     (let ([urax (make-precolored-unspillable 'urax %rax)])
-       (with-output-language (L15d Effect)
-         (seq
-           `(set! ,(make-live-info) ,urax ,old)
-           ;; NB: may modify %rax:
-           `(asm ,info ,asm-locked-cmpxchg ,x ,y ,w ,urax ,new))))])
+    (define-instruction effect (cas)
+      [(op (x ur) (y ur) (w imm) (old ur) (new ur))
+       (imm->imm32
+        y w
+        (lambda (y w)
+          (let ([urax (make-precolored-unspillable 'urax %rax)])
+            (with-output-language (L15d Effect)
+              (seq
+               `(set! ,(make-live-info) ,urax ,old)
+               ;; NB: may modify %rax:
+               `(asm ,info ,asm-locked-cmpxchg ,x ,y ,w ,urax ,new))))))]))
 
   (define-instruction effect (pause)
     [(op) `(asm ,info ,asm-pause)])
@@ -2232,7 +2267,7 @@
           (let ([sp-opnd (cons 'reg %sp)])
             (if (fx= entry (lookup-c-entry Sreturn))
                 ; pretend S_generic_invoke called Sreturn directly by wiping out
-                ; pad added by invoke-prelude and jumping rather than calling
+                ; stack space added by invoke-prelude and jumping rather than calling
                 (emit addi '(imm 8) sp-opnd
                   (asm-helper-jump code* `(x86_64-jump 0 (entry ,entry))))
                 (let ([target `(x86_64-call 0 (entry ,entry))])
@@ -2427,11 +2462,11 @@
   (module (asm-foreign-call asm-foreign-callable)
     (if-feature windows
       (begin
-        (define make-vint (lambda () (vector %Carg1 %Carg2 %Carg3 %Carg4)))
-        (define make-vfp (lambda () (vector %Cfparg1 %Cfparg2 %Cfparg3 %Cfparg4))))
+        (define vint (vector %Carg1 %Carg2 %Carg3 %Carg4))
+        (define vfp (vector %Cfparg1 %Cfparg2 %Cfparg3 %Cfparg4)))
       (begin
-        (define make-vint (lambda () (vector %Carg1 %Carg2 %Carg3 %Carg4 %Carg5 %Carg6)))
-        (define make-vfp (lambda () (vector %Cfparg1 %Cfparg2 %Cfparg3 %Cfparg4 %Cfparg5 %Cfparg6 %Cfparg7 %Cfparg8)))))
+        (define vint (vector %Carg1 %Carg2 %Carg3 %Carg4 %Carg5 %Carg6))
+        (define vfp (vector %Cfparg1 %Cfparg2 %Cfparg3 %Cfparg4 %Cfparg5 %Cfparg6 %Cfparg7 %Cfparg8))))
 
     (define (align n size)
       (fxlogand (fx+ n (fx- size 1)) (fx- size)))
@@ -2625,7 +2660,7 @@
                           `(set! ,(%mref ,%sp ,offset) (inline ,(make-info-load 'integer-8 #f)
                                                                ,%load ,x ,%zero (immediate ,x-offset)))]))))]
                  [load-content-regs
-                  (lambda (classes size iint ifp vint vfp)
+                  (lambda (classes size unsigned? iint ifp)
                     (lambda (x) ; requires var
                       (let loop ([size size] [iint iint] [ifp ifp] [classes classes] [x-offset 0])
                         (cond
@@ -2650,13 +2685,13 @@
                           (let loop ([reg (vector-ref vint iint)] [size size] [x-offset x-offset])
                             (cond
                              [(= size 4)
-                              `(set! ,reg (inline ,(make-info-load 'unsigned-32 #f)
+                              `(set! ,reg (inline ,(make-info-load (if unsigned? 'unsigned-32 'integer-32) #f)
                                                   ,%load ,x ,%zero (immediate ,x-offset)))]
                              [(= size 2)
-                              `(set! ,reg (inline ,(make-info-load 'unsigned-16 #f)
+                              `(set! ,reg (inline ,(make-info-load (if unsigned? 'unsigned-16 'integer-16) #f)
                                                   ,%load ,x ,%zero (immediate ,x-offset)))]
                              [(= size 1)
-                              `(set! ,reg (inline ,(make-info-load 'unsigned-8 #f)
+                              `(set! ,reg (inline ,(make-info-load (if unsigned? 'unsigned-8 'integer-8) #f)
                                                   ,%load ,x ,%zero (immediate ,x-offset)))]
                              [(> size 4)
                               ;; 5, 6, or 7: multiple steps to avoid reading too many bytes
@@ -2682,7 +2717,7 @@
                       (add-regs (fx- ints 1) (fx+ ir 1) vr
                                 (cons (vector-ref vr ir) regs))]))]
                  [do-args
-                  (lambda (types vint vfp)
+                  (lambda (types)
                     (if-feature windows
                       (let loop ([types types] [locs '()] [regs '()] [fp-regs '()] [i 0] [isp 0])
                         (if (null? types)
@@ -2717,12 +2752,12 @@
                                           (eq? 'float (caar ($ftd->members ftd))))
                                      ;; float or double
                                      (loop (cdr types)
-                                       (cons (load-content-regs '(sse) ($ftd-size ftd) i i vint vfp) locs)
+                                       (cons (load-content-regs '(sse) ($ftd-size ftd) #t i i) locs)
                                        (add-regs 1 i vint regs) (add-regs 1 i vfp fp-regs) (fx+ i 1) isp)]
                                     [else
                                      ;; integer
                                      (loop (cdr types)
-                                       (cons (load-content-regs '(integer) ($ftd-size ftd) i i vint vfp) locs)
+                                       (cons (load-content-regs '(integer) ($ftd-size ftd) ($ftd-unsigned? ftd) i i) locs)
                                        (add-regs 1 i vint regs) fp-regs(fx+ i 1) isp)])]
                                   [else
                                    ;; pass as value on the stack
@@ -2786,7 +2821,7 @@
                                   [else
                                    ;; pass in registers
                                    (loop (cdr types)
-                                         (cons (load-content-regs classes ($ftd-size ftd) iint ifp vint vfp) locs)
+                                         (cons (load-content-regs classes ($ftd-size ftd) ($ftd-unsigned? ftd) iint ifp) locs)
                                          (add-regs ints iint vint regs) (add-regs fps ifp vfp fp-regs)
                                          (fx+ iint ints) (fx+ ifp fps) isp)]))]
                               [else
@@ -2917,7 +2952,7 @@
                    [fill-result-here? (result-fits-in-registers? result-classes)]
                    [result-reg* (get-result-regs fill-result-here? result-type result-classes)]
                    [adjust-active? (if-feature pthreads (memq 'adjust-active conv*) #f)])
-              (with-values (do-args (if fill-result-here? (cdr arg-type*) arg-type*) (make-vint) (make-vfp))
+              (with-values (do-args (if fill-result-here? (cdr arg-type*) arg-type*))
                 (lambda (frame-size nfp locs live* fp-live*)
                   (with-values (add-save-fill-target fill-result-here? frame-size locs)
                     (lambda (frame-size locs)
@@ -2980,18 +3015,18 @@
                    |                           |
                    |    incoming stack args    |
                    |                           |
-                   +---------------------------+ <- 16-byte boundary
+           sp+176: +---------------------------+ <- 16-byte boundary
                    |                           | 
                    |  space for register args  | four quads
-       sp+128/144: |                           | 
-                   +---------------------------+ <- 16-byte boundary
-                   |   incoming return address | one quad
-      incoming sp: +---------------------------+
-           sp+120: |        active state       | zero or two quads
-                   +---------------------------+
+                   |                           | 
+           sp+144: +---------------------------+ <- 16-byte boundary
+incoming           |   incoming return address | one quad
+      sp-> sp+120: +---------------------------+
                    |                           |
                    |   callee-save registers   | RBX, RBP, RDI, RSI, R12, R13, R14, R15 (8 quads)
                    |                           |                            and XMM6-11 (6 quads)
+            sp+24: +---------------------------+
+                   |        active state       | two quads
                    +---------------------------+
                    | pad word / indirect space | one quad
              sp+0: +---------------------------+<- 16-byte boundary
@@ -3022,6 +3057,9 @@
       |#
       (with-output-language (L13 Effect)
         (let ()
+          (define saved-register-arg-offset (if-feature windows 144 48))
+          (define active-state-offset (if-feature windows 24 176))
+          (define stack-args-offset (if-feature windows 176 192))
           (define load-double-stack
             (lambda (offset)
               (lambda (x) ; boxed (always a var)
@@ -3061,10 +3099,8 @@
                 `(set! ,lvalue ,(%inline + ,%sp (immediate ,offset))))))
           (define save-arg-regs
             (lambda (types)
-              (define vint (make-vint))
-              (define vfp (make-vfp))
               (if-feature windows
-                (let f ([types types] [i 0] [isp 8])
+                (let f ([types types] [i 0] [isp saved-register-arg-offset])
                   (if (or (null? types) (fx= i 4))
                       `(nop)
                       (nanopass-case (Ltype Type) (car types)
@@ -3119,7 +3155,7 @@
                                (set! ,(%mref ,%sp ,isp) ,(vector-ref vint i))
                                ,(f (cdr types) (fx+ i 1) (fx+ isp 8)))
                              (f (cdr types) i isp))])))
-                (let f ([types types] [iint 0] [ifp 0] [isp 48])
+                (let f ([types types] [iint 0] [ifp 0] [isp saved-register-arg-offset])
                   (if (or (null? types) (and (fx>= iint 6) (fx>= ifp 8)))
                       `(nop)
                       (nanopass-case (Ltype Type) (car types)
@@ -3168,7 +3204,7 @@
              ; risp is where incoming register args are stored
              ; sisp is where incoming stack args are stored
               (if-feature windows
-                (let f ([types types] [locs '()] [isp (if adjust-active? 144 128)])
+                (let f ([types types] [locs '()] [isp saved-register-arg-offset]) ; stack args follow saved registers
                   (if (null? types)
                       locs
                       (f (cdr types)
@@ -3191,8 +3227,8 @@
                         [locs '()]
                         [iint 0]
                         [ifp 0]
-                        [risp 48]
-                        [sisp 192])
+                        [risp saved-register-arg-offset]
+                        [sisp stack-args-offset])
                   (if (null? types)
                       locs
                       (nanopass-case (Ltype Type) (car types)
@@ -3278,7 +3314,7 @@
                 [else
                  (values (lambda ()
                            ;; Return pointer that was filled; destination was the first argument
-                           `(set! ,%Cretval ,(%mref ,%sp ,(if-feature windows (if adjust-active? 144 128) 48))))
+                           `(set! ,%Cretval ,(%mref ,%sp ,saved-register-arg-offset)))
                          (list %Cretval)
                          '())])]
               [(fp-double-float)
@@ -3304,7 +3340,7 @@
                        '())]))
           (define (unactivate result-regs)
             (let ([e `(seq
-                       (set! ,%Carg1 ,(%mref ,%sp ,(+ (push-registers-size result-regs) (if-feature windows 120 176))))
+                       (set! ,%Carg1 ,(%mref ,%sp ,(+ (push-registers-size result-regs) active-state-offset)))
                        ,(as-c-call (%inline unactivate-thread ,%Carg1)))])
               (if (null? result-regs)
                   e
@@ -3327,12 +3363,6 @@
                      (%seq
                       ,(if-feature windows
                          (%seq
-                           ,(let ([e (save-arg-regs arg-type*)])
-                              (if adjust-active?
-                                  (%seq
-                                    ,e
-                                    (set! ,%sp ,(%inline - ,%sp (immediate 16))))
-                                  e))
                            ,(%inline push ,%rbx)
                            ,(%inline push ,%rbp)
                            ,(%inline push ,%rdi)
@@ -3341,14 +3371,17 @@
                            ,(%inline push ,%r13)
                            ,(%inline push ,%r14)
                            ,(%inline push ,%r15)
-                           (set! ,%sp ,(%inline - ,%sp (immediate 48)))
+                           ;; 16 bytes of this space is needed needed only for `adjust-active?`, but
+                           ;; always add the space so that unwind info can be consistent:
+                           (set! ,%sp ,(%inline - ,%sp (immediate 64)))
                            (set! ,(%mref ,%sp ,%zero 0 fp) ,%fp3)
                            (set! ,(%mref ,%sp ,%zero 8 fp) ,%fp4)
                            (set! ,(%mref ,%sp ,%zero 16 fp) ,%fp5)
                            (set! ,(%mref ,%sp ,%zero 24 fp) ,%fp6)
                            (set! ,(%mref ,%sp ,%zero 32 fp) ,%fp7)
                            (set! ,(%mref ,%sp ,%zero 40 fp) ,%fp8)
-                           (set! ,%sp ,(%inline - ,%sp (immediate 8))))
+                           (set! ,%sp ,(%inline - ,%sp (immediate 8)))
+                           ,(save-arg-regs arg-type*))
                          (%seq
                            (set! ,%sp ,(%inline - ,%sp (immediate 136)))
                            ,(%inline push ,%rbx)
@@ -3363,7 +3396,7 @@
                             (if adjust-active?
                                 (%seq
                                  ,(as-c-call `(set! ,%rax ,(%inline activate-thread)))
-                                 (set! ,(%mref ,%sp ,(if-feature windows 120 176)) ,%rax)
+                                 (set! ,(%mref ,%sp ,active-state-offset) ,%rax)
                                  ,e)
                                 e))
                           (%seq 
@@ -3391,11 +3424,7 @@
                              e))
                        (%seq
                         ,(if-feature windows
-                           ((lambda (e)
-                              (if adjust-active?
-                                  (%seq ,e (set! ,%sp ,(%inline + ,%sp (immediate 16))))
-                                  e))
-                            (%seq
+                           (%seq
                              (set! ,%sp ,(%inline + ,%sp (immediate 8)))
                              (set! ,%fp3 ,(%mref ,%sp ,%zero 0 fp))
                              (set! ,%fp4 ,(%mref ,%sp ,%zero 8 fp))
@@ -3403,7 +3432,7 @@
                              (set! ,%fp6 ,(%mref ,%sp ,%zero 24 fp))
                              (set! ,%fp7 ,(%mref ,%sp ,%zero 32 fp))
                              (set! ,%fp8 ,(%mref ,%sp ,%zero 40 fp))
-                             (set! ,%sp ,(%inline + ,%sp (immediate 48)))
+                             (set! ,%sp ,(%inline + ,%sp (immediate 64)))
                              (set! ,%r15 ,(%inline pop))
                              (set! ,%r14 ,(%inline pop))
                              (set! ,%r13 ,(%inline pop))
@@ -3411,7 +3440,7 @@
                              (set! ,%rsi ,(%inline pop))
                              (set! ,%rdi ,(%inline pop))
                              (set! ,%rbp ,(%inline pop))
-                             (set! ,%rbx ,(%inline pop))))
+                             (set! ,%rbx ,(%inline pop)))
                            (%seq
                              (set! ,%r15 ,(%inline pop))
                              (set! ,%r14 ,(%inline pop))

@@ -83,11 +83,16 @@
           raise
           error-print-width
           error-value->string-handler
+          error-syntax->string-handler
           error-print-context-length
           exception-handler-key
           uncaught-exception-handler
           error-display-handler
           error-escape-handler
+          current-error-message-adjuster
+          error-message-adjuster-key
+          error-message->adjusted-string
+          error-contract->adjusted-string
           linklet-instantiate-key ; not exported to Racket
           set-error-display-eprintf! ; not exported to Racket
           set-log-system-message! ; not exported to Racket
@@ -159,6 +164,7 @@
           procedure-reduce-arity-mask
           procedure-rename
           procedure->method
+          procedure-realm
           procedure-arity?
           prop:checked-procedure
           checked-procedure-check-and-extract
@@ -197,14 +203,24 @@
           unsafe-impersonate-procedure
           unsafe-chaperone-procedure
 
-          raise-argument-error
-          raise-arguments-error
+          raise-argument-error/user
+          raise-argument-error ; not exported to Racket; replaced with `raise-argument-error/user`
+          raise-argument-error*
+          raise-arguments-error/user
+          raise-arguments-error ; not exported to Racket; replaced with `raise-arguments-error/user`
+          raise-arguments-error*
           raise-result-error
+          raise-result-error*
           raise-mismatch-error
-          raise-range-error
+          raise-range-error/user
+          raise-range-error ; not exported to Racket; replaced with `raise-range-error`
+          raise-range-error*
           raise-arity-error
+          raise-arity-error*
           raise-arity-mask-error
+          raise-arity-mask-error*
           raise-result-arity-error
+          raise-result-arity-error*
           raise-type-error
           raise-binding-result-arity-error ; not exported to Racket
           raise-definition-result-arity-error ; not exported to Racket
@@ -218,8 +234,8 @@
           struct-type-property-accessor-procedure?
           struct-type-property-predicate-procedure?
           make-struct-type
-          struct-type-install-properties! ; not exported to Racket
-          structure-type-lookup-prefab-uid ; not exported to Racket
+          make-struct-type-install-properties ; not exported to Racket
+          structure-type-lookup-prefab-uid    ; not exported to Racket
           make-struct-field-accessor
           make-struct-field-mutator
           struct-type-constructor-add-guards ; not exported to Racket
@@ -228,6 +244,8 @@
           |#%struct-field-accessor| ; not exported to Racket
           |#%struct-field-mutator| ; not exported to Racket
           |#%nongenerative-uid| ; not exported to Racket
+          |#%struct-ref-error| ; not exported to Racket
+          |#%struct-set!-error| ; not exported to Racket
           struct-property-set!  ; not exported to Racket
           struct-constructor-procedure?
           struct-predicate-procedure?
@@ -237,6 +255,8 @@
           struct-type?
           procedure-struct-type?
           struct-type-info
+          struct-type-sealed?
+          struct-type-authentic?
           struct-info
           struct-type-make-constructor
           struct-type-make-predicate
@@ -247,6 +267,7 @@
           make-prefab-struct
           prop:authentic
           prop:equal+hash
+          prop:sealed
           inspector?
           inspector-superior?
           impersonate-struct
@@ -267,6 +288,7 @@
           make-hash make-hasheqv make-hasheq
           make-immutable-hash make-immutable-hasheqv make-immutable-hasheq
           make-weak-hash make-weak-hasheq make-weak-hasheqv
+          make-ephemeron-hash make-ephemeron-hasheq make-ephemeron-hasheqv
           hash-ref hash-ref-key hash-set hash-set! hash-remove hash-remove!
           hash-for-each hash-map hash-copy hash-clear hash-clear!
           hash-iterate-first hash-iterate-next
@@ -281,9 +303,12 @@
           unsafe-weak-hash-iterate-first unsafe-weak-hash-iterate-next
           unsafe-weak-hash-iterate-key unsafe-weak-hash-iterate-value
           unsafe-weak-hash-iterate-key+value unsafe-weak-hash-iterate-pair
+          unsafe-ephemeron-hash-iterate-first unsafe-ephemeron-hash-iterate-next
+          unsafe-ephemeron-hash-iterate-key unsafe-ephemeron-hash-iterate-value
+          unsafe-ephemeron-hash-iterate-key+value unsafe-ephemeron-hash-iterate-pair
           unsafe-hash-seal!    ; not exported to racket
 
-          hash? hash-eq? hash-equal? hash-eqv? hash-weak?
+          hash? hash-eq? hash-equal? hash-eqv? hash-strong? hash-weak? hash-ephemeron?
           hash-count
           hash-keys-subset?
           eq-hashtable->hash   ; not exported to racket
@@ -425,6 +450,8 @@
           random-seed
           current-pseudo-random-generator
           pseudo-random-generator-vector?
+          vector->pseudo-random-generator
+          vector->pseudo-random-generator!
 
           mpair?
           mcons
@@ -468,6 +495,7 @@
 
           time-apply
           current-inexact-milliseconds
+          current-inexact-monotonic-milliseconds
           current-milliseconds
           current-gc-milliseconds
           current-seconds
@@ -607,9 +635,11 @@
           unsafe-extflvector-length unsafe-extflvector-ref unsafe-extflvector-set!
 
           set-prepare-for-place!     ; not exported to Racket
+          set-place-get-inherit!     ; not exported to Racket
           set-start-place!           ; not exported to Racket
           set-destroy-place!         ; not exported to Racket
           fork-place                 ; not exported to Racket
+          place-get-inherit          ; not exported to Racket
           start-place                ; not exported to Racket
           place-enabled?
           place-shared?
@@ -643,6 +673,7 @@
           poll-async-callbacks            ; not exported to Racket
           set-make-async-callback-poll-wakeup! ; not exported to Racket
           set-foreign-eval!               ; not exported to Racket
+          call-enabling-ffi-callbacks     ; not exported to Racket
 
           ptr-ref/int8 ptr-set!/int8      ; not exported to Racket
           ptr-ref/uint8 ptr-set!/uint8    ; not exported to Racket
@@ -696,8 +727,9 @@
           unsafe-struct*-ref
           unsafe-struct*-set!
           unsafe-struct*-cas!
-          unsafe-struct? ; not exported to racket
-          unsafe-struct  ; not exported to racket
+          unsafe-struct?        ; not exported to racket
+          unsafe-sealed-struct? ; not exported to racket
+          unsafe-struct         ; not exported to racket
 
           unsafe-s16vector-ref
           unsafe-s16vector-set!
@@ -711,6 +743,8 @@
           unsafe-bytes->immutable-bytes!
           unsafe-string->immutable-string!
           unsafe-vector*->immutable-vector!
+
+          unsafe-assert-unreachable
 
           ;; --- not exported to Racket: ---
           make-pthread-parameter
@@ -731,6 +765,7 @@
           continuation-current-primitive
           call-as-asynchronous-callback
           post-as-asynchronous-callback
+          ensure-virtual-registers
 
           ;; compile-time use in "thread.sls"
           current-atomic-virtual-register
@@ -756,10 +791,13 @@
   (define none '#{none kwcju864gpycc2h151s9atbmo-1})
   (define none2 '#{none kwcju864gpycc2h151s9atbmo-2}) ; never put this in an emphemeron
 
+  (define default-realm 'racket)
+  (define primitive-realm 'racket/primitive)
+
   (include "rumble/virtual-register.ss")
-  (include "rumble/layout.ss")
   (include "rumble/begin0.ss")
   (include "rumble/syntax-rule.ss")
+  (include "rumble/name.ss")
   (include "rumble/value.ss")
   (include "rumble/lock.ss")
   (include "rumble/thread-local.ss")
@@ -788,6 +826,7 @@
   (include "rumble/source.ss")
   (include "rumble/error.ss")
   (include "rumble/error-rewrite.ss")
+  (include "rumble/error-adjuster.ss")
   (include "rumble/srcloc.ss")
   (include "rumble/boolean.ss")
   (include "rumble/bytes.ss")
@@ -821,6 +860,9 @@
   (define-virtual-registers-init init-virtual-registers)
   (init-virtual-registers)
 
+  ;; in case of early pauses to check for GC:
+  (timer-interrupt-handler void)
+  
   (set-no-locate-source!)
   ;; Note: if there's a bug in `rumble` that causes exception handling to error,
   ;; the the following line will cause the error to loop with another error, etc.,

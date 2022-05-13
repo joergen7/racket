@@ -336,7 +336,16 @@
                         "compiled"
                         (car (use-compiled-file-paths)))]
           [list-lib  (strpath racketlib "list.rkt")]
-          [list-zo   (strpath racketlib compiled "list_rkt.zo")]
+          [list-zo   (for/or ([root (in-list (current-compiled-file-roots))])
+                       (define file (cond
+                                      [(eq? root 'same)
+                                       (build-path racketlib compiled "list_rkt.zo")]
+                                      [(relative-path? root)
+                                       (build-path racketlib root compiled "list_rkt.zo")]
+                                      [else
+                                       (build-path (reroot-path racketlib root) compiled "list_rkt.zo")]))
+                       (and (file-exists? file)
+                            (path->string file)))]
           [test-lib  (strpath tmp "sandbox-test.rkt")]
           [test-zo   (strpath tmp compiled "sandbox-test_rkt.zo")]
           [test2-lib (strpath tmp "sandbox-test2.rkt")]
@@ -480,7 +489,7 @@
         (cp ,list-lib ,test-lib)  (cp ,list-zo ,test-zo)
         (cp ,list-lib ,test2-lib) (cp ,list-zo ,test2-zo)
         ;; bytecode from test-lib is bad, even when we can read/write to it
-        (load/use-compiled ,test-zo) =err> "cannot use unsafe linklet loaded with non-original code inspector"
+        (load ,test-zo) =err> "cannot use unsafe linklet loaded with non-original code inspector"
         ;; bytecode from test2-lib is explicitly allowed
         (load/use-compiled ,test2-lib)
         (require 'list) => (void))
@@ -710,6 +719,34 @@
 (let ([e (make-module-evaluator (string-append "#lang racket/base\n"))])
   (e '(require racket/sandbox))
   (e '(make-module-evaluator (string-append "#lang racket/base\n"))))
+
+;; ----------------------------------------
+
+;; Check reader guard on a sandbox:
+(err/rt-test (make-module-evaluator "#lang s-exp something-bad" #:language 'racket/base)
+             exn:fail?
+             #rx"disallowed reader module path: [(]submod s-exp reader[)]")
+
+(void (make-module-evaluator "#lang at-exp racket/base"
+                             #:language 'racket/base))
+(void (make-module-evaluator "#lang s-exp racket/base"
+                             #:language 'racket/base
+                             #:readers '((submod s-exp reader)
+                                         s-exp/lang/reader
+                                         racket/base
+                                         (submod racket/base reader))))
+
+;; ----------------------------------------
+
+;; Check require guard on a sandbox:
+
+(err/rt-test (make-module-evaluator "#lang racket/base (require json)"
+                                    #:allow-syntactic-requires '(racket/runtime-config))
+             exn:fail?
+             #rx"disallowed `require` module path: json")
+(void
+ (make-module-evaluator "#lang racket/base (require json)"
+                        #:allow-syntactic-requires '(racket/runtime-config json)))
 
 ;; ----------------------------------------
 

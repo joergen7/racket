@@ -70,6 +70,8 @@ struct rktio_t {
   struct rktio_socket_t *wsr_array;
   int made_progress;
   DWORD max_sleep_time;
+  int got_hires_freq;
+  LARGE_INTEGER hires_freq;
 #endif
 #ifdef USE_FAR_RKTIO_FDCALLS
   /* A single fdset that can be reused for immediate actions: */
@@ -360,7 +362,7 @@ void rktio_close_fds_after_fork(int len, int skip1, int skip2, int skip3);
 
 int rktio_system_fd_is_terminal(rktio_t *rktio, intptr_t fd);
 
-#ifdef RKTIO_USE_PTHREADS
+#if defined(RKTIO_USE_PTHREADS) && !defined(NO_PTHREAD_CANCEL)
 # define RKTIO_USE_PENDING_OPEN
 #endif
 
@@ -377,6 +379,9 @@ void rktio_pending_open_retain(rktio_t *rktio, struct open_in_thread_t *oit);
 int rktio_pending_open_release(rktio_t *rktio, struct open_in_thread_t *oit);
 #endif
 
+int rktio_environ_init(rktio_t *rktio);
+void rktio_getenv_lock();
+void rktio_getenv_unlock();
 void *rktio_envvars_to_block(rktio_t *rktio, rktio_envvars_t *envvars);
 
 void rktio_stop_fs_change(rktio_t *rktio);
@@ -416,8 +421,10 @@ char *rktio_strndup(char *s, intptr_t len);
 
 #ifdef RKTIO_SYSTEM_UNIX
 void rktio_set_signal_handler(int sig_id, void (*proc)(int));
+void rktio_restore_modified_signal_handlers();
 #endif
 void rktio_forget_os_signal_handler(rktio_t *rktio);
+
 
 #ifdef RKTIO_SYSTEM_WINDOWS
 int rktio_system_time_is_dst(SYSTEMTIME *st, TIME_ZONE_INFORMATION *_tz);

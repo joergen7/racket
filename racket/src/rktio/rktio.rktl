@@ -15,6 +15,7 @@
 (define-constant RKTIO_OPEN_NOT_DIR (<< 1 12))
 (define-constant RKTIO_OPEN_INIT (<< 1 13))
 (define-constant RKTIO_OPEN_OWN (<< 1 14))
+(define-constant RKTIO_DEFAULT_PERM_BITS 438)
 (define-constant RKTIO_STDIN 0)
 (define-constant RKTIO_STDOUT 1)
 (define-constant RKTIO_STDERR 2)
@@ -41,6 +42,8 @@
 (define-constant RKTIO_PROCESS_STDOUT_AS_STDERR (<< 1 1))
 (define-constant RKTIO_PROCESS_WINDOWS_EXACT_CMDLINE (<< 1 2))
 (define-constant RKTIO_PROCESS_WINDOWS_CHAIN_TERMINATION (<< 1 3))
+(define-constant RKTIO_PROCESS_NO_CLOSE_FDS (<< 1 4))
+(define-constant RKTIO_PROCESS_NO_INHERIT_FDS (<< 1 5))
 (define-constant RKTIO_PROCESS_ERROR -2)
 (define-constant RKTIO_PROCESS_DONE 1)
 (define-constant RKTIO_PROCESS_RUNNING 0)
@@ -68,6 +71,7 @@
 (define-constant RKTIO_FILE_TYPE_LINK 3)
 (define-constant RKTIO_FILE_TYPE_DIRECTORY_LINK 4)
 (define-constant RKTIO_FILE_TYPE_ERROR -1)
+(define-constant RKTIO_DEFAULT_DIRECTORY_PERM_BITS 511)
 (define-constant RKTIO_PERMISSION_READ 4)
 (define-constant RKTIO_PERMISSION_WRITE 2)
 (define-constant RKTIO_PERMISSION_EXEC 1)
@@ -172,6 +176,25 @@
   ((ref rktio_fd_t) stderr_fd)))
 (define-struct-type rktio_status_t ((rktio_bool_t running) (int result)))
 (define-type rktio_timestamp_t intptr_t)
+(define-struct-type
+ rktio_stat_t
+ ((uintptr_t device_id)
+  (uintptr_t inode)
+  (uintptr_t mode)
+  (uintptr_t hardlink_count)
+  (uintptr_t user_id)
+  (uintptr_t group_id)
+  (uintptr_t device_id_for_special_file)
+  (uintptr_t size)
+  (uintptr_t block_size)
+  (uintptr_t block_count)
+  (uintptr_t access_time_seconds)
+  (uintptr_t access_time_nanoseconds)
+  (uintptr_t modify_time_seconds)
+  (uintptr_t modify_time_nanoseconds)
+  (uintptr_t ctime_seconds)
+  (uintptr_t ctime_nanoseconds)
+  (rktio_bool_t ctime_is_change_time)))
 (define-struct-type
  rktio_identity_t
  ((uintptr_t a)
@@ -279,6 +302,15 @@
  rktio_open
  (((ref rktio_t) rktio) (rktio_const_string_t src) (int modes)))
 (define-function/errno
+ NULL
+ ()
+ (ref rktio_fd_t)
+ rktio_open_with_create_permissions
+ (((ref rktio_t) rktio)
+  (rktio_const_string_t src)
+  (int modes)
+  (int perm_bits)))
+(define-function/errno
  #f
  ()
  rktio_ok_t
@@ -355,6 +387,18 @@
   ((*ref char) buffer)
   (intptr_t start)
   (intptr_t end)))
+(define-function/errno
+ RKTIO_READ_ERROR
+ ()
+ intptr_t
+ rktio_read_converted_in
+ (((ref rktio_t) rktio)
+  ((ref rktio_fd_t) fd)
+  ((*ref char) buffer)
+  (intptr_t start)
+  (intptr_t len)
+  ((*ref char) is_converted)
+  (intptr_t converted_start)))
 (define-function
  ()
  intptr_t
@@ -1039,6 +1083,12 @@
  #f
  ()
  rktio_ok_t
+ rktio_make_directory_with_permissions
+ (((ref rktio_t) rktio) (rktio_const_string_t filename) (int perm_bits)))
+(define-function/errno
+ #f
+ ()
+ rktio_ok_t
  rktio_delete_directory
  (((ref rktio_t) rktio)
   (rktio_const_string_t filename)
@@ -1077,6 +1127,14 @@
  rktio_ok_t
  rktio_set_file_modify_seconds
  (((ref rktio_t) rktio) (rktio_const_string_t file) (rktio_timestamp_t secs)))
+(define-function/errno
+ NULL
+ ()
+ (ref rktio_stat_t)
+ rktio_file_or_directory_stat
+ (((ref rktio_t) rktio)
+  (rktio_const_string_t path)
+  (rktio_bool_t follow_links)))
 (define-function/errno
  NULL
  ()
@@ -1171,6 +1229,7 @@
  (ref char)
  rktio_expand_user_tilde
  (((ref rktio_t) rktio) (rktio_const_string_t filename)))
+(define-function () (ref char) rktio_uname (((ref rktio_t) rktio)))
 (define-function
  ()
  (ref rktio_signal_handle_t)
@@ -1194,8 +1253,14 @@
  rktio_install_os_signal_handler
  (((ref rktio_t) rktio)))
 (define-function () int rktio_poll_os_signal (((ref rktio_t) rktio)))
+(define-function () void rktio_will_modify_os_signal_handler ((int sig_id)))
 (define-function () uintptr_t rktio_get_milliseconds ())
 (define-function () double rktio_get_inexact_milliseconds ())
+(define-function
+ ()
+ double
+ rktio_get_inexact_monotonic_milliseconds
+ (((ref rktio_t) rktio)))
 (define-function
  ()
  uintptr_t
@@ -1222,7 +1287,7 @@
   (int get_gmt)))
 (define-function/errno
  #f
- ()
+ (msg-queue)
  rktio_ok_t
  rktio_shell_execute
  (((ref rktio_t) rktio)

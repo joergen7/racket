@@ -23,5 +23,7 @@ called.
 @include-section["stx-props.scrbl"]
 @include-section["stx-taints.scrbl"]
 @include-section["stx-expand.scrbl"]
+@include-section["stx-serialize.scrbl"]
 @include-section["include.scrbl"]
 @include-section["syntax-util.scrbl"]
+@include-section["phase+space.scrbl"]

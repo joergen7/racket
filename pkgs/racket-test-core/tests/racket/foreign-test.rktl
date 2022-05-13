@@ -9,6 +9,8 @@
          ffi/unsafe/define
          ffi/unsafe/define/conventions
          ffi/unsafe/global
+         ffi/unsafe/atomic
+         ffi/unsafe/os-async-channel
          ffi/vector
          racket/extflonum
          racket/place
@@ -174,6 +176,8 @@
 
 ;; Make sure `_box` at least compiles:
 (test #t ctype? (_fun (_box _int) -> _void))
+(test #t ctype? (_fun (_box _int #f) -> _void))
+(test #t ctype? (_fun (_box _int atomic-interior) -> _void))
 
 ;; Check error message on bad _fun form
 (syntax-test #'(_fun (b) :: _bool -> _void) #rx"unnamed argument .without an expression. is not allowed")
@@ -339,17 +343,33 @@
   ;; test sending a callback for C to hold, preventing the callback from GCing
   (let ([with-keeper
          (lambda (k)
+           (define (sqr x)
+             (when (eq? (system-type 'vm) 'chez-scheme)
+               (test #t in-atomic-mode?))
+             (* x x))
            (t (void) 'grab_callback
               (_fun (_fun #:keep k _int  -> _int) -> _void) sqr)
            (t 9      'use_grabbed_callback (_fun _int -> _int) 3)
            (collect-garbage) ; make sure it survives a GC
            (t 25     'use_grabbed_callback (_fun _int -> _int) 5)
            (collect-garbage)
-           (t 81     'use_grabbed_callback (_fun _int -> _int) 9))])
+           (t 81     'use_grabbed_callback (_fun _int -> _int) 9)
+           (void/reference-sink sqr))])
     (with-keeper #t)
     (let ([b (box #f)])
       (with-keeper b)
       (set-box! b #f)))
+  ;; ---
+  ;; test passing an array of strings
+  (test "world"
+        (ffi 'second_string (_fun (_list i _string) -> _string))
+        (list "hello" "world" "!"))
+  ;; check that an io array of strings can have GC_allocated strings get replaced
+  ;; by foreign addresses
+  (test '("olleh" "dlrow" "?!" #f)
+        (ffi 'reverse_strings (_fun (lst : (_list io _string 4)) -> _void -> lst))
+        (list "hello" "world" "!?" #f #f))
+  
   ;; ---
   ;; test exposing internal mzscheme functionality
   (when (eq? 'racket (system-type 'vm))
@@ -722,8 +742,48 @@
   (test (cast p _thing-pointer _intptr)
         cast q _stuff-pointer _intptr))
 
+;; For casts where the BC output might share with the input, so
+;; an offset pointer needs to be 'atomic-interior
+(define (share-protect bstr)
+  (if (eq? 'racket (system-type 'vm))
+      (let ([new-bstr (malloc 'atomic-interior (add1 (bytes-length bstr)))])
+        (memcpy new-bstr bstr (add1 (bytes-length bstr)))
+        (make-sized-byte-string new-bstr (bytes-length bstr)))
+      bstr))
+
+;; `cast` should auto-upgrade target pointer types using `_gcable` for a GCable argument
+(test #t cpointer-gcable? (cast #"x" _pointer _pointer))
+(test #t cpointer-gcable? (cast #"x" _gcpointer _pointer))
+(test #t cpointer-gcable? (cast #"x" _pointer _gcpointer))
+(test #t cpointer-gcable? (cast (malloc 8) _pointer _pointer))
+(test #t cpointer-gcable? (cast (malloc 8) _gcpointer _pointer))
+(test #t cpointer-gcable? (cast (malloc 8) _pointer _gcpointer))
+(test #t cpointer-gcable? (cast (ptr-add (malloc 8) 5) _pointer _pointer))
+(test #t cpointer-gcable? (cast #"x" _bytes _pointer))
+(test #t cpointer-gcable? (cast #"x" _bytes _gcpointer))
+(test #t cpointer-gcable? (cast #"x" _bytes _bytes))
+(test "lo" cast #"lo\0" _pointer _string/utf-8)
+(test "lo" cast (if (system-big-endian?) #"l\0o\0\0\0" #"l\0o\0\0\0") _pointer _string/utf-16)
+(test "lo" cast (if (system-big-endian?) #"\0\0\0l\0\0\0o\0\0\0\0\0\0\0\0" #"l\0\0\0o\0\0\0\0\0\0\0")
+      _pointer _string/ucs-4)
+(test #t cpointer-gcable? (cast (ptr-add #"xy" 1) _pointer _bytes))
+(test #t cpointer-gcable? (cast (ptr-add #"xy" 1) _pointer _pointer))
+(test (char->integer #\y) ptr-ref (cast (ptr-add #"xy" 1) _pointer _pointer) _byte)
+(test #"lo" cast (ptr-add (share-protect #"hello\0") 3) _pointer _bytes)
+(test "lo" cast (ptr-add #"hello\0" 3) _pointer _string/utf-8)
+(test "lo" cast (ptr-add (if (system-big-endian?) #"e\0l\0l\0o\0\0\0" #"\0l\0l\0o\0\0\0") 3) _pointer _string/utf-16)
+(test "lo" cast (ptr-add (share-protect (if (system-big-endian?) #"\0\0\0l\0\0\0l\0\0\0o\0\0\0\0\0\0\0\0" #"\0\0\0\0l\0\0\0o\0\0\0\0\0\0\0")) 4)
+      _pointer _string/ucs-4)
+(test #t cpointer-gcable? (cast '(#"apple") (_list i _bytes) _gcpointer))
+(test #t
+      'many-casts
+      (for/and ([i (in-range 1000)])
+        (cpointer-gcable? (cast (bytes 1 2 3 4)
+                                _bytes
+                                _pointer))))
+
 ;; test 'interior allocation mode
-(when (eq? 'racket (system-type 'vm))
+(let ()
   ;; Example by Ron Garcia
   (define-struct data (a b))
   (define (cbox s)
@@ -788,6 +848,12 @@
   (test 67
         (get-ffi-obj 'varargs_check test-lib (_varargs (_int = 4) (_ptr i _int) (_int = 1) _int))
         50 8 9)
+  (test 67
+        (get-ffi-obj 'varargs_check test-lib (_varargs (_int = 4) (_ptr i _int #f) (_int = 1) _int))
+        50 8 9)
+  (test 67
+        (get-ffi-obj 'varargs_check test-lib (_varargs (_int = 4) (_ptr i _int atomic-interior) (_int = 1) _int))
+        50 8 9)
   (test 16
         (get-ffi-obj 'varargs_check test-lib (_varargs (_int = 5) (_fun #:varargs-after 2 _int _long _double -> _int)))
         10 (lambda (a b c) (inexact->exact (+ a b c))))
@@ -804,6 +870,9 @@
   
   (define a-bar (bar (malloc 16 'raw)))
   (free a-bar))
+
+;; in Posix, so true for all OSes?
+(test 13 lookup-errno 'EACCES)
 
 (unless (eq? (system-type) 'windows)
   ;; saved-errno tests
@@ -900,7 +969,48 @@
            (loop)))
        (test (like 16) foreign_thread_callback_finish d)]))
   (check (lambda (f) (f)) add1)
+  (check (lambda (f) (thread f)) add1)
+  (let ()
+    ;; using thread mailboxes
+    (define runner
+      (thread
+       (lambda ()
+         (let loop ()
+           (define p (thread-receive))
+           (p)
+           (loop)))))
+    (check (lambda (f) (thread-send runner f)) add1))
+  (when (eq? 'chez-scheme (system-type 'vm))
+    (define chan (make-os-async-channel))
+    (void
+     (thread
+      (lambda ()
+        (let loop ()
+          (define p (sync chan))
+          (p)
+          (loop)))))
+    (check (lambda (f) (os-async-channel-put chan f)) add1))
   (check (box 20) (lambda (x) 20)))
+
+;; check `#:callback-exns?`
+(let ([callback_hungry (get-ffi-obj 'callback_hungry test-lib
+                                    (_fun #:callback-exns? #t
+                                          (_fun #:atomic? #t -> _int) -> _int))])
+  (test 17 callback_hungry (lambda () 17))
+  (for ([i 1000])
+    (with-handlers ([(lambda (x) (eq? x 'out)) void])
+      (callback_hungry (lambda () (raise 'out))))
+    (sync (system-idle-evt))))
+;; Same thing, with a lock
+(let ([callback_hungry (get-ffi-obj 'callback_hungry test-lib
+                                    (_fun #:callback-exns? #t
+                                          #:lock-name "hungry"
+                                          (_fun #:atomic? #t -> _int) -> _int))])
+  (test 170 callback_hungry (lambda () 170))
+  (for ([i 1000])
+    (with-handlers ([(lambda (x) (eq? x 'out)) void])
+      (callback_hungry (lambda () (raise 'out))))
+    (sync (system-idle-evt))))
 
 ;; check in-array
 (let ()
@@ -1047,7 +1157,6 @@
     (for ([s s-list] [b b-list] [i (in-naturals)])
       (check-equal? (array-ref (MISCPTR-as d) i) s)
       (check-equal? (array-ref (MISCPTR-ab d) i) b)))
-
 
   ;; --- simple failing tests
   (define-serializable-cstruct _F4 ([a _int]) #:malloc-mode 'abc)
@@ -1511,6 +1620,46 @@
     (test 2 saved-errno)
     (saved-errno 5)
     (test 5 saved-errno)))
+
+(let ()
+  (define-ffi-definer define-test-lib test-lib)
+
+  (define-test-lib g1 _int #:variable)
+  (define-test-lib curry_ret_int_int (_fun _int -> _int))
+
+  (g1 12)
+  (test 25 curry_ret_int_int 13)
+  (test 12 g1)
+
+  (define-test-lib g2 _int #:variable)
+  (define-test-lib ho_return (_fun _int -> _int))
+  (define update-g2-fun-name 'ho)
+  (define-test-lib update-g2 (_fun (_fun _int -> _int) _int -> _void)
+    #:c-id ,update-g2-fun-name)
+  (g2 20)
+  (test (void) update-g2 (lambda (n) (* n 3)) 15)
+  (test 45 g2)
+  (test 48 ho_return 3)
+
+  (define-test-lib no_such_var _int #:variable #:fail (lambda () #f))
+  (test #f values no_such_var))
+
+(let ()
+  (define-ffi-definer define-test-lib test-lib
+    #:make-c-id convention:hyphen->underscore
+    #:default-make-fail (lambda (name) (lambda () #f)))
+  (define (valid-cpointer? v) (and (cpointer? v) (not (eq? v #f))))
+  (let ()
+    (define-test-lib add1-int-int _fpointer)
+    (test #t valid-cpointer? add1-int-int))
+  (let ()
+    ;; Convention should not be applied when explicit #:c-id.
+    (define-test-lib add1-by-any-other-name _fpointer #:c-id add1_int_int)
+    (test #t valid-cpointer? add1-by-any-other-name))
+  (let ()
+    ;; Convention should not be applied when explicit #:c-id.
+    (define-test-lib add1-int-int _fpointer #:c-id add1-int-int)
+    (test #f valid-cpointer? add1-int-int)))
 
 ;; ----------------------------------------
 ;; Make sure `_union` can deal with various things

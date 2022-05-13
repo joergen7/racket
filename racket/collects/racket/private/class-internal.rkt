@@ -368,8 +368,11 @@
                  defn-or-expr
                  expand-context
                  stop-forms
-                 def-ctx))])
-        (let loop ([l defn-and-exprs])
+                 def-ctx))]
+             [defn-and-exprs-in-scope
+               (for/list ([s defn-and-exprs])
+                 (internal-definition-context-add-scopes def-ctx s))])
+        (let loop ([l defn-and-exprs-in-scope])
           (if (null? l)
               null
               (let ([e (expand (car l))])
@@ -388,9 +391,7 @@
                                          #'rhs
                                          'expression
                                          null)])
-                       (syntax-local-bind-syntaxes (syntax->list #'(id ...)) #'rhs def-ctx)
-                       (with-syntax ([(id ...) (map syntax-local-identifier-as-binding
-                                                    (syntax->list #'(id ...)))])
+                       (with-syntax ([(id ...) (syntax-local-bind-syntaxes (syntax->list #'(id ...)) #'rhs def-ctx)])
                          (cons (copy-prop (syntax/loc e (define-syntaxes (id ...) rhs))
                                           'disappeared-use 'origin 'disappeared-binding)
                                (loop (cdr l))))))]
@@ -423,7 +424,7 @@
       (let-values ([(in out) (extract kws l void)])
         in))
     
-    (define (flatten alone l)
+    (define ((flatten/def-ctx def-ctx) alone l)
       (apply append
              (map (lambda (i)
                     (let ([l (let ([l (syntax->list i)])
@@ -435,9 +436,9 @@
                       (if alone
                           (map (lambda (i)
                                  (if (identifier? i)
-                                     (alone (syntax-local-identifier-as-binding i))
-                                     (cons (syntax-local-identifier-as-binding (stx-car i))
-                                           (syntax-local-identifier-as-binding (stx-car (stx-cdr i))))))
+                                     (alone (syntax-local-identifier-as-binding i def-ctx))
+                                     (cons (syntax-local-identifier-as-binding (stx-car i) def-ctx)
+                                           (syntax-local-identifier-as-binding (stx-car (stx-cdr i)) def-ctx))))
                                l)
                           l)))
                   l)))
@@ -454,8 +455,8 @@
                     (cons (list a a) (stx-cdr i))
                     i))]))
     
-    (define (norm-init/field-iid norm) (syntax-local-identifier-as-binding (stx-car (stx-car norm))))
-    (define (norm-init/field-eid norm) (syntax-local-identifier-as-binding (stx-car (stx-cdr (stx-car norm)))))
+    (define ((norm-init/field-iid/def-ctx def-ctx) norm) (syntax-local-identifier-as-binding (stx-car (stx-car norm)) def-ctx))
+    (define ((norm-init/field-eid/def-ctx def-ctx) norm) (syntax-local-identifier-as-binding (stx-car (stx-cdr (stx-car norm))) def-ctx))
     
     ;; expands an expression enough that we can check whether it has
     ;; the right form for a method; must use local syntax definitions
@@ -689,6 +690,9 @@
                    [(the-finder) (datum->syntax #f (gensym 'find-self))])
         
         (let* ([def-ctx (syntax-local-make-definition-context)]
+               [norm-init/field-iid (norm-init/field-iid/def-ctx def-ctx)]
+               [norm-init/field-eid (norm-init/field-eid/def-ctx def-ctx)]
+               [flatten (flatten/def-ctx def-ctx)]
                [localized-map (make-bound-identifier-mapping)]
                [any-localized? #f]
                [localize/set-flag (lambda (id)
@@ -698,8 +702,7 @@
                                       id2))]
                [bind-local-id (lambda (orig-id)
                                 (let ([l (localize/set-flag orig-id)]
-                                      [id (syntax-local-identifier-as-binding orig-id)])
-                                  (syntax-local-bind-syntaxes (list id) #f def-ctx)
+                                      [id (car (syntax-local-bind-syntaxes (list orig-id) #f def-ctx))])
                                   (bound-identifier-mapping-put!
                                    localized-map
                                    id
@@ -1137,9 +1140,15 @@
                            (lambda (what l)
                              (let ([ht (make-hasheq)])
                                (for-each (lambda (id)
-                                           (when (hash-ref ht (syntax-e id) #f)
+                                           (define key (let ([l-id (lookup-localize id)])
+                                                         (if (identifier? l-id)
+                                                             (syntax-e l-id)
+                                                             ;; For a given localized id, `lookup-localize`
+                                                             ;; will return the same (eq?) value
+                                                             l-id)))
+                                           (when (hash-ref ht key #f)
                                              (bad (format "duplicate declared external ~a name" what) id))
-                                           (hash-set! ht (syntax-e id) #t))
+                                           (hash-set! ht key #t))
                                          l)))])
                       ;; method names
                       (check-dup "method" (map cdr (append publics overrides augrides
@@ -1452,8 +1461,6 @@
                                       methods)))]
                                 [lookup-localize-cdr (lambda (p) (lookup-localize (cdr p)))])
                             
-                            (internal-definition-context-seal def-ctx)
-                            
                             ;; ---- build final result ----
                             (with-syntax ([public-names (map lookup-localize-cdr publics)]
                                           [public-final-names (map lookup-localize-cdr public-finals)]
@@ -1714,7 +1721,14 @@
                  #'super-expression 
                  #f #f
                  (syntax->list #'(interface-expr ...))
-                 (syntax->list #'(defn-or-expr ...)))]))
+                 (syntax->list #'(defn-or-expr ...)))]
+          [(_  super-expression no-parens-interface-expr
+               defn-or-expr
+               ...)
+           (raise-syntax-error 'class*
+                               "expected a sequence of interfaces"
+                               stx
+                               #'no-parens-interface-expr)]))
      ;; class
      (lambda (stx)
         (syntax-case stx ()
@@ -2802,7 +2816,7 @@ last few projections.
                                            (send o internalize args)
                                            o))
                                        (lambda (args)
-                                         (let ([o (object-make)])
+                                         (let ([o (make-object-uninitialized c `(class ,name))])
                                            ((class-fixup c) o args)
                                            o)))
                                    (if (interface-extension? i externalizable<%>)
@@ -3541,6 +3555,9 @@ An example
     (define neg-blame (cadddr info))
     (contract ctc meth pos-blame neg-blame m #f)))
 
+(define (make-object-uninitialized class blame)
+  (do-make-object blame class 'uninit 'uninit))
+
 (define (do-make-object blame class by-pos-args named-args)
   (cond
     [(impersonator-prop:has-wrapped-class-neg-party? class)
@@ -3579,8 +3596,9 @@ An example
   ;; Generate correct class by concretizing methods w/interface ctcs
   (define concrete-class (fetch-concrete-class class blame))
   (define o ((class-make-object concrete-class)))
-  (continue-make-object o concrete-class by-pos-args named-args #t 
-                        wrapped-blame wrapped-neg-party init-proj-pairs)
+  (unless (eq? by-pos-args 'uninit)
+    (continue-make-object o concrete-class by-pos-args named-args #t
+                          wrapped-blame wrapped-neg-party init-proj-pairs))
   o)
 
 (define (get-field-alist obj)
@@ -4697,7 +4715,9 @@ An example
                          [(or (as-write-list? val)
                               (as-value-list? val))
                           (apply string-append
-                                 (for/list ([v (in-list (as-write-list-content val))])
+                                 (for/list ([v (in-list (if (as-write-list? val)
+                                                            (as-write-list-content val)
+                                                            (as-value-list-content val)))])
                                    (format (if (as-write-list? val)
                                                "\n   ~s"
                                                "\n   ~e")

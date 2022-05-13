@@ -600,6 +600,22 @@
   (test '(20 19 18 17 16 15 14 13 12 11) range 20 10 -1)
   (test '(10 11.5 13.0 14.5) range 10 15 1.5))
 
+;; ---------- inclusive-range ----------
+
+(let ()
+  (test '() inclusive-range 3 2)
+  (test '(3) inclusive-range 3 3)
+  (test '(3 2) inclusive-range 3 2 -1)
+  (test '(3 4 5 6 7 8 9) inclusive-range 3 9)
+  (test '(3 5 7 9) inclusive-range 3 9 2)
+  (test '(3 5 7) inclusive-range 3 8 2)
+  (test '(3 3.5 4.0 4.5 5.0 5.5 6.0 6.5 7.0 7.5 8.0 8.5 9.0) inclusive-range 3 9 0.5)
+  (test '(9 7 5 3) inclusive-range 9 3 -2)
+  (test '(10 11 12 13 14 15 16 17 18 19 20) inclusive-range 10 20)
+  (test '(20 22 24 26 28 30 32 34 36 38 40) inclusive-range 20 40 2)
+  (test '(20 19 18 17 16 15 14 13 12 11 10) inclusive-range 20 10 -1)
+  (test '(10 11.5 13.0 14.5) inclusive-range 10 15 1.5))
+
 ;; ---------- group-by ----------
 
 (test '((1) (4) (2 2) (56) (3)) group-by values '(1 4 2 56 2 3))
@@ -676,6 +692,24 @@
 (test '((1 2) (3 4) (4 3)) split*-list '(1 2 3 4) '(1 2 4 3) =)
 (err/rt-test (split*-list '() '() #f))
 (err/rt-test (take-common-prefix 1 1))
+
+;; ---------- remove / remove* ----------
+(test '() remove 2 '())
+(test '(1 3 2 4) remove 2 '(1 2 3 2 4))
+(test '((1) (3)) remove '(2) '((1) (2) (3)))
+(test '("1" "3") remove "2" '("1" "2" "3"))
+(test '(#\a #\b) remove #\c '(#\a #\b #\c))
+(test '("a" "A" "B") remove "B" '("a" "A" "b" "B") string-ci=?)
+(test '(1 2 3 2 4) remove 5 '(1 2 3 2 4))
+(let ([xs '(1 2 3 2 4)])
+  (test #t eq? xs (remove 5 xs)))
+
+(test '() remove* '(2) '())
+(test '(1 3 4) remove* '(2) '(1 2 3 2 4))
+(test '(1 3) remove* '(4 2) '(1 2 3 2 4))
+(test '(1 2 3 2 4) remove* '() '(1 2 3 2 4))
+(let ([xs '(1 2 3 2 4)])
+  (test #t eq? xs (remove* '() xs)))
 
 ;; ---------- remf / remf* ----------
 

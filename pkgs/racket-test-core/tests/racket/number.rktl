@@ -346,6 +346,39 @@
 (test-trans #f >= < 1237940039285380274899124223 1.2379400392853803e+27 1237940039285380274899124225)
 (test-trans #f >= < 3713820117856140824697372668/3 1.2379400392853803e+27 3713820117856140824697372676/3)
 
+(test #t = 9007199254740992 (exact->inexact 9007199254740993))
+
+(test #f < 9007199254740992 9007199254740992.0)
+(test #f < 9007199254740993 9007199254740992.0)
+
+(test #t <= 9007199254740992 9007199254740992.0)
+(test #f <= 9007199254740993 9007199254740992.0)
+
+(test #t = 9007199254740992 9007199254740992.0)
+(test #f = 9007199254740993 9007199254740992.0)
+
+(test #t >= 9007199254740992 9007199254740992.0)
+(test #t >= 9007199254740993 9007199254740992.0)
+
+(test #f > 9007199254740992 9007199254740992.0)
+(test #t > 9007199254740993 9007199254740992.0)
+
+
+(test #f < 9007199254740992.0 9007199254740992)
+(test #t < 9007199254740992.0 9007199254740993)
+
+(test #t <= 9007199254740992.0 9007199254740992)
+(test #t <= 9007199254740992.0 9007199254740993)
+
+(test #t = 9007199254740992.0 9007199254740992)
+(test #f = 9007199254740992.0 9007199254740993)
+
+(test #t >= 9007199254740992.0 9007199254740992)
+(test #f >= 9007199254740992.0 9007199254740993)
+
+(test #f > 9007199254740992.0 9007199254740992)
+(test #f > 9007199254740992.0 9007199254740993)
+
 (define (test-nan.0 f . args)
   (apply test +nan.0 f args))
 
@@ -1327,6 +1360,8 @@
 (test 0 arithmetic-shift (expt 2 100) (- (expt 2 100)))
 (test -1 arithmetic-shift -1 (- (expt 2 100)))
 (test -1 arithmetic-shift (- (expt 2 100)) (- (expt 2 100)))
+
+(test (- (expt 16 232)) arithmetic-shift (- 307 (expt 16 240)) -32)
 
 (arity-test arithmetic-shift 2 2)
 (err/rt-test (arithmetic-shift "a" 1))
@@ -2726,12 +2761,27 @@
 (err/rt-test (vector->pseudo-random-generator #()))
 (err/rt-test (vector->pseudo-random-generator #(0 0 0 1 2 3)))
 ;; Known state should produce known values:
-(parameterize ([current-pseudo-random-generator
-                (vector->pseudo-random-generator
-                 #(3620087466 1904163406 3177592043 1406334318 257151704 3090455638))])
-  (test 5353 random 10000)
-  (test 8571 random 10000)
-  (test 9729 random 10000))
+(let* ([check-known
+        (lambda (vector->pseudo-random-generator wrap)
+          (parameterize ([current-pseudo-random-generator
+                          (vector->pseudo-random-generator
+                           (wrap #(3620087466 1904163406 3177592043 1406334318 257151704 3090455638)))])
+            (test 5353 random 10000)
+            (test 8571 random 10000)
+            (test 9729 random 10000)))]
+       [hits 0]
+       [chaperone-it (lambda (vec) (chaperone-vector vec
+                                                     (lambda (vec i v) (set! hits (add1 hits)) v)
+                                                     (lambda (vec i v) (error "should not mutate"))))]
+       [make (lambda (vec)
+               (define p (vector->pseudo-random-generator '#(1 2 3 4 5 6)))
+               (vector->pseudo-random-generator! p vec)
+               p)])
+  (check-known vector->pseudo-random-generator values)
+  (check-known vector->pseudo-random-generator chaperone-it)
+  (check-known make values)
+  (check-known make chaperone-it)
+  (test 12 values hits))
 (parameterize ([current-pseudo-random-generator
                 (vector->pseudo-random-generator
                  #(3620087466 1904163406 3177592043 1406334318 257151704 3090455638))])
@@ -2750,6 +2800,7 @@
         (map length (group-by values
                               (apply append (for/list ([i 10000])
                                               (random-sample (range 10) 100)))))))
+
 
 (parameterize ([current-pseudo-random-generator (make-pseudo-random-generator)])
   (random-seed 2)
@@ -3313,28 +3364,30 @@
                                  (test (make-bytes (- 11 3 sz) (char->integer #\x)) subbytes bstr (+ 3 sz))
                                  (subbytes bstr 3 (+ 3 sz)))))
 
+(define rx:out-of-bounds #rx"number is out of bounds for size in bytes|integer does not fit into requested")
+
 (arity-test integer->integer-bytes 3 6)
-(err/rt-test (integer->integer-bytes 'ack 2 #t))
-(err/rt-test (integer->integer-bytes 10 'ack #t))
-(err/rt-test (integer->integer-bytes 10 20 #t))
-(err/rt-test (integer->integer-bytes 10 2 #t #t 'ack))
-(err/rt-test (integer->integer-bytes 10 2 #t #t #"ack")) ; <-- immutable string
-(err/rt-test (integer->integer-bytes 256 1 #t) exn:application:mismatch?)
-(err/rt-test (integer->integer-bytes -129 1 #t) exn:application:mismatch?)
-(err/rt-test (integer->integer-bytes 257 1 #f) exn:application:mismatch?)
-(err/rt-test (integer->integer-bytes -1 1 #f) exn:application:mismatch?)
-(err/rt-test (integer->integer-bytes 100000 2 #t) exn:application:mismatch?)
-(err/rt-test (integer->integer-bytes 65536 2 #f) exn:application:mismatch?)
-(err/rt-test (integer->integer-bytes 32768 2 #t) exn:application:mismatch?)
-(err/rt-test (integer->integer-bytes -32769 2 #t) exn:application:mismatch?)
-(err/rt-test (integer->integer-bytes (expt 2 32) 4 #f) exn:application:mismatch?)
-(err/rt-test (integer->integer-bytes (expt 2 31) 4 #t) exn:application:mismatch?)
-(err/rt-test (integer->integer-bytes (sub1 (- (expt 2 31))) 4 #t) exn:application:mismatch?)
-(err/rt-test (integer->integer-bytes (expt 2 64) 8 #f) exn:application:mismatch?)
-(err/rt-test (integer->integer-bytes (expt 2 63) 4 #t) exn:application:mismatch?)
-(err/rt-test (integer->integer-bytes (sub1 (- (expt 2 63))) 8 #t) exn:application:mismatch?)
-(err/rt-test (integer->integer-bytes 100 4 #t #t (make-bytes 3)) exn:application:mismatch?)
-(err/rt-test (integer->integer-bytes 100 2 #t #t (make-bytes 3) 2) exn:application:mismatch?)
+(err/rt-test (integer->integer-bytes 'ack 2 #t) exn:fail:contract? #rx"exact-integer")
+(err/rt-test (integer->integer-bytes 10 'ack #t) exn:fail:contract? #rx"(or/c 1 2 4 8)")
+(err/rt-test (integer->integer-bytes 10 20 #t) exn:fail:contract? #rx"(or/c 1 2 4 8)")
+(err/rt-test (integer->integer-bytes 10 2 #t #t 'ack) exn:fail:contract? #rx"bytes[?]")
+(err/rt-test (integer->integer-bytes 10 2 #t #t #"ack") exn:fail:contract? #rx"mutable")
+(err/rt-test (integer->integer-bytes 256 1 #t) exn:application:mismatch? rx:out-of-bounds)
+(err/rt-test (integer->integer-bytes -129 1 #t) exn:application:mismatch? rx:out-of-bounds)
+(err/rt-test (integer->integer-bytes 257 1 #f) exn:application:mismatch? rx:out-of-bounds)
+(err/rt-test (integer->integer-bytes -1 1 #f) exn:application:mismatch? rx:out-of-bounds)
+(err/rt-test (integer->integer-bytes 100000 2 #t) exn:application:mismatch? rx:out-of-bounds)
+(err/rt-test (integer->integer-bytes 65536 2 #f) exn:application:mismatch? rx:out-of-bounds)
+(err/rt-test (integer->integer-bytes 32768 2 #t) exn:application:mismatch? rx:out-of-bounds)
+(err/rt-test (integer->integer-bytes -32769 2 #t) exn:application:mismatch? rx:out-of-bounds)
+(err/rt-test (integer->integer-bytes (expt 2 32) 4 #f) exn:application:mismatch? rx:out-of-bounds)
+(err/rt-test (integer->integer-bytes (expt 2 31) 4 #t) exn:application:mismatch? rx:out-of-bounds)
+(err/rt-test (integer->integer-bytes (sub1 (- (expt 2 31))) 4 #t) exn:application:mismatch? rx:out-of-bounds)
+(err/rt-test (integer->integer-bytes (expt 2 64) 8 #f) exn:application:mismatch? rx:out-of-bounds)
+(err/rt-test (integer->integer-bytes (expt 2 63) 4 #t) exn:application:mismatch? rx:out-of-bounds)
+(err/rt-test (integer->integer-bytes (sub1 (- (expt 2 63))) 8 #t) exn:application:mismatch? rx:out-of-bounds)
+(err/rt-test (integer->integer-bytes 100 4 #t #t (make-bytes 3)) exn:application:mismatch? #rx"byte string length is shorter|byte string is too small")
+(err/rt-test (integer->integer-bytes 100 2 #t #t (make-bytes 3) 2) exn:application:mismatch? #rx"byte string length is shorter|starting position too large")
 
 (map (lambda (v)
        (let-values ([(n size signed?) (apply values v)])
@@ -3359,6 +3412,16 @@
       [n (random 10000)])
   (test s integer->integer-bytes n 4 #f #f s)
   (test s integer->integer-bytes n 4 #f #f))
+
+(err/rt-test (integer-bytes->integer #f #f) exn:fail:contract? #rx"bytes[?]")
+(err/rt-test (integer-bytes->integer #"" #f) exn:fail:contract? #rx"1, 2, 4, or 8")
+(err/rt-test (integer-bytes->integer #"1234" #f #f -1) exn:fail:contract? #rx"exact-nonnegative-integer[?]")
+(err/rt-test (integer-bytes->integer #"1234" #f #f 'oops) exn:fail:contract? #rx"exact-nonnegative-integer[?]")
+(err/rt-test (integer-bytes->integer #"1234" #f #f 2 'oops) exn:fail:contract? #rx"exact-nonnegative-integer[?]")
+(err/rt-test (integer-bytes->integer #"1234" #f #f 1) exn:fail:contract? #rx"1, 2, 4, or 8")
+(err/rt-test (integer-bytes->integer #"1234" #f #f 1 4) exn:fail:contract? #rx"1, 2, 4, or 8")
+(err/rt-test (integer-bytes->integer #"1234" #f #f 6 8) exn:fail:contract? #rx"starting index is out of range")
+(err/rt-test (integer-bytes->integer #"1234" #f #f 0 8) exn:fail:contract? #rx"ending index is out of range")
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -3409,12 +3472,23 @@
   (test s real->floating-point-bytes n 8 #f s)
   (test s real->floating-point-bytes n 8 #f))
 
-(err/rt-test (real->floating-point-bytes 1 -4))
+(err/rt-test (real->floating-point-bytes 1 -4) exn:fail:contract? #rx"[(]or/c 4 8[)]")
 (err/rt-test (real->floating-point-bytes 1 7))
 (err/rt-test (real->floating-point-bytes 1 7000000000000000000000000))
 (err/rt-test (real->floating-point-bytes 1+2i 8))
 (err/rt-test (real->floating-point-bytes 1.0+2.0i 8))
-(err/rt-test (real->floating-point-bytes 1.0 8 #f (make-bytes 7)) exn:application:mismatch?)
+(err/rt-test (real->floating-point-bytes 1.0 8 #f (make-bytes 7)) exn:application:mismatch?
+             #rx"byte string length is shorter than starting position plus size")
+
+(err/rt-test (floating-point-bytes->real #f) exn:fail:contract? "bytes")
+(err/rt-test (floating-point-bytes->real #f #t) exn:fail:contract? "bytes")
+(err/rt-test (floating-point-bytes->real #f #t 0) exn:fail:contract? "bytes")
+(err/rt-test (floating-point-bytes->real #f #t 0 2) exn:fail:contract? "bytes")
+(err/rt-test (floating-point-bytes->real #"12") exn:fail:contract? "4 or 8")
+(err/rt-test (floating-point-bytes->real #"12" #t 3) exn:fail:contract? "starting index is out of range")
+(err/rt-test (floating-point-bytes->real #"12" #t 0 2) exn:fail:contract? "4 or 8")
+(err/rt-test (floating-point-bytes->real #"12" #t 1 5) exn:fail:contract? "ending index is out of range")
+(err/rt-test (floating-point-bytes->real #"1234" #t 1 4) exn:fail:contract? "4 or 8")
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Check single-flonum coercisons:
@@ -3682,5 +3756,8 @@
           (test x exact->inexact (inexact->exact x)))))))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(load-relative "gambit-numeric.rktl")
 
 (report-errs)

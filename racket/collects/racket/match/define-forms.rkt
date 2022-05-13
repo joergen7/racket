@@ -3,9 +3,7 @@
 (require (for-syntax racket/base
                      racket/syntax
                      (only-in racket/list append* remove-duplicates)
-                     racket/sequence
                      syntax/parse/pre
-                     syntax/parse/experimental/template
                      racket/lazy-require
                      syntax/parse/lib/function-header))
 
@@ -164,9 +162,9 @@
          [(_ ((~and cl [pat exp]) ...) body1 body ...)
           (quasisyntax/loc stx
             (let ()
-              #,@(for/list ([c (in-syntax #'(cl ...))]
-                            [p (in-syntax #'(pat ...))]
-                            [e (in-syntax #'(exp ...))])
+              #,@(for/list ([c (in-list (syntax->list #'(cl ...)))]
+                            [p (in-list (syntax->list #'(pat ...)))]
+                            [e (in-list (syntax->list #'(exp ...)))])
                    (quasisyntax/loc c
                      (match-define-values/derived #,stx (#,p) #,e)))
               body1 body ...))]))
@@ -176,9 +174,9 @@
          [(_ ((~and cl [(pat ...) exp]) ...) body1 body ...)
           (quasisyntax/loc stx
             (let ()
-              #,@(for/list ([c (in-syntax #'(cl ...))]
-                            [ps (in-syntax #'((pat ...) ...))]
-                            [e (in-syntax #'(exp ...))])
+              #,@(for/list ([c (in-list (syntax->list #'(cl ...)))]
+                            [ps (in-list (syntax->list #'((pat ...) ...)))]
+                            [e (in-list (syntax->list #'(exp ...)))])
                    (quasisyntax/loc c
                      (match-define-values/derived #,stx #,ps #,e)))
               body1 body ...))]))
@@ -198,7 +196,7 @@
      (define-syntax (define/match stx)
        (syntax-parse stx
          [(_ ?header:function-header ?clause ...)
-          (quasitemplate
+          (quasisyntax
            (define ?header
-             (match*/derived (?? ?header.params) #,stx
+             (match*/derived (~? ?header.params) #,stx
                ?clause ...)))])))))

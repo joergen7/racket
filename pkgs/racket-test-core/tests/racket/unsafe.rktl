@@ -853,7 +853,11 @@
 ;; Check that unsafe-weak-hash-iterate- ops do not segfault
 ;; when a key is collected before access; throw exception instead.
 ;; They are used for safe iteration in in-weak-hash- sequence forms
-  (let ()
+  (for ([make-weak-hash (list make-weak-hash make-ephemeron-hash)]
+        [unsafe-weak-hash-iterate-first (list unsafe-weak-hash-iterate-first unsafe-ephemeron-hash-iterate-first)]
+        [unsafe-weak-hash-iterate-key (list unsafe-weak-hash-iterate-key unsafe-ephemeron-hash-iterate-key)]
+        [unsafe-weak-hash-iterate-pair (list unsafe-weak-hash-iterate-pair unsafe-ephemeron-hash-iterate-pair)]
+        [unsafe-weak-hash-iterate-key+value (list unsafe-weak-hash-iterate-key+value unsafe-ephemeron-hash-iterate-key+value)])
     (define ht #f)
 
     ;; retain the list at first...
@@ -923,7 +927,11 @@
     (test-values '(gone gone) (lambda () (unsafe-mutable-hash-iterate-key+value ht i 'gone)))
     (test #f unsafe-mutable-hash-iterate-next ht i))
 
-  (let ()
+  (for ([make-weak-hash (list make-weak-hash make-ephemeron-hash)]
+        [unsafe-weak-hash-iterate-first (list unsafe-weak-hash-iterate-first unsafe-ephemeron-hash-iterate-first)]
+        [unsafe-weak-hash-iterate-key (list unsafe-weak-hash-iterate-key unsafe-ephemeron-hash-iterate-key)]
+        [unsafe-weak-hash-iterate-pair (list unsafe-weak-hash-iterate-pair unsafe-ephemeron-hash-iterate-pair)]
+        [unsafe-weak-hash-iterate-key+value (list unsafe-weak-hash-iterate-key+value unsafe-ephemeron-hash-iterate-key+value)])
     (define ht (make-weak-hash '((a . b))))
     (define i (unsafe-weak-hash-iterate-first ht))
 
@@ -1048,6 +1056,34 @@
 (test (+ (expt 2 100) #x55FF) bior (+ #x5555 (expt 2 100)))
 (test (+ (expt 2 100) #x55AA) bxor (+ #x5555 (expt 2 100)))
 
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define-syntax-rule (module-claiming-unreachable-part name flag ...)
+  (module name racket/base
+    (require racket/unreachable)
+    (provide f1 f2)
+    (#%declare flag ...)
+    (struct s (a) #:authentic)
+    (define (f1 x)
+      (if (s? x)
+          (s-a x)
+          (assert-unreachable)))
+    (define (f2 x)
+      (if (s? x)
+          (s-a x)
+          (with-assert-unreachable
+            (raise-argument-error 'f2 "oops" x))))))
+
+(module-claiming-unreachable-part claims-unreachable-parts/safe)
+(module-claiming-unreachable-part claims-unreachable-parts/unsafe #:unsafe)
+
+(err/rt-test ((dynamic-require ''claims-unreachable-parts/safe 'f1) (arity-at-least 7)))
+(err/rt-test ((dynamic-require ''claims-unreachable-parts/safe 'f2) (arity-at-least 7)))
+
+(when (eq? 'chez-scheme (system-type 'vm))
+  (test 7 (dynamic-require ''claims-unreachable-parts/unsafe 'f1) (arity-at-least 7))
+  (test 7 (dynamic-require ''claims-unreachable-parts/unsafe 'f2) (arity-at-least 7)))
+  
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (report-errs)

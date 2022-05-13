@@ -146,6 +146,7 @@ READ_ONLY Scheme_At_Exit_Proc replacement_at_exit;
 ROSYM Scheme_Object *scheme_parameterization_key;
 ROSYM Scheme_Object *scheme_exn_handler_key;
 ROSYM Scheme_Object *scheme_break_enabled_key;
+ROSYM Scheme_Object *scheme_error_message_adjuster_key;
 
 THREAD_LOCAL_DECL(static Scheme_Object *configuration_callback_cache[2]);
 
@@ -404,6 +405,7 @@ static Scheme_Object *unsafe_poll_ctx_fd_wakeup(int argc, Scheme_Object **argv);
 static Scheme_Object *unsafe_poll_ctx_eventmask_wakeup(int argc, Scheme_Object **argv);
 static Scheme_Object *unsafe_poll_ctx_time_wakeup(int argc, Scheme_Object **argv);
 static Scheme_Object *unsafe_signal_received(int argc, Scheme_Object **argv);
+static Scheme_Object *unsafe_make_signal_received(int argc, Scheme_Object **argv);
 static Scheme_Object *unsafe_set_sleep_in_thread(int argc, Scheme_Object **argv);
 
 static Scheme_Object *unsafe_make_place_local(int argc, Scheme_Object **argv);
@@ -574,7 +576,7 @@ void scheme_init_thread(Scheme_Startup_Env *env)
   ADD_PARAMETER("current-thread-group", current_thread_set, MZCONFIG_THREAD_SET, env);
 
   ADD_PRIM_W_ARITY("parameter?"            , parameter_p           , 1, 1, env);
-  ADD_PRIM_W_ARITY("make-parameter"        , make_parameter        , 1, 3, env);
+  ADD_PRIM_W_ARITY("make-parameter"        , make_parameter        , 1, 4, env);
   ADD_PRIM_W_ARITY("make-derived-parameter", make_derived_parameter, 3, 3, env);
   ADD_PRIM_W_ARITY("parameter-procedure=?" , parameter_procedure_eq, 2, 2, env);
   ADD_PRIM_W_ARITY("parameterization?"     , parameterization_p    , 1, 1, env);
@@ -676,6 +678,7 @@ scheme_init_unsafe_thread (Scheme_Startup_Env *env)
   ADD_PRIM_W_ARITY("unsafe-poll-ctx-eventmask-wakeup", unsafe_poll_ctx_eventmask_wakeup, 2, 2, env);
   ADD_PRIM_W_ARITY("unsafe-poll-ctx-milliseconds-wakeup", unsafe_poll_ctx_time_wakeup, 2, 2, env);
   ADD_PRIM_W_ARITY("unsafe-signal-received", unsafe_signal_received, 0, 0, env);
+  ADD_PRIM_W_ARITY("unsafe-make-signal-received", unsafe_make_signal_received, 0, 0, env);
   ADD_PRIM_W_ARITY("unsafe-set-sleep-in-thread!", unsafe_set_sleep_in_thread, 2, 2, env);
 
   ADD_PRIM_W_ARITY("unsafe-os-thread-enabled?", unsafe_os_thread_enabled_p, 0, 0, env);
@@ -2957,7 +2960,7 @@ int scheme_in_main_thread(void)
 static void stash_current_marks()
 {
   Scheme_Object *m;
-  m = scheme_current_continuation_marks(scheme_current_thread->returned_marks);
+  m = scheme_current_continuation_marks_as(NULL, scheme_current_thread->returned_marks);
   scheme_current_thread->returned_marks = m;
   swap_target = scheme_current_thread->return_marks_to;
   scheme_current_thread->return_marks_to = NULL;
@@ -3300,6 +3303,9 @@ static void remove_thread(Scheme_Thread *r)
 
 void scheme_end_current_thread(void)
 {
+  if (SAME_OBJ(scheme_current_thread, scheme_main_thread))
+    exit_or_escape(scheme_current_thread);
+
   remove_thread(scheme_current_thread);
   
   thread_ended_with_activity = 1;
@@ -4226,7 +4232,7 @@ static int check_sleep(int need_activity, int sleep_now)
 	double d;
 	double t;
 
-	d = (p_time - scheme_get_inexact_milliseconds());
+	d = (p_time - rktio_get_inexact_monotonic_milliseconds(scheme_rktio));
 
 	t = (d / 1000);
 	if (t <= 0) {
@@ -4302,7 +4308,7 @@ void scheme_check_threads(void)
 {
   double start, now;
 
-  start = scheme_get_inexact_milliseconds();
+  start = rktio_get_inexact_monotonic_milliseconds(scheme_rktio);
   
   while (1) {
     scheme_current_thread->suspend_break++;
@@ -4312,7 +4318,7 @@ void scheme_check_threads(void)
     if (check_sleep(have_activity, 0))
       break;
 
-    now = scheme_get_inexact_milliseconds();
+    now = rktio_get_inexact_monotonic_milliseconds(scheme_rktio);
     if (((now - start) * 1000) > MZ_THREAD_QUANTUM_USEC)
       break;
   }
@@ -4749,7 +4755,7 @@ static void find_next_thread(Scheme_Thread **return_arg) {
         }
       } else if (next->block_descriptor == SLEEP_BLOCKED) {
         if (!msecs)
-          msecs = scheme_get_inexact_milliseconds();
+          msecs = rktio_get_inexact_monotonic_milliseconds(scheme_rktio);
         if (next->sleep_end <= msecs)
           break;
       } else
@@ -4873,7 +4879,7 @@ void scheme_thread_block(float sleep_time)
     scheme_wake_up();
 
   if (sleep_time > 0) {
-    sleep_end = scheme_get_inexact_milliseconds();
+    sleep_end = rktio_get_inexact_monotonic_milliseconds(scheme_rktio);
     sleep_end += (sleep_time * 1000.0);
   } else
     sleep_end = 0;
@@ -5056,7 +5062,7 @@ void scheme_thread_block(float sleep_time)
 #endif
   
   if (sleep_end > 0) {
-    if (sleep_end > scheme_get_inexact_milliseconds()) {
+    if (sleep_end > rktio_get_inexact_monotonic_milliseconds(scheme_rktio)) {
       /* Still have time to sleep if necessary, but make sure we're
 	 not ready (because maybe that's why we were swapped back in!) */
       if (p->block_descriptor == GENERIC_BLOCKED) {
@@ -5116,7 +5122,7 @@ int scheme_block_until(Scheme_Ready_Fun _f, Scheme_Needs_Wakeup_Fun fdf,
   if (!delay)
     sleep_end = 0.0;
   else {
-    sleep_end = scheme_get_inexact_milliseconds();
+    sleep_end = rktio_get_inexact_monotonic_milliseconds(scheme_rktio);
     sleep_end += (delay * 1000.0);    
   }
 
@@ -5132,7 +5138,7 @@ int scheme_block_until(Scheme_Ready_Fun _f, Scheme_Needs_Wakeup_Fun fdf,
       scheme_current_thread->ran_some = 1;
     } else {
       if (now_sleep_end) {
-	delay = (float)(now_sleep_end - scheme_get_inexact_milliseconds());
+	delay = (float)(now_sleep_end - rktio_get_inexact_monotonic_milliseconds(scheme_rktio));
 	delay /= 1000.0;
 	if (delay <= 0)
 	  delay = (float)0.00001;
@@ -5546,6 +5552,24 @@ Scheme_Object *unsafe_signal_received(int argc, Scheme_Object **argv)
 {
   scheme_signal_received();
   return scheme_void;
+}
+
+static Scheme_Object *do_signal_received(int argc, Scheme_Object **argv, Scheme_Object *self)
+{
+  void *h = SCHEME_PRIM_CLOSURE_ELS(self)[0];
+  scheme_signal_received_at(h);
+  return scheme_void;
+}
+
+Scheme_Object *unsafe_make_signal_received(int argc, Scheme_Object **argv)
+{
+  void *h;
+  Scheme_Object *a[1];
+
+  h = scheme_get_signal_handle();
+  a[0] = (Scheme_Object *)h;
+  return scheme_make_prim_closure_w_arity(do_signal_received, 1, a, 
+					  "unsafe-signal-received", 0, 0);
 }
 
 static void sleep_via_thread(float seconds, void *fds)
@@ -6540,7 +6564,10 @@ static void set_sync_target(Syncing *syncing, int i, Scheme_Object *target,
       /* Inline the set (in place) */
       Scheme_Object **argv;
       Evt **ws;
-       
+
+      if (syncing->result > i+1)
+        syncing->result += wts->argc-1;
+
       argv = (Scheme_Object **)splice_ptr_array((void **)evt_set->argv, 
 						evt_set->argc,
 						(void **)wts->argv, 
@@ -6746,7 +6773,7 @@ int scheme_syncing_ready(Syncing *syncing, Scheme_Schedule_Info *sinfo, int can_
   }
 
   if (syncing->timeout >= 0.0) {
-    if (syncing->sleep_end <= scheme_get_inexact_milliseconds())
+    if (syncing->sleep_end <= rktio_get_inexact_monotonic_milliseconds(scheme_rktio))
       result = 1;
   } else if (all_semas && can_suspend) {
     /* Try to block in a GCable way: */
@@ -7230,7 +7257,7 @@ static Scheme_Object *do_sync(const char *name, int argc, Scheme_Object *argv[],
 	return NULL;
       }
       
-      start_time = scheme_get_inexact_milliseconds();
+      start_time = rktio_get_inexact_monotonic_milliseconds(scheme_rktio);
     } else
       start_time = 0;
   } else {
@@ -7878,7 +7905,7 @@ static Scheme_Object *do_param_fast(int argc, Scheme_Object *argv[], Scheme_Obje
 
 static Scheme_Object *make_parameter(int argc, Scheme_Object **argv)
 {
-  Scheme_Object *p, *cell, *a[1];
+  Scheme_Object *p, *cell, *a[2], *realm = scheme_default_realm;
   ParamData *data;
   void *k;
   const char *name;
@@ -7891,6 +7918,11 @@ static Scheme_Object *make_parameter(int argc, Scheme_Object **argv)
     if (!SCHEME_SYMBOLP(argv[2]))
       scheme_wrong_contract("make-parameter", "parameter?", 2, argc, argv);
     name = scheme_symbol_val(argv[2]);
+    if (argc > 3) {
+      realm = argv[3];
+      if (!SCHEME_SYMBOLP(realm))
+        scheme_wrong_contract("make-parameter", "parameter?", 3, argc, argv);
+    }
   } else
     name = "parameter-procedure";
 
@@ -7904,7 +7936,8 @@ static Scheme_Object *make_parameter(int argc, Scheme_Object **argv)
   data->guard = (((argc > 1) && SCHEME_TRUEP(argv[1])) ? argv[1] : NULL);
 
   a[0] = (Scheme_Object *)data;
-  p = scheme_make_prim_closure_w_arity(do_param_fast, 1, a, 
+  a[1] = realm;
+  p = scheme_make_prim_closure_w_arity(do_param_fast, 2, a, 
                                        name, 0, 1);
   ((Scheme_Primitive_Proc *)p)->pp.flags |= SCHEME_PRIM_TYPE_PARAMETER;
 
@@ -7913,7 +7946,7 @@ static Scheme_Object *make_parameter(int argc, Scheme_Object **argv)
 
 static Scheme_Object *make_derived_parameter(int argc, Scheme_Object **argv)
 {
-  Scheme_Object *p, *a[1];
+  Scheme_Object *p, *a[2], *realm = scheme_default_realm;
   ParamData *data;
 
   if (!SCHEME_PARAMETERP(argv[0]))
@@ -7932,7 +7965,8 @@ static Scheme_Object *make_derived_parameter(int argc, Scheme_Object **argv)
   data->extract_guard = argv[2];
 
   a[0] = (Scheme_Object *)data;
-  p = scheme_make_prim_closure_w_arity(do_param, 1, a, 
+  a[1] = realm;
+  p = scheme_make_prim_closure_w_arity(do_param, 2, a, 
                                        "parameter-procedure", 0, 1);
   ((Scheme_Primitive_Proc *)p)->pp.flags |= SCHEME_PRIM_TYPE_PARAMETER;
 
@@ -8030,11 +8064,12 @@ static void make_initial_config(Scheme_Thread *p)
   init_param(cells, paramz, MZCONFIG_PRINT_READER, scheme_false);
   init_param(cells, paramz, MZCONFIG_PRINT_LONG_BOOLEAN, scheme_false);
   init_param(cells, paramz, MZCONFIG_PRINT_AS_QQ, scheme_true);
-  init_param(cells, paramz, MZCONFIG_PRINT_SYNTAX_WIDTH, scheme_make_integer(32));
+  init_param(cells, paramz, MZCONFIG_PRINT_SYNTAX_WIDTH, scheme_make_integer(256));
 
   init_param(cells, paramz, MZCONFIG_COMPILE_MODULE_CONSTS, scheme_true);
   init_param(cells, paramz, MZCONFIG_USE_JIT, scheme_startup_use_jit ? scheme_true : scheme_false);
   init_param(cells, paramz, MZCONFIG_COMPILE_TARGET_MACHINE, scheme_startup_compile_machine_independent ? scheme_false : racket_symbol);
+  init_param(cells, paramz, MZCONFIG_COMPILE_REALM, scheme_default_realm);
 
   {
     Scheme_Object *s;
@@ -8132,6 +8167,11 @@ static void make_initial_config(Scheme_Thread *p)
                                   0, 0);
     init_param(cells, paramz, MZCONFIG_READ_INPUT_PORT_HANDLER, ph);
 
+    ph = scheme_make_prim_w_arity(scheme_default_read_get_evt,
+                                  "default-get-interaction-evt",
+                                  0, 0);
+    init_param(cells, paramz, MZCONFIG_READ_GET_EVT, ph);
+
     ph = scheme_make_prim_w_arity(scheme_default_read_handler,
                                   "default-read-interaction-handler",
                                   2, 2);
@@ -8170,6 +8210,8 @@ static void make_initial_config(Scheme_Thread *p)
   }
   
   init_param(cells, paramz, MZCONFIG_THREAD_INIT_STACK_SIZE, scheme_make_integer(DEFAULT_INIT_STACK_SIZE));
+
+  init_param(cells, paramz, MZCONFIG_SUBPROC_KEEP_FDS, scheme_intern_symbol("inherited"));
 
   {
     int i;
@@ -8569,22 +8611,26 @@ static Scheme_Object *security_guard_check_network(int argc, Scheme_Object *argv
   if (!SCHEME_SYMBOLP(argv[0]))
     scheme_wrong_contract("security-guard-check-network", "symbol?", 0, argc, argv);
 
-  if (!SCHEME_CHAR_STRINGP(argv[1]))
-    scheme_wrong_contract("security-guard-check-network", "string?", 1, argc, argv);
+  if (SCHEME_TRUEP(argv[1]) && !SCHEME_CHAR_STRINGP(argv[1]))
+    scheme_wrong_contract("security-guard-check-network", "(or/c string? #f)", 1, argc, argv);
 
-  if (!SCHEME_INTP(argv[2])
-      || (SCHEME_INT_VAL(argv[2]) < 1)
-      || (SCHEME_INT_VAL(argv[2]) > 65535))
-    scheme_wrong_contract("security-guard-check-network", "(integer-in 1 65535)", 2, argc, argv);
+  if (SCHEME_TRUEP(argv[2])
+      && (!SCHEME_INTP(argv[2])
+          || (SCHEME_INT_VAL(argv[2]) < 1)
+          || (SCHEME_INT_VAL(argv[2]) > 65535)))
+    scheme_wrong_contract("security-guard-check-network", "(or/c (integer-in 1 65535) #f)", 2, argc, argv);
   
   if (!SAME_OBJ(argv[3], client_symbol) && !SAME_OBJ(argv[3], server_symbol))
     scheme_wrong_contract("security-guard-check-network", "(or/c 'client'server)", 3, argc, argv);
 
-  a = scheme_char_string_to_byte_string(argv[1]);
+  if (SCHEME_TRUEP(argv[1]))
+    a = scheme_char_string_to_byte_string(argv[1]);
+  else
+    a = NULL;
   
   scheme_security_check_network(scheme_symbol_val(argv[0]),
-                                SCHEME_BYTE_STR_VAL(a),
-                                SCHEME_INT_VAL(argv[2]),
+                                a ? SCHEME_BYTE_STR_VAL(a) : NULL,
+                                SCHEME_TRUEP(argv[2]) ? SCHEME_INT_VAL(argv[2]) : 0,
                                 SAME_OBJ(argv[3], client_symbol));
 
   return scheme_void;

@@ -42,7 +42,6 @@ static int is_number_arg(const char *s)
   return 1;
 }
 
-#if defined(OS_X) || defined(DOS_FILE_SYSTEM)
 char *add_to_str(const char *addr, long amt)
 {
   long addr_v;
@@ -51,28 +50,28 @@ char *add_to_str(const char *addr, long amt)
   sprintf(buf, "%ld", addr_v);
   return strdup(buf);
 }
-#endif
 
-static char *make_embedded_load(const char *start, const char *end)
+static char *make_embedded_load(const self_exe_t self_exe, const char *file, const char *start, const char *end)
 {
   char *s;
-  int slen, elen;
+  int slen, elen, flen;
 
-#if defined(OS_X) || defined(DOS_FILE_SYSTEM)
-  {
+  if (file == NULL) {
     long fileoff;
-    fileoff = get_segment_offset();
+    fileoff = get_segment_offset(self_exe);
     start = add_to_str(start, fileoff);
     end = add_to_str(end, fileoff);
+    file = SELF_PATH_TO_BYTES(self_exe);
   }
-#endif
 
   slen = strlen(start);
   elen = strlen(end);
+  flen = strlen(file);
 
-  s = (char *)malloc(slen + elen + 2);
+  s = (char *)malloc(slen + elen + flen + 3);
   memcpy(s, start, slen + 1);
   memcpy(s + slen + 1, end, elen + 1);
+  memcpy(s + slen + elen + 2, file, flen + 1);
 
   return s;
 }
@@ -105,6 +104,7 @@ enum {
 
 typedef struct {
   int init_ns;
+  int make;
 #ifndef DONT_PARSE_COMMAND_LINE
   int num_enl;
 #endif  
@@ -230,6 +230,30 @@ static int finish_cmd_line_run(FinishArgs *fa, Repl_Proc repl)
 {
   volatile int exit_val = 0;
   volatile int did_config = 0;
+
+  if (fa->a->make) {
+    Scheme_Thread * volatile p;
+    mz_jmp_buf * volatile save, newbuf;
+
+    p = scheme_get_current_thread();
+    save = p->error_buf;
+    p->error_buf = &newbuf;
+    
+    if (!scheme_setjmp(newbuf)) {
+      Scheme_Object *a[2], *p, *param;
+      a[0] = scheme_intern_symbol("compiler/private/cm-minimal");
+      a[1] = scheme_intern_symbol("make-compilation-manager-load/use-compiled-handler");
+      p = scheme_dynamic_require(2, a);
+
+      p = _scheme_apply(p, 0, NULL);
+
+      param = scheme_builtin_value("current-load/use-compiled");
+      a[0] = p;
+      _scheme_apply(param, 1, a);
+    }
+
+    p->error_buf = save;
+  }
 
   if (fa->a->init_ns) {
     Scheme_Object *a[1], *nsreq;
@@ -695,12 +719,13 @@ static int run_from_cmd_line(int argc, char *_argv[],
   Scheme_Object *config_path = NULL;
   Scheme_Object *host_collects_path = NULL, *host_config_path = NULL;
   char *compiled_paths = NULL;
-  Scheme_Object *collects_paths_l, *collects_paths_r;
+  Scheme_Object *collects_paths_l, *collects_paths_r, *config_table;
 #ifndef DONT_PARSE_COMMAND_LINE
   char **evals_and_loads, *real_switch = NULL, specific_switch[2];
   int *eval_kind, num_enl;
   int no_more_switches = 0;
   int show_vers = 0;
+  char *embedding_file;
 #endif
 #if !defined(DONT_RUN_REP) || !defined(DONT_PARSE_COMMAND_LINE)
   int use_repl = 0;
@@ -719,12 +744,13 @@ static int run_from_cmd_line(int argc, char *_argv[],
 #endif
   char *init_lib = INITIAL_NAMESPACE_MODULE;
   int was_config_flag = 0, saw_nc_flag = 0;
-  int no_compiled = 0;
+  int make = 0, no_compiled = 0;
   int init_ns = 0, no_init_ns = 0;
   int cross_compile = 0;
   Scheme_Object *syslog_level = NULL, *stderr_level = NULL, *stdout_level = NULL;
   FinishArgs *fa;
   FinishArgsAtoms *fa_a;
+  self_exe_t self_exe;
 
   scheme_set_default_locale();
 
@@ -735,8 +761,10 @@ static int run_from_cmd_line(int argc, char *_argv[],
 #ifdef NEED_CONSOLE_PRINTF
   console_printf = scheme_get_console_printf();
 #endif
-  
-  extract_built_in_arguments(&prog, &sprog, &argc, &argv);
+
+  self_exe = get_self_path(prog);
+
+  extract_built_in_arguments(self_exe, &prog, &sprog, &argc, &argv);
 
 #ifndef DONT_PARSE_COMMAND_LINE
   evals_and_loads = (char **)malloc(sizeof(char *) * argc);
@@ -768,6 +796,10 @@ static int run_from_cmd_line(int argc, char *_argv[],
       argv[0] = "-m";
     else if (!strcmp("--name", argv[0]))
       argv[0] = "-N";
+    else if (!strcmp("--exec", argv[0]))
+      argv[0] = "-E";
+    else if (!strcmp("--make", argv[0]))
+      argv[0] = "-y";
     else if (!strcmp("--no-compiled", argv[0]))
       argv[0] = "-c";
     else if (!strcmp("--no-lib", argv[0]))
@@ -925,6 +957,10 @@ static int run_from_cmd_line(int argc, char *_argv[],
           collects_extra = scheme_make_pair(check_make_path(prog, real_switch, argv[0]), collects_extra);
           was_config_flag = 1;
 	  break;
+        case 'y':
+          make = 1;
+          was_config_flag = 1;
+          break;
         case 'c':
           no_compiled = 1;
           was_config_flag = 1;
@@ -996,6 +1032,18 @@ static int run_from_cmd_line(int argc, char *_argv[],
             no_init_ns = 1;
 	  break;
         case 'k':
+        case 'Y':
+          if (*str == 'Y') {
+            if (argc < 2) {
+              PRINTF("%s: missing file name after %s switch\n", 
+                     prog, real_switch);
+              goto show_need_help;
+            }
+            argv++;
+            --argc;
+            embedding_file = argv[0];
+          } else
+            embedding_file = NULL;
 	  if (argc < 4) {
 	    PRINTF("%s: missing %s after %s switch\n", 
 		   prog, 
@@ -1005,18 +1053,19 @@ static int run_from_cmd_line(int argc, char *_argv[],
 	  }
 	  argv++;
 	  --argc;
-	  se = make_embedded_load(argv[0], argv[1]);
+	  se = make_embedded_load(self_exe, embedding_file, argv[0], argv[1]);
 	  evals_and_loads[num_enl] = se;
 	  argv++;
 	  --argc;
 	  eval_kind[num_enl++] = mzcmd_EMBEDDED_REG;
-	  se = make_embedded_load(argv[0], argv[1]);
+	  se = make_embedded_load(self_exe, embedding_file, argv[0], argv[1]);
 	  evals_and_loads[num_enl] = se;
 	  argv++;
 	  --argc;
 	  eval_kind[num_enl++] = mzcmd_EMBEDDED;
 	  break;
 	case 'N':
+	case 'E':
 	  if (argc < 2) {
 	    PRINTF("%s: missing name after %s switch\n", 
 		   prog, 
@@ -1025,13 +1074,16 @@ static int run_from_cmd_line(int argc, char *_argv[],
 	  }
 	  argv++;
 	  --argc;
-	  sprog = argv[0];
-          if (!*sprog) {
+          if (!*(argv[0])) {
             PRINTF("%s: empty path after %s switch\n", 
 		   prog, 
 		   real_switch);
 	    goto show_need_help;
           }
+          if (*str == 'N')
+            sprog = argv[0];
+          else
+            prog = argv[0];
           was_config_flag = 1;
 	  break;
 	case 'q':
@@ -1306,9 +1358,10 @@ static int run_from_cmd_line(int argc, char *_argv[],
   set_os_process_name(sprog);
 #endif
   
-  if (no_compiled)
+  if (no_compiled) {
     scheme_set_compiled_file_paths(scheme_make_null());
-  else {
+    make = 0;
+  } else {
     const char *s;
     s = getenv("PLT_ZO_PATH");
     if (s)
@@ -1349,10 +1402,10 @@ static int run_from_cmd_line(int argc, char *_argv[],
   /* Creates the main kernel environment */
   global_env = mk_basic_env();
 
+  config_table = scheme_read_installation_config_table(global_env);
   if (!skip_coll_dirs)
-    scheme_init_collection_paths_post(global_env, collects_paths_l, collects_paths_r);
-  if (compiled_paths)
-    scheme_init_compiled_roots(global_env, compiled_paths);
+    scheme_init_collection_paths_post_config(global_env, collects_paths_l, collects_paths_r, config_table);
+  scheme_init_compiled_roots_config(global_env, compiled_paths, config_table);
 
   scheme_seal_parameters();
 
@@ -1360,6 +1413,7 @@ static int run_from_cmd_line(int argc, char *_argv[],
   fa = (FinishArgs *)scheme_malloc(sizeof(FinishArgs));
   fa->a = fa_a;
   fa->a->init_ns = init_ns;
+  fa->a->make = make;
 #ifndef DONT_PARSE_COMMAND_LINE
   fa->evals_and_loads = evals_and_loads;
   fa->eval_kind = eval_kind;
@@ -1397,86 +1451,151 @@ static int run_from_cmd_line(int argc, char *_argv[],
          PROGRAM_LC " [<option> ...] <argument> ...\n"
 # ifndef RACKET_CMD_LINE
 #  ifdef wx_x
-	 " X configuration options (must precede all other options):\n"
-	 "  -display <display>, -geometry <geometry>, -fn <font>, -font <font>,\n"
-         "  -bg <color>, -background <color>, -fg <color>, -foreground <color>,\n"
-	 "  -iconic, -name <name>, -rv, -reverse, +rv, -selectionTimeout <timeout>,\n"
-	 "  -synchronous, -title <title>, -xnllanguage <language>, -xrm <file>\n"
+  "\n"
+  "X configuration options (must precede all other options):\n\n"
+  "  -display <display>, -geometry <geometry>, -fn <font>,\n"
+  "  -font <font>, -bg <color>, -background <color>, -fg <color>,\n"
+  "  -foreground <color>, -iconic, -name <name>, -rv, -reverse,\n"
+  "  +rv, -selectionTimeout <timeout>, -synchronous, -title <title>,\n"
+  "  -xnllanguage <language>, -xrm <file>\n"
 #  endif
 # endif
-	 " File and expression options:\n"
-	 "  -e <exprs>, --eval <exprs> : Evaluate <exprs>, prints results\n"
-	 "  -f <file>, --load <file> : Like -e '(load \"<file>\")' without printing\n"
-	 "  -t <file>, --require <file> : Like -e '(require (file \"<file>\"))' [*]\n"
-	 "  -l <path>, --lib <path> : Like -e '(require (lib \"<path>\"))' [*]\n"
-	 "  -p <package> : Like -e '(require (planet \"<package>\")' [*]\n"
-	 "  -r <file>, --script <file> : Same as -f <file> -N <file> --\n" 
-	 "  -u <file>, --require-script <file> : Same as -t <file> -N <file> --\n" 
-	 "  -k <n> <m> <p> : Load executable-embedded code from offset <n> to <p>\n"
-	 "  -m, --main : Call `main' with command-line arguments, print results\n"
-         "  [*] Also `require's a `main' submodule, if any\n"
-	 " Interaction options:\n"
-         "  -i, --repl : Run interactive read-eval-print loop; implies -v\n"
-         "  -n, --no-lib : Skip `(require (lib \"<init-lib>\"))' for -i/-e/-f/-r\n"
-	 "  -v, --version : Show version\n"
+  "\n"
+  "File and expression options:\n\n"
+  "  -e <exprs>, --eval <exprs>\n"
+  "     Evaluate <exprs>, print results\n"
+  "  -f <file>, --load <file>\n"
+  "     Like -e '(load \"<file>\")' without printing\n"
+  "  -t <file>, --require <file>\n"
+  "     Like -e '(require (file \"<file>\"))' [*]\n"
+  "  -l <path>, --lib <path>\n"
+  "     Like -e '(require (lib \"<path>\"))' [*]\n"
+  "  -p <package>\n"
+  "     Like -e '(require (planet \"<package>\")' [*]\n"
+  "  -r <file>, --script <file>\n"
+  "     Same as -f <file> -N <file> --\n"
+  "  -u <file>, --require-script <file>\n"
+  "     Same as -t <file> -N <file> --\n"
+  "  -k <n> <m> <p>\n"
+  "     Load executable-embedded code from offset <n> to <p>\n"
+  "  -Y <file> <n> <m> <p>\n"
+  "     Like -k <n> <m> <p>, but from <file>\n"
+  "  -m, --main\n"
+  "     Call `main` with command-line arguments, print results\n"
+  "\n"
+  " [*] Also `require`s a `main` submodule, if any\n"
+  "\n"
+  "Interaction options:\n\n"
+  "  -i, --repl\n"
+  "     Run interactive read-eval-print loop; implies -v\n"
+  "  -n, --no-lib\n"
+  "     Skip `(require (lib \"<init-lib>\"))` for -i/-e/-f/-r\n"
+  "  -v, --version\n"
+  "     Show version\n"
 # ifdef CMDLINE_STDIO_FLAG
-	 "  -K, --back : Don't bring application to the foreground (Mac OS X)\n"
+  "  -K, --back\n"
+  "     Don't bring application to the foreground (Mac OS X)\n"
 # endif
 # ifndef NO_YIELD_BEFORE_EXIT
-	 "  -V, --no-yield : Skip `((executable-yield-handler) <status>)' on exit\n"
+  "  -V, --no-yield\n"
+  "     Skip `((executable-yield-handler) <status>)` on exit\n"
 # endif
-	 " Configuration options:\n"
-         "  -c, --no-compiled : Disable loading of compiled files\n"
-	 "  -q, --no-init-file : Skip load of " INIT_FILENAME " for -i\n"
+  "\n"
+  "Configuration options:\n\n"
+  "  -y, --make\n"
+  "     Yes, enable automatic update of compiled files\n"
+  "  -c, --no-compiled\n"
+  "     Disable loading of compiled files\n"
+  "  -q, --no-init-file\n"
+  "     Skip load of " INIT_FILENAME " for -i\n"
 # ifdef CMDLINE_STDIO_FLAG
-	 "  -z, --text-repl : Use text `read-eval-print-loop' for -i\n"
+  "  -z, --text-repl\n"
+  "     Use text `read-eval-print-loop` for -i\n"
 # endif
-         "  -I <path> : Set <init-lib> to <path> (sets language)\n"
-	 "  -X <dir>, --collects <dir> : Main collects at <dir> (or \"\" disables all)\n"
-	 "  -S <dir>, --search <dir> : More collects at <dir> (after main collects)\n"
-	 "  -G <dir>, --config <dir> : Main configuration directory at <dir>\n"
-	 "  -A <dir>, --addon <dir> : Addon directory at <dir>\n"
-	 "  -U, --no-user-path : Ignore user-specific collects, etc.\n"
-         "  -R <paths>, --compiled <paths> : Set compiled-file search roots to <paths>\n"
-	 "  -C, --cross : Cross-build mode; save current collects and config as host\n"
-	 "  -N <file>, --name <file> : Sets `(find-system-path 'run-file)' to <file>\n"
+  "  -I <path>\n"
+  "     Set <init-lib> to <path> (sets language)\n"
+  "  -X <dir>, --collects <dir>\n"
+  "     Main collects at <dir> (or \"\" disables all)\n"
+  "  -S <dir>, --search <dir>\n"
+  "     More collects at <dir> (after main collects)\n"
+  "  -G <dir>, --config <dir>\n"
+  "     Main configuration directory at <dir>\n"
+  "  -A <dir>, --addon <dir>\n"
+  "     Addon directory at <dir>\n"
+  "  -U, --no-user-path\n"
+  "     Ignore user-specific collects, etc.\n"
+  "  -R <paths>, --compiled <paths>\n"
+  "     Set compiled-file search roots to <paths>\n"
+  "  -C, --cross\n"
+  "     Cross-build mode; save current collects and config\n"
+  "     as host\n"
+  "  -N <file>, --name <file>\n"
+  "     Sets `(find-system-path 'run-file)` to <file>\n"
+  "  -E <file>, --exec <file>\n"
+  "     Sets `(find-system-path 'exec-file)` to <file>\n"
 # ifdef CMDLINE_STDIO_FLAG
-         "  -J <name>, ---wm-class <name> : Set WM_CLASS class to <name> (Unix)\n"
+  "  -J <name>, ---wm-class <name>\n"
+  "     Set WM_CLASS class to <name> (Unix)\n"
 # endif
 # ifdef MZ_USE_JIT
-	 "  -j, --no-jit : Disable the just-in-time compiler\n"
+  "  -j, --no-jit\n"
+  "     Disable the just-in-time compiler\n"
 # else
-	 "  -j, --no-jit : No effect, since the just-in-time compiler is unavailable\n"
+  "  -j, --no-jit\n"
+  "     No effect, since the just-in-time compiler is unavailable\n"
 # endif
-	 "  -M, --compile-any : Compile to machine-independent form\n"
-         "  -d, --no-delay : Disable on-demand loading of syntax and code\n"
-	 "  -b, --binary : No effect, since stdin and stdout/stderr are always binary\n"
-	 "  -W <levels>, --warn <levels> : Set stderr logging to <levels>\n"
-	 "  -O <levels>, --stdout <levels> : Set stdout logging to <levels>\n"
-	 "  -L <levels>, --syslog <levels> : Set syslog logging to <levels>\n"
-	 " Meta options:\n"
-	 "  -- : No argument following this switch is used as a switch\n"
-	 "  -Z : Ignore the argument following this switch\n"
-	 "  -h, --help : Show this information and exits, ignoring other options\n"
-         "Default options:\n"
-         " If only configuration options are provided, -i is added\n"
-         " If only configuration options are before the first argument, -u is added\n"
-         " If -t/-l/-p/-u appears before the first -i/-e/-f/-r, -n is added\n"
-         " <init-lib> defaults to " INITIAL_NAMESPACE_MODULE "\n"
-         "Switch syntax:\n"
-	 " Multiple single-letter switches can be collapsed, with arguments placed\n"
-	 "   after the collapsed switches; the first collapsed switch cannot be --\n"
-	 " Example: `-ifve file expr' is the same as `-i -f file -v -e expr'\n"
-         "Start-up sequence:\n"
-         " 1. Set `current-library-collection-paths'\n"
-         " 2. Require `(lib \"<init-lib>\")' [when -i/-e/-f/-r, unless -n]\n"
-         " 3. Evaluate/load expressions/files in order, until first error\n"
-         " 4. Load \"" INIT_FILENAME "\" [when -i]\n"
-         " 5. Run read-eval-print loop [when -i]\n"
+  "  -M, --compile-any\n"
+  "     Compile to machine-independent form\n"
+  "  -d, --no-delay\n"
+  "     Disable on-demand loading of syntax and code\n"
+  "  -b, --binary\n"
+  "     No effect, since stdin and stdout/stderr are\n"
+  "     always binary\n"
+  "  -W <levels>, --warn <levels>\n"
+  "     Set stderr logging to <levels>\n"
+  "  -O <levels>, --stdout <levels>\n"
+  "     Set stdout logging to <levels>\n"
+  "  -L <levels>, --syslog <levels>\n"
+  "     Set syslog logging to <levels>\n"
+  "\n"
+  "Meta options:\n\n"
+  "  --\n"
+  "     No argument following this switch is used as a switch\n"
+  "  -Z\n"
+  "     Ignore the argument following this switch\n"
+  "  -h, --help\n"
+  "     Show this information and exits, ignoring other options\n"
+  "\n"
+  "Default options:\n\n"
+  "  * If only configuration options are provided, -i is added\n"
+  "  * If only configuration options are before the first\n"
+  "    argument, -u is added\n"
+  "  * If -t/-l/-p/-u appears before the first -i/-e/-f/-r,\n"
+  "    -n is added\n"
+  "  * <init-lib> defaults to " INITIAL_NAMESPACE_MODULE "\n"
+  "\n"
+  "Switch syntax:\n\n"
+  "  Multiple single-letter switches can be collapsed, with\n"
+  "  arguments placed after the collapsed switches; the first\n"
+  "  collapsed switch cannot be --\n\n"
+  "  For example,\n"
+  "\n"
+  "      -ifve file expr\n"
+  "\n"
+  "  is the same as\n"
+  "\n"
+  "      -i -f file -v -e expr\n"
+  "\n"
+  "Start-up sequence:\n\n"
+  "  1. Set `current-library-collection-paths`\n"
+  "  2. Require `(lib \"<init-lib>\")` [when -i/-e/-f/-r, unless -n]\n"
+  "  3. Evaluate/load expressions/files in order, until first error\n"
+  "  4. Load \"" INIT_FILENAME "\" [when -i]\n"
+  "  5. Run read-eval-print loop [when -i]\n"
 # ifndef NO_YIELD_BEFORE_EXIT
-         " 6. Run `((executable-yield-handler) <status>)' [unless -V]\n"
+  "  6. Run `((executable-yield-handler) <status>)` [unless -V]\n"
 # endif
-	 );
+  );
   PRINTF(prog, BANNER);
 #if defined(WINDOWS_FILE_HANDLES)
   CMDLINE_FFLUSH(stdout);

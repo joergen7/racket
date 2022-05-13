@@ -16,8 +16,8 @@
    #:args (dest-dir)
    dest-dir))
 
-;; Hack to make AArch64 Mac OS libraries look like other Macs:
-(define renames
+;; Hack to make AArch64 Mac OS and Windows libraries look like other Macs:
+(define aarch64-renames
   `(("libffi.7" "libffi.6")))
 
 (define libs
@@ -233,7 +233,7 @@
   (or (equal? p "fonts")
       (framework? p)))
 
-(define (revert-name p)
+(define (revert-name p renames)
   (or (for/or ([pr (in-list renames)])
 	(and (equal? (cadr pr) p)
 	     (car pr)))
@@ -327,7 +327,7 @@
        (displayln l o))
      (display lic-end o))))
 
-(define (install platform i-platform so fixup libs)
+(define (install platform i-platform so fixup libs renames)
   (define pkgs (make-hash))
   (define pkgs-lic (make-hash))
 
@@ -340,7 +340,7 @@
 	 [(procedure? so) (both (so lib))]
 	 [else
 	  (define (make lib) (format "~a.~a" lib so))
-	  (values (make lib) (make (revert-name lib)))])))
+	  (values (make lib) (make (revert-name lib renames)))])))
     (define-values (pkg suffix subdir lic) (find-pkg lib))
     (define dir (build-path dest-dir
                             (~a pkg "-" platform suffix)
@@ -389,7 +389,7 @@
       (system (format "install_name_tool -id ~a ~a" (file-name-from-path p-new) p-new))
       (for-each (lambda (s)
                   (system (format "install_name_tool -change ~a @loader_path/~a ~a"
-                                  (format "~a/~a.dylib" from (revert-name s))
+                                  (format "~a/~a.dylib" from (revert-name s renames))
                                   (format "~a.dylib" s)
                                   p-new)))
                 (append libs nonwin-libs))
@@ -402,24 +402,59 @@
 			   (if aarch64? "aarch64" "x86_64"))
                        "-macosx"))
 
-  (install platform platform "dylib" fixup (append libs
-                                                   mac-libs
-                                                   (cond
-                                                     [m32? '()]
-                                                     [else mac64-libs])
-                                                   (cond
-                                                     [aarch64? '()]
-                                                     [else macx86-libs])
-                                                   nonwin-libs)))
+  (define renames (if aarch64?
+                      aarch64-renames
+                      null))
+
+  (install platform platform "dylib" fixup
+           (append libs
+                   mac-libs
+                   (cond
+                     [m32? '()]
+                     [else mac64-libs])
+                   (cond
+                     [aarch64? '()]
+                     [else macx86-libs])
+                   nonwin-libs)
+           renames))
 
 (define (install-win)
-  (define exe-prefix (if m32?
-                         "i686-w64-mingw32"
-                         "x86_64-w64-mingw32"))
+  (define exe-prefix (cond
+                       [m32? "i686-w64-mingw32"]
+                       [aarch64? "aarch64-w64-mingw32"]
+                       [else "x86_64-w64-mingw32"]))
+
+  (define renames (if aarch64?
+                      aarch64-renames
+                      null))
+  
+  (define (rename-one s)
+    (regexp-replace #rx"!"
+                    (regexp-replace* #rx"[.]"
+                                     (regexp-replace #rx"[.](?=.*[.])" s "!")
+                                     "-")
+                    "."))
+
+  (define win-renames
+    (map (lambda (p) (list (rename-one (car p)) (rename-one (cadr p))))
+         renames))
 
   (define (fixup p p-new)
     (printf "Fixing ~s\n" p-new)
-    (system (~a exe-prefix "-strip -S " p-new)))
+    (system (~a exe-prefix "-strip -S " p-new))
+    (define-values (i o) (open-input-output-file p-new #:exists 'update))
+    (for-each (lambda (p)
+                (let loop ()
+                  (file-position i 0)
+                  (define m (regexp-match-positions (regexp-quote (car p)) i))
+                  (when m
+                    (file-position o (caar m))
+                    (display (cadr p) o)
+                    (flush-output o)
+                    (loop))))
+              win-renames)
+    (close-input-port i)
+    (close-output-port o))
 
   (parameterize ([current-environment-variables
                   (environment-variables-copy
@@ -429,17 +464,14 @@
                            "/usr/local/mw64/bin:/usr/mw64/bin:")
                        (getenv "PATH")))
 
-    (install (~a "win32-" (if m32? "i386" "x86_64"))
-             (~a "win32\\" (if m32? "i386" "x86_64"))
+    (install (~a "win32-" (if m32? "i386" (if aarch64? "arm64" "x86_64")))
+             (~a "win32\\" (if m32? "i386" (if aarch64? "arm64" "x86_64")))
              "dll"
              fixup
              (for/list ([s (in-list (append libs
                                             win-libs))])
-               (regexp-replace #rx"!"
-                               (regexp-replace* #rx"[.]"
-                                                (regexp-replace #rx"[.](?=.*[.])" s "!")
-                                                "-")
-                               ".")))))
+               (rename-one s))
+             win-renames)))
 
 (define (install-linux)
   (define (fixup p p-new)
@@ -469,10 +501,12 @@
          [else
           (error 'add-so "not found: ~s" orig-p)])])))
 
-  (install platform platform add-so fixup (append (remove* linux-remove-libs
-							   libs)
-                                                  nonwin-libs
-						  linux-libs)))
+  (install platform platform add-so fixup
+           (append (remove* linux-remove-libs
+                            libs)
+                   nonwin-libs
+                   linux-libs)
+           null))
 
 (cond
  [win? (install-win)]

@@ -32,6 +32,7 @@
 (test #t chaperone-of?/impersonator '(10) '(10))
 (test #t chaperone-of?/impersonator '#(1 2 3) '#(1 2 3))
 (test #t chaperone-of?/impersonator '#&(1 2 3) '#&(1 2 3))
+(test #f chaperone-of?/impersonator (mcons 1 2) (mcons 1 2))
 
 (test #f chaperone-of?/impersonator (make-string 1 #\x) (make-string 1 #\x))
 (test #t chaperone-of?/impersonator 
@@ -50,6 +51,29 @@
 (test #f either-chaperone-of?/impersonator 
       '#&17
       (box 17))
+
+;; immutable hash chaperone-of? structural equality:
+(test #t chaperone-of?/impersonator '#hash(("0" . 0) ("1" . 1) ("2" . 2)) '#hash(("0" . 0) ("1" . 1) ("2" . 2)))
+(test #t chaperone-of?/impersonator '#hasheq((z . 0) (o . 1) (t . 2)) '#hasheq((z . 0) (o . 1) (t . 2)))
+(test #t chaperone-of?/impersonator '#hasheqv((0 . "0") (1 . "1") (2 . "2")) '#hasheqv((0 . "0") (1 . "1") (2 . "2")))
+(test #t chaperone-of?/impersonator (hash 'a 1) (hash 'a 1))
+(test #t chaperone-of?/impersonator (hasheq 'a 1) (hasheq 'a 1))
+(test #t chaperone-of?/impersonator (hasheqv 'a 1) (hasheqv 'a 1))
+(test #f chaperone-of? (hash 'a 1) (hash 'a 2))
+(let ()
+  ;; mutable strings as keys make these different:
+  (test #f chaperone-of? (hasheq (string #\a) 1) (hasheq (string #\a) 1))
+  ;; but if the mutable strings are eq it's fine:
+  (define a (string #\a))
+  (test #t chaperone-of?/impersonator (hasheq a 1) (hasheq a 1)))
+
+;; mutable hash chaperone-of? intensional equality:
+(for ([make-hash (in-list (list make-hash make-hasheq make-hasheqv
+                                make-weak-hash make-weak-hasheq make-weak-hasheqv
+                                make-ephemeron-hash make-ephemeron-hasheq make-ephemeron-hasheqv))])
+  (define h (make-hash '((a . 1))))
+  (test #t chaperone-of?/impersonator h h)
+  (test #f chaperone-of? (make-hash '((a . 1))) (make-hash '((a . 1)))))
 
 (let ()
   (define-struct o (a b))
@@ -126,7 +150,11 @@
    (test (void) set-box! b 'ok)
    (test 'ok unbox b2)
    (test (void) set-box! b2 'fine)
-   (test 'fine unbox b)))
+   (test 'fine unbox b)
+
+   (test #t box? (chaperone-box b2
+                                (λ (b o) o)
+                                (λ (b i) i)))))
 
 ;; test chaperone-of checks in a chaperone:
 (parameterize ([print-box #f]) ; avoid problems printing errors
@@ -1909,7 +1937,8 @@
  (list
   make-hash make-hasheq make-hasheqv
   (lambda () #hash()) (lambda () #hasheq()) (lambda () #hasheqv())
-  make-weak-hash make-weak-hasheq make-weak-hasheqv))
+  make-weak-hash make-weak-hasheq make-weak-hasheqv
+  make-ephemeron-hash make-ephemeron-hasheq make-ephemeron-hasheqv))
 
 (let ([mk (lambda clear-proc+more
             (apply chaperone-hash (make-hash)
@@ -1941,7 +1970,8 @@
      (test #t (lambda (x) (hash? x)) h)))
  (list
   make-hash make-hasheq make-hasheqv
-  make-weak-hash make-weak-hasheq make-weak-hasheqv))
+  make-weak-hash make-weak-hasheq make-weak-hasheqv
+  make-ephemeron-hash make-ephemeron-hasheq make-ephemeron-hasheqv))
 
 (for-each 
  (lambda (make-hash)
@@ -2038,7 +2068,8 @@
       (void)))
   (list
    make-hash make-hasheq make-hasheqv
-   make-weak-hash make-weak-hasheq make-weak-hasheqv)))
+   make-weak-hash make-weak-hasheq make-weak-hasheqv
+   make-ephemeron-hash make-ephemeron-hasheq make-ephemeron-hasheqv)))
 
 (for-each
  (lambda (h1)   
@@ -2249,7 +2280,7 @@
                    (lambda (h k) k)
                    #f
                    (lambda (h k) (set! saw (cons k saw)) k)))
- (for ([make-hash (in-list (list make-hash make-weak-hash))])
+ (for ([make-hash (in-list (list make-hash make-weak-hash make-ephemeron-hash))])
    (set! saw null)
    (define ht (make-hash))
    (define cht (mk ht))
@@ -2300,7 +2331,7 @@
                       (lambda (h k) k)
                       #f
                       (lambda (h k) (inexact->exact (floor k)))))
-  (for ([make-hash (in-list (list make-hash make-weak-hash))])
+  (for ([make-hash (in-list (list make-hash make-weak-hash make-ephemeron-hash))])
     (define ht (make-hash))
     (define cht (mk ht))
     (hash-set! cht 1.2 'one)
@@ -2335,7 +2366,7 @@
       (define ht1 (hash-set cht (vector 1) 'vec))
       (test 'vec hash-ref ht1 (vector 1) #f)
       (test #f hash-ref ht1 (vector 2) #f))
-    (for ([make-hash (in-list (list make-hash make-weak-hash))])
+    (for ([make-hash (in-list (list make-hash make-weak-hash make-ephemeron-hash))])
       (define ht (make-hash))
       (define cht (mk ht))
       (define key (vector 1 2))
@@ -2353,7 +2384,7 @@
 ;; ----------------------------------------
 ;; Make sure chaperoned hash tables use a lock
 
-(for ([make-hash (list make-hash make-weak-hash)])
+(for ([make-hash (list make-hash make-weak-hash make-ephemeron-hash)])
   (define ht (make-hash))
 
   (struct a (v)
@@ -2411,6 +2442,30 @@
 
 ;; ----------------------------------------
 
+;; Check chaparone violation message:
+
+(let ()
+  (define h
+    (chaperone-hash (make-hash '((a . 0)))
+                    (λ (h k) (values k (λ (h k v) (add1 v))))
+                    (λ (h k v) (values k (add1 v)))
+                    (λ (h k) k)
+                    (λ (h k) k)))
+  (err/rt-test (hash-ref h 'a)
+               exn:fail:contract?
+               (string-append
+                "hash-ref: non-chaperone result;\n? received a [a-z]* that is not a chaperone of the original [a-z]*\n"
+                "  original: 0\n"
+                "  received: 1"))
+  (err/rt-test (hash-set! h 'a 5)
+               exn:fail:contract?
+               (string-append
+                "hash-set!: non-chaperone result;\n? received a [a-z]* that is not a chaperone of the original [a-z]*\n"
+                "  original: 5\n"
+                "  received: 6")))
+
+;; ----------------------------------------
+
 ;; Check broken key impersonator:
 
 (let ([check
@@ -2432,7 +2487,9 @@
   (check (make-hash))
   (check (make-hasheq))
   (check (make-weak-hash))
-  (check (make-weak-hasheq)))
+  (check (make-weak-hasheq))
+  (check (make-ephemeron-hash))
+  (check (make-ephemeron-hasheq)))
 
 (let ([check
        (lambda (orig)
@@ -2681,6 +2738,10 @@
                             (set! checked? #t)
                             v)))
   (test #t values checked?))
+
+(test #t evt? (chaperone-evt (make-custodian-box (current-custodian) 1)
+                             (λ (evt)
+                               (values evt values))))
 
 ;; ----------------------------------------
 ;; Evt variants where `chaperone-evt` is allowed to defeat predicates
@@ -2999,6 +3060,50 @@
         values
         ((wrap (lambda (x) (+ ((wrap (lambda (x) x)) x) 0))) 42))
   (test '(#f #f) values msgs))
+
+;; Make sure that `impersonator-prop:application-mark'
+;; works with keyword-based procedures:
+(let ()
+  (define (f x #:y y)
+    (call-with-immediate-continuation-mark
+     'z
+     (lambda (val)
+       (list val
+             (continuation-mark-set->list (current-continuation-marks) 'z)))))
+  (define g (chaperone-procedure
+             f
+             (lambda (a #:y y)
+               (values (lambda (r) r)
+                       (list y)
+                       a))
+             impersonator-prop:application-mark
+             (cons 'z 12)))
+  (test '(#f ()) 'kw-y-f (f 10 #:y 3))
+  (test '(12 (12)) 'kw-y-g (g 10 #:y 3))
+  (void))
+(let ()
+  (define (f x #:y [y 'no])
+    (call-with-immediate-continuation-mark
+     'z
+     (lambda (val)
+       (list val
+             (continuation-mark-set->list (current-continuation-marks) 'z)))))
+  (define g (chaperone-procedure
+             f
+             (lambda (a #:y [y 'no])
+               (if (eq? y 'no)
+                   (values (lambda (r) r)
+                           a)
+                   (values (lambda (r) r)
+                           (list y)
+                           a)))
+             impersonator-prop:application-mark
+             (cons 'z 12)))
+  (test '(#f ()) 'kw-no-y-f (f 10))
+  (test '(12 (12)) 'kw-no-y-g (g 10))
+  (test '(#f ()) 'kw-y-f (f 10 #:y 3))
+  (test '(12 (12)) 'kw-y-g (g 10 #:y 3))
+  (void))
 
 ;; ----------------------------------------
 
@@ -3534,6 +3639,82 @@
   (test 1 'apply (group-rows* #:group 10)))
 
 ;; ----------------------------------------
+;; More checks on the interaction of procedure and struct impersonators
+
+(let ()
+  (struct foo ([val #:mutable])
+    #:property prop:procedure
+    (λ (self)
+      (foo-val self)))
+
+  (define orig-foo (foo 'original))
+
+  (define the-foo
+    (impersonate-struct
+     orig-foo
+     foo-val
+     (λ (self val) 'impersonated)
+     set-foo-val!
+     (λ (self val) (error "cannot set!"))))
+
+  (test 'impersonated foo-val the-foo)
+  (test 'impersonated the-foo))
+
+(let ()
+  (define chaperoned 0)
+
+  (struct bar (proc)
+    #:property prop:procedure 0)
+
+  (define orig-bar (bar (lambda () 'ok)))
+
+  (define the-bar
+    (chaperone-struct
+     orig-bar
+     bar-proc
+     (lambda (self val) (set! chaperoned (add1 chaperoned)) val)))
+
+  (test 0 values chaperoned)
+  (test 'ok the-bar)
+  (test 1 values chaperoned)
+
+  (define proc-bar
+    (chaperone-procedure orig-bar (lambda () (values))))
+
+  (define another-bar
+    (chaperone-struct
+     proc-bar
+     bar-proc
+     (lambda (self val) (set! chaperoned (add1 chaperoned)) val)))
+
+  (test 1 values chaperoned)
+  (test 'ok another-bar)
+  (test 2 values chaperoned)
+
+  (define-values (prop:tagged tagged? tagged-ref) (make-impersonator-property 'tagged))
+
+  (define was-tagged? #f)
+  (define proc*-bar
+    (chaperone-procedure* orig-bar (lambda (orig)
+                                     (set! was-tagged? (tagged? orig))
+                                     (values))))
+
+  (define struct*-bar
+    (chaperone-struct
+     proc-bar
+     bar-proc
+     (lambda (self val) (set! chaperoned (add1 chaperoned)) val)))
+
+  (define the*-bar
+    (chaperone-procedure proc*-bar
+                         (lambda () (values))
+                         prop:tagged #t))
+
+  (test #f values was-tagged?)
+  (test 'ok the*-bar)
+  (test #t values was-tagged?))
+
+;; ----------------------------------------
 ;; Check that position-consuming accessor and mutators work with
 ;; `impersonate-struct`.
 
@@ -3612,6 +3793,20 @@
   (struct b a (x))
 
   (test #t integer? (equal-hash-code (chaperone-struct (b 0) b-x (lambda (b v) v)))))
+
+;; ----------------------------------------
+;; regression test to make sure hash-ref-key
+;; wrapper proc is called with correct key
+
+(let ()
+  (define orig-key "foo")
+  (define new-key (string-copy orig-key))
+  (define ht
+    (chaperone-hash (hash orig-key 42)
+                    (lambda (h k) (values k (lambda (h k v) v)))
+                    (lambda (h k v) (values k v))
+                    (lambda (h k) k) (lambda (h k) k)))
+  (test orig-key hash-ref-key ht new-key))
 
 ;; ----------------------------------------
 

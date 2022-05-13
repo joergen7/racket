@@ -18,16 +18,16 @@
 #include "popcount.h"
 
 /* locally defined functions */
-static void segment_tell PROTO((uptr seg));
-static void check_heap_dirty_msg PROTO((char *msg, ptr *x));
-static IBOOL dirty_listedp PROTO((seginfo *x, IGEN from_g, IGEN to_g));
-static void check_dirty_space PROTO((ISPC s));
-static void check_dirty PROTO((void));
-static void check_locked_object PROTO((ptr p, IBOOL locked, IGEN g, IBOOL aftergc, IGEN mcg));
+static void segment_tell(uptr seg);
+static void check_heap_dirty_msg(char *msg, ptr *x);
+static IBOOL dirty_listedp(seginfo *x, IGEN from_g, IGEN to_g);
+static void check_dirty_space(ISPC s);
+static void check_dirty(void);
+static void check_locked_object(ptr p, IBOOL locked, IGEN g, IBOOL aftergc, IGEN mcg);
 
 static IBOOL checkheap_noisy;
 
-void S_gc_init() {
+void S_gc_init(void) {
   IGEN g; INT i;
 
   S_checkheap = 0; /* 0 for disabled, 1 for enabled */
@@ -182,10 +182,10 @@ void S_set_minmarkgen(IGEN g) {
   S_G.min_mark_gen = g;
 }
 
-void S_immobilize_object(x) ptr x; {
+void S_immobilize_object(ptr x) {
   seginfo *si;
 
-  if (IMMEDIATE(x))
+  if (FIXMEDIATE(x))
     si = NULL;
   else
     si = MaybeSegInfo(ptr_get_segment(x));
@@ -209,10 +209,10 @@ void S_immobilize_object(x) ptr x; {
   }
 }
 
-void S_mobilize_object(x) ptr x; {
+void S_mobilize_object(ptr x) {
   seginfo *si;
 
-  if (IMMEDIATE(x))
+  if (FIXMEDIATE(x))
     si = NULL;
   else
     si = MaybeSegInfo(ptr_get_segment(x));
@@ -231,7 +231,7 @@ void S_mobilize_object(x) ptr x; {
   }
 }
 
-static IBOOL memqp(x, ls) ptr x, ls; {
+static IBOOL memqp(ptr x, ptr ls) {
   for (;;) {
     if (ls == Snil) return 0;
     if (Scar(ls) == x) return 1;
@@ -239,7 +239,7 @@ static IBOOL memqp(x, ls) ptr x, ls; {
   }
 }
 
-static IBOOL remove_first_nomorep(x, pls, look) ptr x, *pls; IBOOL look; {
+static IBOOL remove_first_nomorep(ptr x, ptr *pls, IBOOL look) {
   ptr ls;
 
   for (;;) {
@@ -258,10 +258,10 @@ static IBOOL remove_first_nomorep(x, pls, look) ptr x, *pls; IBOOL look; {
   return 0;
 }
 
-IBOOL Slocked_objectp(x) ptr x; {
+IBOOL Slocked_objectp(ptr x) {
   seginfo *si; IGEN g; IBOOL ans; ptr ls;
 
-  if (IMMEDIATE(x) || (si = MaybeSegInfo(ptr_get_segment(x))) == NULL || (g = si->generation) == static_generation) return 1;
+  if (FIXMEDIATE(x) || (si = MaybeSegInfo(ptr_get_segment(x))) == NULL || (g = si->generation) == static_generation) return 1;
 
   tc_mutex_acquire();
 
@@ -295,11 +295,11 @@ ptr S_locked_objects(void) {
   return ans;
 }
 
-void Slock_object(x) ptr x; {
+void Slock_object(ptr x) {
   seginfo *si; IGEN g;
 
  /* weed out pointers that won't be relocated */
-  if (!IMMEDIATE(x) && (si = MaybeSegInfo(ptr_get_segment(x))) != NULL && (g = si->generation) != static_generation) {
+  if (!FIXMEDIATE(x) && (si = MaybeSegInfo(ptr_get_segment(x))) != NULL && (g = si->generation) != static_generation) {
     ptr tc = get_thread_context();
     tc_mutex_acquire();
     THREAD_GC(tc)->during_alloc += 1;
@@ -320,10 +320,10 @@ void Slock_object(x) ptr x; {
   }
 }
 
-void Sunlock_object(x) ptr x; {
+void Sunlock_object(ptr x) {
   seginfo *si; IGEN g;
 
-  if (!IMMEDIATE(x) && (si = MaybeSegInfo(ptr_get_segment(x))) != NULL && (g = si->generation) != static_generation) {
+  if (!FIXMEDIATE(x) && (si = MaybeSegInfo(ptr_get_segment(x))) != NULL && (g = si->generation) != static_generation) {
     ptr tc = get_thread_context();
     tc_mutex_acquire();
     THREAD_GC(tc)->during_alloc += 1;
@@ -479,7 +479,7 @@ seginfo *S_ptr_seginfo(ptr p) {
 /* Scompact_heap().  Compact into as few O/S chunks as possible and
  * move objects into static generation
  */
-void Scompact_heap() {
+void Scompact_heap(void) {
   ptr tc = get_thread_context();
   IBOOL eoc = S_G.enable_object_counts;
   THREAD_GC(tc)->during_alloc += 1;
@@ -514,7 +514,7 @@ void Scompact_heap() {
 # define Ptd "%td"
 #endif
 
-static void segment_tell(seg) uptr seg; {
+static void segment_tell(uptr seg) {
   seginfo *si;
   ISPC s, s1;
   static char *spacename[max_space+1] = { alloc_space_names };
@@ -548,9 +548,33 @@ void S_addr_tell(ptr p) {
   segment_tell(addr_get_segment(p));
 }
 
-static void check_pointer(ptr *pp, IBOOL address_is_meaningful, ptr base, uptr seg, ISPC s, IBOOL aftergc) {
+static int maybe_inexactnum_marked(ptr p, seginfo *psi) {
+  /* test for possible flonum within marked inexactnum */
+  uptr real_delta = (uptr)TO_PTR(&INEXACTNUM_REAL_PART(TYPE((ptr)0, type_typed_object)));
+  uptr imag_delta = (uptr)TO_PTR(&INEXACTNUM_IMAG_PART(TYPE((ptr)0, type_typed_object)));
+  ptr maybe_pr = TYPE((uptr)UNTYPE(p, type_flonum) - real_delta, type_typed_object);
+  ptr maybe_pi = TYPE((uptr)UNTYPE(p, type_flonum) - imag_delta, type_typed_object);
+
+  if ((MaybeSegInfo(ptr_get_segment(maybe_pr)) == psi)
+      && (psi->marked_mask[segment_bitmap_byte(maybe_pr)] & segment_bitmap_bit(maybe_pr))) {
+    return 1;
+  }
+
+  if ((MaybeSegInfo(ptr_get_segment(maybe_pi)) == psi)
+      && (psi->marked_mask[segment_bitmap_byte(maybe_pi)] & segment_bitmap_bit(maybe_pi))) {
+    return 1;
+  }
+
+  return 0;
+}
+
+static void check_pointer(ptr *pp, IBOOL address_is_meaningful, IBOOL is_reference, ptr base, uptr seg, ISPC s, IBOOL aftergc) {
   ptr p = *pp;
-  if (!IMMEDIATE(p)) {
+
+  if (is_reference)
+    p = S_maybe_reference_to_object(p);
+
+  if (!FIXMEDIATE(p)) {
     seginfo *psi = MaybeSegInfo(ptr_get_segment(p));
     if (psi != NULL) {
       if ((psi->space == space_empty)
@@ -558,7 +582,11 @@ static void check_pointer(ptr *pp, IBOOL address_is_meaningful, ptr base, uptr s
           || (psi->marked_mask && !(psi->marked_mask[segment_bitmap_byte(p)] & segment_bitmap_bit(p))
               /* corner case: a continuation in space_count_pure can refer to code via CLOSENTRY
                  where the entry point doesn't have a mark bit: */
-              && !((s == space_count_pure) && (psi->space == space_code)))) {
+              && !((s == space_count_pure) && (psi->space == space_code))
+              /* another corner case: a flonum might be inside a marked inexactnum */
+              && !(Sflonump(p)
+                   && ((psi->space == space_data) || (psi->space == space_new))
+                   && maybe_inexactnum_marked(p, psi)))) {
         S_checkheap_errors += 1;
         printf("!!! dangling reference at %s"PHtx" to "PHtx"%s\n",
                (address_is_meaningful ? "" : "insideof "),
@@ -578,7 +606,7 @@ static void check_pointer(ptr *pp, IBOOL address_is_meaningful, ptr base, uptr s
       }
 
       if (address_is_meaningful) {
-        seginfo *ppsi = MaybeSegInfo(ptr_get_segment(TO_PTR(pp)));
+        seginfo *ppsi = MaybeSegInfo(addr_get_segment(TO_PTR(pp)));
         if ((ppsi != NULL)
             && (ppsi->generation > psi->generation)
             /* space_data includes stacks, which are always swept */
@@ -635,17 +663,17 @@ static ptr *find_nl(ptr *pp1, ptr *pp2, ISPC s, IGEN g) {
 
 #endif
 
-static void check_heap_dirty_msg(msg, x) char *msg; ptr *x; {
+static void check_heap_dirty_msg(char *msg, ptr *x) {
     INT d; seginfo *si;
 
     si = SegInfo(addr_get_segment(TO_PTR(x)));
     d = (INT)(((uptr)TO_PTR(x) >> card_offset_bits) & ((1 << segment_card_offset_bits) - 1));
     printf("%s dirty byte %d found in segment "PHtx", card %d at "PHtx"\n", msg, si->dirty_bytes[d], (ptrdiff_t)(si->number), d, (ptrdiff_t)x);
     printf("from "); segment_tell(addr_get_segment(TO_PTR(x)));
-    printf("to   "); segment_tell(addr_get_segment(*x));
+    printf("to   "); segment_tell(ptr_get_segment(*x));
 }
 
-void S_check_heap(aftergc, mcg) IBOOL aftergc; IGEN mcg; {
+void S_check_heap(IBOOL aftergc, IGEN mcg) {
   uptr seg; INT d; ISPC s; IGEN g; IDIRTYBYTE dirty; IBOOL found_eos; IGEN pg;
   ptr p, *pp1, *pp2, *nl;
   iptr i, for_code;
@@ -769,7 +797,7 @@ void S_check_heap(aftergc, mcg) IBOOL aftergc; IGEN mcg; {
           } else if (s == space_impure || s == space_symbol || s == space_pure || s == space_weakpair || s == space_ephemeron
                      || s == space_immobile_impure || s == space_count_pure || s == space_count_impure || s == space_closure
                      || s == space_pure_typed_object || s == space_continuation || s == space_port || s == space_code
-                     || s == space_impure_record || s == space_impure_typed_object) {
+                     || s == space_impure_record || s == space_impure_typed_object || s == space_reference_array) {
             ptr start;
           
             /* check for dangling references */
@@ -884,7 +912,7 @@ void S_check_heap(aftergc, mcg) IBOOL aftergc; IGEN mcg; {
                 if (!si->marked_mask || (si->marked_mask[segment_bitmap_byte(TO_PTR(pp1))] & segment_bitmap_bit(TO_PTR(pp1)))) {
                   int a;
                   for (a = 0; (a < ptr_alignment) && (pp1 < pp2); a++) {
-#define         in_ephemeron_pair_part(pp1, seg) ((((uptr)TO_PTR(pp1) - (uptr)build_ptr(seg, 0)) % size_ephemeron) < size_pair)
+#define             in_ephemeron_pair_part(pp1, seg) ((((uptr)TO_PTR(pp1) - (uptr)build_ptr(seg, 0)) % size_ephemeron) < size_pair)
                     if ((s == space_ephemeron) && !in_ephemeron_pair_part(pp1, seg)) {
                       /* skip non-pair part of ephemeron */
                     } else {
@@ -893,7 +921,7 @@ void S_check_heap(aftergc, mcg) IBOOL aftergc; IGEN mcg; {
                         pp1 = pp2; /* break out of outer loop */
                         break;
                       } else {
-                        check_pointer(pp1, 1, (ptr)0, seg, s, aftergc);
+                        check_pointer(pp1, 1, (s == space_reference_array), (ptr)0, seg, s, aftergc);
                       }
                     }
                     pp1 += 1;
@@ -905,7 +933,7 @@ void S_check_heap(aftergc, mcg) IBOOL aftergc; IGEN mcg; {
 
             /* further verify that dirty bits are set appropriately; only handles some spaces
                to make sure that the dirty byte is not unnecessarily approximate, but we have also
-               checked dirty bytes alerady via `check_pointer` */
+               checked dirty bytes already via `check_pointer` */
             if (s == space_impure || s == space_symbol || s == space_weakpair || s == space_ephemeron
                 || s == space_immobile_impure || s == space_closure) {
               found_eos = 0;
@@ -945,7 +973,7 @@ void S_check_heap(aftergc, mcg) IBOOL aftergc; IGEN mcg; {
                           found_eos = 1;
                           pp1 = pp2;
                           break;
-                        } else if (!IMMEDIATE(p)) {
+                        } else if (!FIXMEDIATE(p)) {
                           seginfo *psi = MaybeSegInfo(ptr_get_segment(p));
                           if ((psi != NULL) && ((pg = psi->generation) < g)) {
                             if (pg < dirty) dirty = pg;
@@ -997,7 +1025,7 @@ void S_check_heap(aftergc, mcg) IBOOL aftergc; IGEN mcg; {
               && (g == 0
                   || (s != space_new && s != space_impure && s != space_symbol && s != space_port && s != space_weakpair && s != space_ephemeron
                       && s != space_impure_record && s != space_impure_typed_object
-                      && s != space_immobile_impure && s != space_count_impure && s != space_closure))) {
+                      && s != space_immobile_impure && s != space_count_impure && s != space_closure && s != space_reference_array))) {
             for (d = 0; d < cards_per_segment; d += 1) {
               if (si->dirty_bytes[d] != 0xff) {
                 S_checkheap_errors += 1;
@@ -1069,7 +1097,7 @@ static void check_dirty_space(ISPC s) {
   }
 }
 
-static void check_dirty() {
+static void check_dirty(void) {
   IGEN from_g, to_g; seginfo *si;
 
   for (from_g = 1; from_g <= static_generation; from_g = from_g == S_G.max_nonstatic_generation ? static_generation : from_g + 1) {
@@ -1095,7 +1123,7 @@ static void check_dirty() {
           }
           if (s != space_new && s != space_impure && s != space_count_impure && s != space_symbol && s != space_port
               && s != space_impure_record && s != space_impure_typed_object && s != space_immobile_impure 
-              && s != space_weakpair && s != space_ephemeron && s != space_closure) {
+              && s != space_weakpair && s != space_ephemeron && s != space_closure && s != space_reference_array) {
             S_checkheap_errors += 1;
             printf("!!! (check_dirty): unexpected space %d for dirty segment "PHtx"\n", s, (ptrdiff_t)(si->number));
           }
@@ -1112,6 +1140,7 @@ static void check_dirty() {
   check_dirty_space(space_weakpair);
   check_dirty_space(space_ephemeron);
   check_dirty_space(space_immobile_impure);
+  check_dirty_space(space_reference_array);
 
   fflush(stdout);
 }

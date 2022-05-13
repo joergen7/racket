@@ -11,15 +11,17 @@
          "../syntax/module-binding.rkt"
          "../syntax/local-binding.rkt"
          "../syntax/bulk-binding.rkt"
+         "../syntax/like-ambiguous-binding.rkt"
          "../namespace/provided.rkt"
          "../common/module-path.rkt"
          "../common/module-path-intern.rkt"
+         "../common/phase+space.rkt"
          "module-use.rkt"
          "../host/linklet.rkt"
          "built-in-symbol.rkt"
          "reserved-symbol.rkt")
 
-;; Serialization is mostly for syntax object and module path indexes.
+;; Serialization is mostly for syntax objects and module path indexes.
 ;;
 ;; Serialization is implemented by a combination of direct handling
 ;; for some primitive datatypes, `prop:serialize` handlers attached
@@ -73,12 +75,14 @@
          add-module-path-index!
          add-module-path-index!/pos
          generate-module-path-index-deserialize
+         deserialize-module-path-index-data
          mpis-as-vector
 
          generate-module-data-linklet
          generate-module-declaration-linklet
 
-         generate-deserialize
+         generate-deserialize ; i.e., `serialize`
+         deserialize-data
 
          deserialize-instance
          deserialize-imports
@@ -112,7 +116,8 @@
             (hash-set! positions mpi pos)
             pos)))]))
 
-(define (generate-module-path-index-deserialize mpis)
+(define (generate-module-path-index-deserialize mpis
+                                                #:as-data? [as-data? #f])
   (define (unique-list v)
     (if (pair? v)
         (for/list ([i (in-list v)]) i) ; avoid non-deterministic sharing
@@ -150,13 +155,18 @@
         (vector path)]
        [base
         (vector path (hash-ref gen-order base))])))
-  `(deserialize-module-path-indexes
-    ;; Vector of deserialization instructions, where earlier
-    ;; must be constructed first:
-    ',gens
-    ;; Vector of reordering to match reference order:
-    ',(for/vector ([i (in-range (hash-count rev-positions))])
-        (hash-ref gen-order (hash-ref rev-positions i)))))
+  (define reorder-vec
+    (for/vector ([i (in-range (hash-count rev-positions))])
+      (hash-ref gen-order (hash-ref rev-positions i))))
+  (cond
+    [as-data? (vector gens reorder-vec)]
+    [else
+     `(deserialize-module-path-indexes
+       ;; Vector of deserialization instructions, where earlier
+       ;; must be constructed first:
+       ',gens
+       ;; Vector of reordering to match reference order:
+       ',reorder-vec)]))
 
 (define (deserialize-module-path-indexes gen-vec order-vec)
   (define gen (make-vector (vector-length gen-vec) #f))
@@ -174,6 +184,11 @@
                                            (vector*-ref gen (vector*-ref d 1))))])))
   (for/vector #:length (vector-length order-vec) ([p (in-vector order-vec)])
               (vector*-ref gen p)))
+
+(define (deserialize-module-path-index-data v)
+  (unless (and (vector? v) (= 2 (vector-length v)))
+    (error 'syntax-deserialize "ill-formed serialization"))
+  (deserialize-module-path-indexes (vector-ref v 0) (vector-ref v 1)))
 
 (define (mpis-as-vector mpis)
   (define positions (module-path-index-table-positions mpis))
@@ -214,7 +229,8 @@
       ,(generate-module-path-index-deserialize mpis))))
 
 (define (generate-module-declaration-linklet mpis self requires provides
-                                             phase-to-link-module-uses-expr)
+                                             phase-to-link-module-uses-expr
+                                             portal-stxes)
   `(linklet
     ;; imports
     (,deserialize-imports
@@ -223,12 +239,15 @@
     (self-mpi
      requires
      provides
-     phase-to-link-modules)
+     phase-to-link-modules
+     portal-stxes)
     ;; body
     (define-values (self-mpi) ,(add-module-path-index! mpis self))
-    (define-values (requires) ,(generate-deserialize requires mpis #:syntax-support? #f))
-    (define-values (provides) ,(generate-deserialize provides mpis #:syntax-support? #f))
-    (define-values (phase-to-link-modules) ,phase-to-link-module-uses-expr)))
+    (define-values (requires) ,(generate-deserialize requires #:mpis mpis #:syntax-support? #f))
+    (define-values (provides) ,(generate-deserialize provides #:mpis mpis #:syntax-support? #f
+                                                     #:phase+space-hasheqv provides))
+    (define-values (phase-to-link-modules) ,phase-to-link-module-uses-expr)
+    (define-values (portal-stxes) (quote ,portal-stxes))))
 
 ;; ----------------------------------------
 ;; Module-use serialization --- as an expression, like module path
@@ -261,11 +280,25 @@
 ;; ----------------------------------------
 ;; Serialization for everything else
 
-(define (generate-deserialize v mpis #:syntax-support? [syntax-support? #t])
-  (define reachable-scopes (find-reachable-scopes v))
-  
-  (define state (make-serialize-state reachable-scopes))
-  
+(define (generate-deserialize v
+                              #:mpis mpis
+                              #:as-data? [as-data? #f]
+                              #:syntax-support? [syntax-support? #t]
+                              #:preserve-prop-keys [preserve-prop-keys #hasheq()]
+                              #:keep-provides? [keep-provides? #f]
+                              #:phase+space-hasheqv [phase+space-hasheqv #f]) ; keys of this value must be interned
+  (define bulk-shifts (and keep-provides? (list (make-hasheq))))
+
+  (define reachable-scopes (find-reachable-scopes v bulk-shifts))
+
+  (define state (make-serialize-state reachable-scopes
+                                      preserve-prop-keys
+                                      (and keep-provides?
+                                           (lambda (b)
+                                             (define name (hash-ref (car bulk-shifts) b #f))
+                                             (or (not name) ; shouldn't happen
+                                                 (keep-provides? name))))))
+
   (define mutables (make-hasheq)) ; v -> pos
   (define objs (make-hasheq))     ; v -> step
   (define shares (make-hasheq))   ; v -> #t
@@ -482,7 +515,9 @@
                            [else '#:set])
                           (cond
                            [(hash-eq? v) '#:hasheq]
-                           [(hash-eqv? v) '#:hasheqv]
+                           [(hash-eqv? v) (if (eq? v phase+space-hasheqv)
+                                              '#:hasheqv/phase+space
+                                              '#:hasheqv)]
                            [else '#:hash])))
       (ser-push! 'exact (hash-count v))
       (define ks (sorted-hash-keys v))
@@ -612,29 +647,38 @@
       (reap-stream!)))
   
   ;; Put it all together:
-  (define (finish mutable-shell-bindings-expr shared-bindings-expr  mutable-fills-expr result-expr)
-    `(deserialize
-      ,mpi-vector-id
-      ,(if syntax-support? inspector-id #f)
-      ,(if syntax-support? bulk-binding-registry-id #f)
-      ',(hash-count mutables)
-      ,mutable-shell-bindings-expr
-      ',(hash-count shares)
-      ,shared-bindings-expr
-      ,mutable-fills-expr
-      ,result-expr))
+  (cond
+    [as-data?
+     (vector (hash-count mutables)
+             mutable-shell-bindings
+             (hash-count shares)
+             shared-bindings
+             mutable-fills
+             result)]
+    [else
+     (define (finish mutable-shell-bindings-expr shared-bindings-expr  mutable-fills-expr result-expr)
+       `(deserialize
+         ,mpi-vector-id
+         ,(if syntax-support? inspector-id #f)
+         ,(if syntax-support? bulk-binding-registry-id #f)
+         ',(hash-count mutables)
+         ,mutable-shell-bindings-expr
+         ',(hash-count shares)
+         ,shared-bindings-expr
+         ,mutable-fills-expr
+         ,result-expr))
 
-  ;; Putting the quoted-data construction into one vector makes
-  ;; it easy to specialize in some back ends to a more compact
-  ;; format.
-  `(let-values ([(data) ',(vector mutable-shell-bindings
-                                  shared-bindings
-                                  mutable-fills
-                                  result)])
-     ,(finish '(unsafe-vector*-ref data 0)
-              '(unsafe-vector*-ref data 1)
-              '(unsafe-vector*-ref data 2)
-              '(unsafe-vector*-ref data 3))))
+     ;; Putting the quoted-data construction into one vector makes
+     ;; it easy to specialize in some back ends to a more compact
+     ;; format.
+     `(let-values ([(data) ',(vector mutable-shell-bindings
+                                     shared-bindings
+                                     mutable-fills
+                                     result)])
+        ,(finish '(unsafe-vector*-ref data 0)
+                 '(unsafe-vector*-ref data 1)
+                 '(unsafe-vector*-ref data 2)
+                 '(unsafe-vector*-ref data 3)))]))
 
 (define (sorted-hash-keys ht)
   (define ks (hash-keys ht))
@@ -687,6 +731,17 @@
   (define-values (result done-pos)
     (decode result-vec 0 mpis inspector bulk-binding-registry shared))
   result)
+
+(define (deserialize-data mpis inspector bulk-binding-registry data)
+  (unless (and (vector? data) (= 6 (vector-length data)))
+    (error 'syntax-deserialize "ill-formed serialization"))
+  (deserialize mpis inspector bulk-binding-registry
+               (vector-ref data 0)
+               (vector-ref data 1)
+               (vector-ref data 2)
+               (vector-ref data 3)
+               (vector-ref data 4)
+               (vector-ref data 5)))
 
 ;; Decode the construction of a mutable variable
 (define (decode-shell vec pos mpis inspector bulk-binding-registry shared)
@@ -777,6 +832,11 @@
      (define len (vector*-ref vec (add1 pos)))
      (for/fold ([ht ht] [pos (+ pos 2)]) ([i (in-range len)])
        (decodes #:pos pos (k v) (hash-set ht k v)))]
+    [(#:hasheqv/phase+space)
+     (define ht (hasheqv))
+     (define len (vector*-ref vec (add1 pos)))
+     (for/fold ([ht ht] [pos (+ pos 2)]) ([i (in-range len)])
+       (decodes #:pos pos (k v) (hash-set ht (intern-phase+space k) v)))]
     [(#:set #:seteq #:seteqv)
      (define s (case (vector*-ref vec pos)
                  [(#:set) (set)]
@@ -825,6 +885,10 @@
      (decode* (deserialize-full-local-binding key free=id))]
     [(#:bulk-binding)
      (decode* (deserialize-bulk-binding prefix excepts mpi provide-phase-level phase-shift bulk-binding-registry))]
+    [(#:like-ambiguous-binding)
+     (decode* (like-ambiguous-binding))]
+    [(#:bulk-binding+provides)
+     (decode* (deserialize-bulk-binding+provides provides self prefix excepts mpi provide-phase-level phase-shift bulk-binding-registry))]
     [(#:provided)
      (decode* (deserialize-provided binding protected? syntax?))]
     [else
@@ -874,13 +938,23 @@
 ;; ----------------------------------------
 ;; For pruning unreachable scopes in serialization
 
-(define (find-reachable-scopes v)
+(define (find-reachable-scopes v bulk-shifts)
   (define seen (make-hasheq))
-  (define reachable-scopes (seteq))
+  (define reachable-scopes (interned-scopes))
   (define (get-reachable-scopes) reachable-scopes)
   (define scope-triggers (make-hasheq))
 
-  (let loop ([v v])
+  ;; `bulk-shifts` is used to propagate shifts from a syntax object to
+  ;; binding tables when bulk-binding provides will be preserved, in
+  ;; case scope-specific bindings need to be reified; a `bulk-shifts`
+  ;; list is an `extra-shifts` prefixed by an eq-based table to record
+  ;; resolved module paths; setting it to #f means that bulk-binding
+  ;; provides are not preserved (i.e., they will be shared with the
+  ;; providing module on demand), and no bulk-shifts propagation is
+  ;; needed; for now, we conservatively force all bulk-binding
+  ;; provides to be reified when any will be preserved
+
+  (let loop ([v v] [bulk-shifts bulk-shifts])
     (cond
      [(interned-literal? v) (void)]
      [(hash-ref seen v #f) (void)]
@@ -889,8 +963,8 @@
       (cond
        [(scope-with-bindings? v)
         (set! reachable-scopes (set-add reachable-scopes v))
-        
-        ((reach-scopes-ref v) v loop)
+
+        ((reach-scopes-ref v) v bulk-shifts loop)
 
         (for ([proc (in-list (hash-ref scope-triggers v null))])
           (proc loop))
@@ -899,10 +973,11 @@
         ;; A binding may have a `free-id=?` equivalence;
         ;; that equivalence is reachable if all the scopes in the
         ;; binding set are reachable; for a so-far unreachable scope,
-        ;; record a trigger in case the scope bcomes reachable later
+        ;; record a trigger in case the scope becomes reachable later
         ((scope-with-bindings-ref v)
          v
          get-reachable-scopes
+         bulk-shifts
          loop
          (lambda (sc-unreachable b)
            (hash-update! scope-triggers
@@ -910,24 +985,24 @@
                          (lambda (l) (cons b l))
                          null)))]
        [(reach-scopes? v)
-        ((reach-scopes-ref v) v loop)]
+        ((reach-scopes-ref v) v bulk-shifts loop)]
        [(pair? v)
-        (loop (car v))
-        (loop (cdr v))]
+        (loop (car v) bulk-shifts)
+        (loop (cdr v) bulk-shifts)]
        [(vector? v)
         (for ([e (in-vector v)])
-          (loop e))]
+          (loop e bulk-shifts))]
        [(box? v)
-        (loop (unbox v))]
+        (loop (unbox v) bulk-shifts)]
        [(hash? v)
         (for ([(k v) (in-hash v)])
-          (loop k)
-          (loop v))]
+          (loop k bulk-shifts)
+          (loop v bulk-shifts))]
        [(prefab-struct-key v)
         (for ([e (in-vector (struct->vector v) 1)])
-          (loop e))]
+          (loop e bulk-shifts))]
        [(srcloc? v)
-        (loop (srcloc-source v))]
+        (loop (srcloc-source v) bulk-shifts)]
        [else
         (void)])]))
   

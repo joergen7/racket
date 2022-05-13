@@ -28,6 +28,7 @@ READ_ONLY Scheme_Object *scheme_app_mark_impersonator_property;
 READ_ONLY Scheme_Object *scheme_object_name_property;
 READ_ONLY Scheme_Object *scheme_struct_to_vector_proc;
 READ_ONLY Scheme_Object *scheme_authentic_property;
+READ_ONLY Scheme_Object *scheme_sealed_property;
 READ_ONLY Scheme_Object *scheme_unsafe_poller_proc;
 
 READ_ONLY static Scheme_Object *location_struct;
@@ -115,6 +116,8 @@ static Scheme_Object *struct_info(int argc, Scheme_Object *argv[]);
 static Scheme_Object *struct_type_info(int argc, Scheme_Object *argv[]);
 static Scheme_Object *struct_type_pred(int argc, Scheme_Object *argv[]);
 static Scheme_Object *struct_type_constr(int argc, Scheme_Object *argv[]);
+static Scheme_Object *struct_type_sealed_p(int argc, Scheme_Object *argv[]);
+static Scheme_Object *struct_type_authentic_p(int argc, Scheme_Object *argv[]);
 static Scheme_Object *struct_to_vector(int argc, Scheme_Object *argv[]);
 static Scheme_Object *prefab_struct_key(int argc, Scheme_Object *argv[]);
 static Scheme_Object *make_prefab_struct(int argc, Scheme_Object *argv[]);
@@ -131,6 +134,9 @@ static Scheme_Object *chaperone_prop_getter_p(int argc, Scheme_Object *argv[]);
 
 static Scheme_Object *make_struct_proc(Scheme_Struct_Type *struct_type, char *func_name,
 				       Scheme_ProcT proc_type, int field_num);
+static Scheme_Object *make_struct_proc_for_realm(Scheme_Struct_Type *struct_type,
+                                                 char *func_name, Scheme_Object *realm, Scheme_Object *contract,
+                                                 Scheme_ProcT proc_type, int field_num);
 
 static Scheme_Object *make_name(const char *pre, const char *tn, int tnl, const char *post1,
 				const char *fn, int fnl, const char *post2, int sym);
@@ -445,6 +451,12 @@ scheme_init_struct (Scheme_Startup_Env *env)
     scheme_addto_prim_instance("prop:authentic", scheme_authentic_property, env);
   }
 
+  {
+    REGISTER_SO(scheme_sealed_property);
+    scheme_sealed_property = scheme_make_struct_type_property(scheme_intern_symbol("sealed"));
+    scheme_addto_prim_instance("prop:sealed", scheme_sealed_property, env);
+  }
+
   REGISTER_SO(scheme_recur_symbol);
   REGISTER_SO(scheme_display_symbol);
   REGISTER_SO(scheme_write_special_symbol);
@@ -467,7 +479,7 @@ scheme_init_struct (Scheme_Startup_Env *env)
   REGISTER_SO(scheme_make_struct_type_property_proc);
   scheme_make_struct_type_property_proc = scheme_make_prim_w_arity2(make_struct_type_property,
                                                                     "make-struct-type-property",
-                                                                    1, 4,
+                                                                    1, 7,
                                                                     3, 3);
   scheme_addto_prim_instance("make-struct-type-property",
                              scheme_make_struct_type_property_proc,
@@ -476,7 +488,7 @@ scheme_init_struct (Scheme_Startup_Env *env)
   REGISTER_SO(scheme_make_struct_field_accessor_proc);
   scheme_make_struct_field_accessor_proc = scheme_make_prim_w_arity(make_struct_field_accessor,
                                                                     "make-struct-field-accessor",
-                                                                    2, 3);
+                                                                    2, 5);
   scheme_addto_prim_instance("make-struct-field-accessor",
                              scheme_make_struct_field_accessor_proc,
 			     env);
@@ -484,7 +496,7 @@ scheme_init_struct (Scheme_Startup_Env *env)
   REGISTER_SO(scheme_make_struct_field_mutator_proc);
   scheme_make_struct_field_mutator_proc = scheme_make_prim_w_arity(make_struct_field_mutator,
                                                                    "make-struct-field-mutator",
-                                                                   2, 3);
+                                                                   2, 5);
   scheme_addto_prim_instance("make-struct-field-mutator",
 			     scheme_make_struct_field_mutator_proc,
 			     env);
@@ -576,6 +588,16 @@ scheme_init_struct (Scheme_Startup_Env *env)
 			     scheme_make_prim_w_arity(struct_type_constr,
 						      "struct-type-make-constructor",
 						      1, 2),
+			     env);
+  scheme_addto_prim_instance("struct-type-sealed?",
+			     scheme_make_prim_w_arity(struct_type_sealed_p,
+						      "struct-type-sealed?",
+						      1, 1),
+			     env);
+  scheme_addto_prim_instance("struct-type-authentic?",
+			     scheme_make_prim_w_arity(struct_type_authentic_p,
+						      "struct-type-authentic?",
+						      1, 1),
 			     env);
 
   REGISTER_SO(scheme_struct_to_vector_proc);
@@ -1165,9 +1187,16 @@ static Scheme_Object *prop_accessor(int argc, Scheme_Object **args, Scheme_Objec
   if (v)
     return v;
   else if (argc == 1) {
-    scheme_wrong_contract(((Scheme_Primitive_Proc *)prim)->name,
-                          pred_name_string(((Scheme_Struct_Property *)SCHEME_PRIM_CLOSURE_ELS(prim)[0])->name),
-                          0, 1, args);
+    Scheme_Struct_Property *prop = (Scheme_Struct_Property *)SCHEME_PRIM_CLOSURE_ELS(prim)[0];
+    const char *ctc;
+    if (prop->contract_name) {
+      if (SCHEME_SYMBOLP(prop->contract_name))
+        ctc = scheme_symbol_val(prop->contract_name);
+      else
+        ctc = SCHEME_BYTE_STR_VAL(scheme_char_string_to_byte_string(prop->contract_name));
+    } else
+      ctc = pred_name_string(prop->name);
+    scheme_wrong_contract(((Scheme_Primitive_Proc *)prim)->name, ctc, 0, 1, args);
     return NULL;
   } else {
     v = args[1];
@@ -1189,6 +1218,7 @@ static Scheme_Object *make_struct_type_property_from_c(int argc, Scheme_Object *
   int len;
   const char *who;
   char can_impersonate = 0;
+  Scheme_Object *accessor_name = NULL, *contract_name = NULL, *realm = scheme_default_realm;
 
   if (type == scheme_struct_property_type)
     who = "make-struct-type-property";
@@ -1232,8 +1262,31 @@ static Scheme_Object *make_struct_type_property_from_c(int argc, Scheme_Object *
                               2, argc, argv);
       }
 
-      if (argc > 3)
+      if (argc > 3) {
         can_impersonate = SCHEME_TRUEP(argv[3]);
+
+        if (argc > 4) {
+          if (SCHEME_TRUEP(argv[4])) {
+            accessor_name = argv[4];
+            if (!SCHEME_SYMBOLP(accessor_name))
+              scheme_wrong_contract(who, "(or/c symbol? #f)", 5, argc, argv);
+          }
+
+          if (argc > 5) {
+            if (SCHEME_TRUEP(argv[5])) {
+              contract_name = argv[5];
+              if (!SCHEME_CHAR_STRINGP(contract_name) && !SCHEME_SYMBOLP(contract_name))
+                scheme_wrong_contract(who, "(or/c string? symbol? #f)", 5, argc, argv);
+            }
+            
+            if (argc > 6) {
+              realm = argv[6];
+              if (!SCHEME_SYMBOLP(realm))
+                scheme_wrong_contract(who, "symbol?", 6, argc, argv);
+            }
+          }
+        }
+      }
     }
   }
 
@@ -1244,6 +1297,8 @@ static Scheme_Object *make_struct_type_property_from_c(int argc, Scheme_Object *
     p->guard = argv[1];
   p->supers = supers;
   p->can_impersonate = can_impersonate;
+  p->contract_name = contract_name;
+  p->realm = realm;
 
   a[0] = (Scheme_Object *)p;
 
@@ -1257,9 +1312,13 @@ static Scheme_Object *make_struct_type_property_from_c(int argc, Scheme_Object *
   ((Scheme_Closed_Primitive_Proc *)v)->pp.flags |= SCHEME_PRIM_STRUCT_TYPE_STRUCT_PROP_PRED;
   *predout = v;
 
-  name = MALLOC_N_ATOMIC(char, len + 10);
-  memcpy(name, SCHEME_SYM_VAL(argv[0]), len);
-  memcpy(name + len, "-accessor", 10);
+  if (accessor_name) {
+    name = scheme_symbol_val(accessor_name);
+  } else {
+    name = MALLOC_N_ATOMIC(char, len + 10);
+    memcpy(name, SCHEME_SYM_VAL(argv[0]), len);
+    memcpy(name + len, "-accessor", 10);
+  }
 
   v = scheme_make_prim_closure_w_arity(prop_accessor, 1, a, name, 1, 2);
   ((Scheme_Closed_Primitive_Proc *)v)->pp.flags |= SCHEME_PRIM_TYPE_STRUCT_PROP_GETTER;
@@ -1442,7 +1501,35 @@ static int extract_accessor_offset(Scheme_Object *acc)
 
 static char *extract_field_proc_name(Scheme_Object *prim)
 {
-  return (char *)SCHEME_PRIM_CLOSURE_ELS(prim)[2];
+  if (SCHEME_CLSD_PRIMP(prim))
+    return (char *)((Scheme_Closed_Primitive_Proc *)prim)->name;
+  else
+    return (char *)((Scheme_Primitive_Proc *)prim)->name;
+}
+
+static char *extract_field_proc_name_and_realm(Scheme_Object *st_name, Scheme_Object *prim, char **_pred_name, Scheme_Object **_realm)
+{
+  Scheme_Object *name_info;
+  char *pred_name;
+    
+  name_info = SCHEME_PRIM_CLOSURE_ELS(prim)[2];
+  if (SCHEME_SYMBOLP(name_info)) {
+    *_realm = name_info;
+    pred_name = pred_name_string(st_name);    
+  } else {
+    *_realm = SCHEME_CAR(name_info);
+    name_info = SCHEME_CDR(name_info);
+    if (SCHEME_SYMBOLP(name_info))
+      pred_name = scheme_symbol_val(name_info);
+    else {
+      name_info = scheme_char_string_to_byte_string(name_info);
+      pred_name = SCHEME_BYTE_STR_VAL(name_info);
+    }
+  }
+
+  *_pred_name = pred_name;
+
+  return extract_field_proc_name(prim);
 }
 
 typedef int (*Check_Val_Proc)(Scheme_Object *);
@@ -1941,23 +2028,30 @@ Scheme_Object *scheme_extract_checked_procedure(int argc, Scheme_Object **argv)
 /*                             struct ops                                 */
 /*========================================================================*/
 
-static void wrong_struct_type(char *name, 
+static void wrong_struct_type(Scheme_Object *prim, 
 			      Scheme_Object *expected,
 			      Scheme_Object *received,
 			      int which, int argc,
 			      Scheme_Object **argv)
 {
-  if (SAME_OBJ(expected, received))
-    scheme_contract_error(name,
+  char *name, *pred_name;
+  Scheme_Object *realm;
+  
+  name = extract_field_proc_name_and_realm(expected, prim, &pred_name, &realm);
+  
+  if (SAME_OBJ(expected, received)) {
+    pred_name = (char *)scheme_contract_realm_adjust(pred_name, realm);
+    scheme_contract_error(SCHEME_NAME_PLUS_REALM_ARGUMENTS,
                           "contract violation;\n"
                           " given value instantiates a different structure type with the same name",
-                          "expected", 0, pred_name_string(expected),
+                          name, realm,
+                          "expected", 0, pred_name,
                           "given", 1, argv[which],
                           NULL);
-  else
-    scheme_wrong_contract(name,
-                          pred_name_string(expected), 
-                          which, argc, argv);
+  } else
+    scheme_wrong_contract_for_realm(name, realm,
+                                    pred_name, 
+                                    which, argc, argv);
 }
 
 #define STRUCT_TYPEP(st, v) \
@@ -2595,12 +2689,13 @@ Scheme_Object *scheme_struct_getter(int argc, Scheme_Object **args, Scheme_Objec
     inst = (Scheme_Structure *)SCHEME_CHAPERONE_VAL((Scheme_Object *)inst);
 
   if (!SCHEME_STRUCTP(((Scheme_Object *)inst))) {
-    scheme_wrong_contract(extract_field_proc_name(prim), 
-                          pred_name_string(st->name), 
-                          0, argc, args);
+    char *name, *pred_name;
+    Scheme_Object *realm;
+    name = extract_field_proc_name_and_realm(st->name, prim, &pred_name, &realm);
+    scheme_wrong_contract_for_realm(name, realm, pred_name, 0, argc, args);
     return NULL;
   } else if (!STRUCT_TYPEP(st, inst)) {
-    wrong_struct_type(extract_field_proc_name(prim), 
+    wrong_struct_type(prim,
 		      st->name, 
 		      SCHEME_STRUCT_NAME_SYM(inst), 
 		      0, argc, args);
@@ -2630,14 +2725,15 @@ Scheme_Object *scheme_struct_setter(int argc, Scheme_Object **args, Scheme_Objec
     inst = (Scheme_Structure *)SCHEME_CHAPERONE_VAL((Scheme_Object *)inst);
 
   if (!SCHEME_STRUCTP(((Scheme_Object *)inst))) {
-    scheme_wrong_contract(extract_field_proc_name(prim),
-                          pred_name_string(st->name), 
-                          0, argc, args);
+    char *name, *pred_name;
+    Scheme_Object *realm;
+    name = extract_field_proc_name_and_realm(st->name, prim, &pred_name, &realm);
+    scheme_wrong_contract_for_realm(name, realm, pred_name, 0, argc, args);
     return NULL;
   }
 	
   if (!STRUCT_TYPEP(st, inst)) {
-    wrong_struct_type(extract_field_proc_name(prim),
+    wrong_struct_type(prim,
 		      st->name, 
 		      SCHEME_STRUCT_NAME_SYM(inst),
 		      0, argc, args);
@@ -2911,7 +3007,7 @@ static void get_struct_type_info(int argc, Scheme_Object *argv[], Scheme_Object 
 
   p = stype->name_pos;
   while (--p >= 0) {
-    if (scheme_is_subinspector(stype->parent_types[p]->inspector, insp)) {
+    if (always || scheme_is_subinspector(stype->parent_types[p]->inspector, insp)) {
       break;
     }
   }
@@ -2960,6 +3056,24 @@ static Scheme_Object *struct_type_info(int argc, Scheme_Object *argv[])
   }
 
   return scheme_values(mzNUM_ST_INFO, a);
+}
+
+static Scheme_Object *struct_type_sealed_p(int argc, Scheme_Object *argv[]) {
+  if (!SCHEME_STRUCT_TYPEP(argv[0]))
+    scheme_wrong_contract("struct-type-sealed?", "struct-type?", 0, argc, argv);
+
+  return ((((Scheme_Struct_Type *)argv[0])->more_flags & STRUCT_TYPE_FLAG_SEALED)
+          ? scheme_true
+          : scheme_false);
+}
+
+static Scheme_Object *struct_type_authentic_p(int argc, Scheme_Object *argv[]) {
+  if (!SCHEME_STRUCT_TYPEP(argv[0]))
+    scheme_wrong_contract("struct-type-authentic?", "struct-type?", 0, argc, argv);
+
+  return ((((Scheme_Struct_Type *)argv[0])->more_flags & STRUCT_TYPE_FLAG_AUTHENTIC)
+          ? scheme_true
+          : scheme_false);
 }
 
 static Scheme_Object *struct_type_pred(int argc, Scheme_Object *argv[])
@@ -3428,7 +3542,8 @@ intptr_t scheme_get_or_check_structure_shape(Scheme_Object *e, Scheme_Object *ex
     else
       want_v = ((st->num_slots << STRUCT_PROC_SHAPE_SHIFT)
                 | STRUCT_PROC_SHAPE_STRUCT
-                | ((st->authentic && (!expected || (v & STRUCT_PROC_SHAPE_AUTHENTIC)))
+                | (((st->more_flags & STRUCT_TYPE_FLAG_AUTHENTIC)
+                    && (!expected || (v & STRUCT_PROC_SHAPE_AUTHENTIC)))
                    ? STRUCT_PROC_SHAPE_AUTHENTIC
                    : 0)
                 | (((st->more_flags & STRUCT_TYPE_FLAG_NONFAIL_CONSTRUCTOR)
@@ -3455,7 +3570,8 @@ intptr_t scheme_get_or_check_structure_shape(Scheme_Object *e, Scheme_Object *ex
     } else if (i == SCHEME_PRIM_STRUCT_TYPE_PRED) {
       st = (Scheme_Struct_Type *)SCHEME_PRIM_CLOSURE_ELS(e)[0];
       want_v = (STRUCT_PROC_SHAPE_PRED
-                | ((st->authentic && (!expected || (v & STRUCT_PROC_SHAPE_AUTHENTIC)))
+                | (((st->more_flags & STRUCT_TYPE_FLAG_AUTHENTIC)
+                    && (!expected || (v & STRUCT_PROC_SHAPE_AUTHENTIC)))
                    ? STRUCT_PROC_SHAPE_AUTHENTIC
                    : 0));
     } else if (i == SCHEME_PRIM_STRUCT_TYPE_INDEXED_SETTER) {
@@ -3471,7 +3587,8 @@ intptr_t scheme_get_or_check_structure_shape(Scheme_Object *e, Scheme_Object *ex
         pos = 0; /* => unknown, since simple struct info can't track it */
       want_v = ((pos << STRUCT_PROC_SHAPE_SHIFT)
                 | STRUCT_PROC_SHAPE_SETTER
-                | ((st->authentic && (!expected || (v & STRUCT_PROC_SHAPE_AUTHENTIC)))
+                | (((st->more_flags & STRUCT_TYPE_FLAG_AUTHENTIC)
+                    && (!expected || (v & STRUCT_PROC_SHAPE_AUTHENTIC)))
                    ? STRUCT_PROC_SHAPE_AUTHENTIC
                    : 0));
     } else if (i == SCHEME_PRIM_STRUCT_TYPE_INDEXED_GETTER) {
@@ -3479,7 +3596,8 @@ intptr_t scheme_get_or_check_structure_shape(Scheme_Object *e, Scheme_Object *ex
       st = (Scheme_Struct_Type *)SCHEME_PRIM_CLOSURE_ELS(e)[0];
       want_v = ((pos << STRUCT_PROC_SHAPE_SHIFT) 
                 | STRUCT_PROC_SHAPE_GETTER
-                | ((st->authentic && (!expected || (v & STRUCT_PROC_SHAPE_AUTHENTIC)))
+                | (((st->more_flags & STRUCT_TYPE_FLAG_AUTHENTIC)
+                    && (!expected || (v & STRUCT_PROC_SHAPE_AUTHENTIC)))
                    ? STRUCT_PROC_SHAPE_AUTHENTIC
                    : 0));
     } else if ((i == SCHEME_PRIM_STRUCT_TYPE_INDEXLESS_SETTER)
@@ -3565,6 +3683,7 @@ static Scheme_Object *make_struct_field_xxor(const char *who, int getter,
   char digitbuf[20];
   int fieldstrlen;
   Scheme_Struct_Type *st;
+  Scheme_Object *realm = scheme_default_realm, *contract = NULL;
 
   /* We don't allow chaperones on the getter or setter procedure, because we
      can't preserve them in the generated procedure. */
@@ -3593,30 +3712,56 @@ static Scheme_Object *make_struct_field_xxor(const char *who, int getter,
       fieldstr = scheme_symbol_val(argv[2]);
       fieldstrlen = SCHEME_SYM_LEN(argv[2]);
     }
+    if (argc > 3) {
+      if (SCHEME_FALSEP(argv[3])) {
+        name = NULL;
+      } else {
+        name = (char *)fieldstr;
+        if (!SCHEME_SYMBOLP(argv[3]) && !SCHEME_CHAR_STRINGP(argv[3]))
+          scheme_wrong_contract(who, "(or/c symbol? string? #f)", 3, argc, argv);
+        contract = argv[3];
+        if (argc > 4) {
+          if (!SCHEME_SYMBOLP(argv[4]))
+            scheme_wrong_contract(who, "symbol?", 4, argc, argv);
+          realm = argv[4];
+        }
+      }
+    } else {
+      name = NULL;
+    }
   } else {
+    fieldstr = NULL;
+    fieldstrlen = 0;
+    name = NULL;
+  }
+
+  if (!name && !fieldstr) {
     sprintf(digitbuf, "field%d", (int)SCHEME_INT_VAL(argv[1]));
     fieldstr = digitbuf;
     fieldstrlen = strlen(fieldstr);
+    name = NULL;
   }
 
   st = (Scheme_Struct_Type *)SCHEME_PRIM_CLOSURE_ELS(argv[0])[0];
 
-  if (!fieldstr) {
-    if (getter)
-      name = "accessor";
-    else
-      name = "mutator";
-  } else if (getter) {
-    name = (char *)GET_NAME((char *)st->name, -1,
-			    fieldstr, fieldstrlen, 0);
-  } else {
-    name = (char *)SET_NAME((char *)st->name, -1,
-			    fieldstr, fieldstrlen, 0);
+  if (!name) {
+    if (!fieldstr) {
+      if (getter)
+        name = "accessor";
+      else
+        name = "mutator";
+    } else if (getter) {
+      name = (char *)GET_NAME((char *)st->name, -1,
+                              fieldstr, fieldstrlen, 0);
+    } else {
+      name = (char *)SET_NAME((char *)st->name, -1,
+                              fieldstr, fieldstrlen, 0);
+    }
   }
 
-  return make_struct_proc(st, 
-			  name, 
-			  (getter ? SCHEME_GETTER : SCHEME_SETTER), pos);
+  return make_struct_proc_for_realm(st, 
+                                    name, realm, contract,
+                                    (getter ? SCHEME_GETTER : SCHEME_SETTER), pos);
 }
 
 static Scheme_Object *make_struct_field_accessor(int argc, Scheme_Object *argv[])
@@ -4444,9 +4589,9 @@ Scheme_Object **scheme_make_struct_names_from_array(const char *base,
 }
 
 static Scheme_Object *
-make_struct_proc(Scheme_Struct_Type *struct_type, 
-		 char *func_name, 
-		 Scheme_ProcT proc_type, int field_num)
+make_struct_proc_for_realm(Scheme_Struct_Type *struct_type, 
+                           char *func_name,  Scheme_Object *realm, Scheme_Object *contract,
+                           Scheme_ProcT proc_type, int field_num)
 {
   Scheme_Object *p, *a[3];
   short flags = 0;
@@ -4484,7 +4629,9 @@ make_struct_proc(Scheme_Struct_Type *struct_type,
 
     a[0] = (Scheme_Object *)struct_type;
     a[1] = scheme_make_integer(field_num);
-    a[2] = (Scheme_Object *)func_name;
+    if (contract)
+      realm = scheme_make_pair(realm, contract);
+    a[2] = realm;
 
     if ((proc_type == SCHEME_GETTER) || (proc_type == SCHEME_GEN_GETTER)) {
       p = scheme_make_folding_prim_closure(scheme_struct_getter,
@@ -4527,7 +4674,17 @@ make_struct_proc(Scheme_Struct_Type *struct_type,
   return p;
 }
 
-Scheme_Object *scheme_rename_struct_proc(Scheme_Object *p, Scheme_Object *sym)
+static Scheme_Object *
+make_struct_proc(Scheme_Struct_Type *struct_type, 
+		 char *func_name,
+		 Scheme_ProcT proc_type, int field_num)
+{
+  return make_struct_proc_for_realm(struct_type,
+                                    func_name, scheme_default_realm, NULL,
+                                    proc_type, field_num);
+}
+
+Scheme_Object *scheme_rename_struct_proc(Scheme_Object *p, Scheme_Object *sym, Scheme_Object *realm)
 {
   if (SCHEME_PRIMP(p)) {
     unsigned short flags = ((Scheme_Primitive_Proc *)p)->pp.flags;
@@ -4538,16 +4695,23 @@ Scheme_Object *scheme_rename_struct_proc(Scheme_Object *p, Scheme_Object *sym)
     if (is_getter || is_setter) {
       const char *func_name;
       Scheme_Struct_Type *st;
+      Scheme_Object *contract;
       int field_pos;
       
       func_name = scheme_symbol_name(sym);
 
       st = (Scheme_Struct_Type *)SCHEME_PRIM_CLOSURE_ELS(p)[0];
       field_pos = SCHEME_INT_VAL(SCHEME_PRIM_CLOSURE_ELS(p)[1]);
-      
-      return make_struct_proc(st, (char *)func_name, 
-                              is_getter ? SCHEME_GETTER : SCHEME_SETTER,
-                              field_pos);
+
+      contract = SCHEME_PRIM_CLOSURE_ELS(p)[2];
+      if (SCHEME_PAIRP(contract))
+        contract = SCHEME_CDR(contract);
+      else
+        contract = NULL;
+ 
+      return make_struct_proc_for_realm(st, (char *)func_name, realm, contract,
+                                        is_getter ? SCHEME_GETTER : SCHEME_SETTER,
+                                        field_pos);
     }
   }
 
@@ -4751,7 +4915,6 @@ Scheme_Struct_Type *scheme_make_prefab_struct_type_raw(Scheme_Object *base,
   struct_type->num_slots = num_fields + num_uninit_fields + (parent_type ? parent_type->num_slots : 0);
   struct_type->num_islots = num_fields + (parent_type ? parent_type->num_islots : 0);
   struct_type->name_pos = depth;
-  struct_type->authentic = 0;
   struct_type->more_flags = STRUCT_TYPE_FLAG_NONFAIL_CONSTRUCTOR;
   struct_type->inspector = scheme_false;
   struct_type->uninit_val = uninit_val;
@@ -4946,7 +5109,9 @@ static Scheme_Object *_make_struct_type(Scheme_Object *name,
         if (SAME_OBJ(prop, scheme_chaperone_undefined_property))
           chaperone_undefined = 1;
         if (SAME_OBJ(prop, scheme_authentic_property))
-          struct_type->authentic = 1;
+          struct_type->more_flags |= STRUCT_TYPE_FLAG_AUTHENTIC;
+        if (SAME_OBJ(prop, scheme_sealed_property))
+          struct_type->more_flags |= STRUCT_TYPE_FLAG_SEALED;
 
         propv = guard_property(prop, SCHEME_CDR(a), struct_type);
         
@@ -5008,7 +5173,9 @@ static Scheme_Object *_make_struct_type(Scheme_Object *name,
         if (SAME_OBJ(prop, scheme_chaperone_undefined_property))
           chaperone_undefined = 1;
         if (SAME_OBJ(prop, scheme_authentic_property))
-          struct_type->authentic = 1;
+          struct_type->more_flags |= STRUCT_TYPE_FLAG_AUTHENTIC;
+        if (SAME_OBJ(prop, scheme_sealed_property))
+          struct_type->more_flags |= STRUCT_TYPE_FLAG_SEALED;
 
         propv = guard_property(prop, SCHEME_CDR(a), struct_type);
 
@@ -5062,8 +5229,9 @@ static Scheme_Object *_make_struct_type(Scheme_Object *name,
     }
   }
 
-  if (parent_type && (parent_type->authentic != struct_type->authentic)) {
-    if (parent_type->authentic)
+  if (parent_type && ((parent_type->more_flags & STRUCT_TYPE_FLAG_AUTHENTIC)
+                      != (struct_type->more_flags & STRUCT_TYPE_FLAG_AUTHENTIC))) {
+    if (parent_type->more_flags & STRUCT_TYPE_FLAG_AUTHENTIC)
       scheme_contract_error("make-struct-type",
                             "cannot make a non-authentic subtype of an authentic type",
                             "type name", 1, struct_type->name,
@@ -5402,8 +5570,24 @@ static Scheme_Object *make_struct_type(int argc, Scheme_Object **argv)
                                           uninit_val,
                                           immutable_array);
   } else {
+    Scheme_Object *parent = SCHEME_FALSEP(argv[1]) ? NULL : argv[1];
+    Scheme_Struct_Type *parent_type;
+    
+    if (parent && SCHEME_NP_CHAPERONEP(parent))
+      parent_type = (Scheme_Struct_Type *)SCHEME_CHAPERONE_VAL(parent);
+    else
+      parent_type = (Scheme_Struct_Type *)parent;
+      
+    if (parent_type && (parent_type->more_flags & STRUCT_TYPE_FLAG_SEALED)) {
+      scheme_contract_error("make-struct-type",
+                            "cannot make a subtype of a sealed type",
+                            "type name", 1, argv[0],
+                            "sealed type", 1, parent,
+                            NULL);
+    }
+
     type = (Scheme_Struct_Type *)_make_struct_type(argv[0],
-                                                   SCHEME_FALSEP(argv[1]) ? NULL : argv[1],
+                                                   parent,
                                                    inspector,
                                                    initc, uninitc,
                                                    uninit_val, props,
@@ -6247,7 +6431,7 @@ static Scheme_Object *do_chaperone_struct(const char *name, int is_impersonator,
     return NULL;
   }
 
-  if (SCHEME_STRUCTP(val) && ((Scheme_Structure *)val)->stype->authentic) {
+  if (SCHEME_STRUCTP(val) && ((Scheme_Structure *)val)->stype->more_flags & STRUCT_TYPE_FLAG_AUTHENTIC) {
     scheme_contract_error(name,
                           (is_impersonator
                            ? "cannot impersonate instance of an authentic structure type"

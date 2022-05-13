@@ -76,6 +76,22 @@ X int hoho(int x, int(*(*f)(int))(int)) { return (f(x+1))(x-1); }
 
 X int grab7th(void *p) { return ((char *)p)[7]; }
 
+X char *second_string(char **x) { return x[1]; }
+
+X void reverse_strings(char **x) {
+  while (*x) {
+    int i, len;
+    char *s;
+    for (len = 0; (*x)[len] != 0; len++);
+    s = malloc(len + 1);
+    for (i = 0; i < len; i++)
+      s[i] = (*x)[len - i - 1];
+    s[len] = 0;
+    *x = s;
+    x++;
+  }
+}
+
 X int vec4(int x[]) { return x[0]+x[1]+x[2]+x[3]; }
 
 typedef struct _char_int { unsigned char a; int b; } char_int;
@@ -401,4 +417,9 @@ X long varargs_check(int init, int n, ...) {
   va_end(va);
 
   return accum;
+}
+
+X int callback_hungry(int (*f)(void*)) {
+  char use_stack_space[10000];
+  return f(use_stack_space);
 }

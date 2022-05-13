@@ -30,6 +30,21 @@
   (test/pos-blame 
    'listof5
    '(contract (listof integer?) (list #f #t) 'pos 'neg))
+
+  (test/spec-passed/result
+   'listof-any/c1
+   '(contract (listof any/c) '(1 2 3) 'pos 'neg)
+   '(1 2 3))
+  (test/spec-passed/result
+   'listof-any/c2
+   '(contract (listof any/c) '() 'pos 'neg)
+   '())
+  (test/pos-blame
+   'listof-any/c3
+   '(contract (listof any/c) #f 'pos 'neg))
+  (test/pos-blame
+   'listof-any/c4
+   '(contract (listof any/c) (cons 1 2) 'pos 'neg))
   
   (test/spec-passed/result 
    'nelistof1
@@ -47,6 +62,12 @@
   (test/pos-blame 
    'nelistof5
    '(contract (non-empty-listof integer?) (list #f #t) 'pos 'neg))
+  (contract-error-test
+   'nelistof6
+   '(contract (non-empty-listof integer?) '() 'pos 'neg)
+   (lambda (e)
+     (regexp-match? #rx"promised: [(]and/c list[?] pair[?][)]"
+                    (exn-message e))))
   
   (test/spec-passed/result 
    'imlistof1
@@ -205,5 +226,9 @@
    '((caddr (contract (*list/c (-> integer? integer?) (-> boolean? boolean?) (-> char? char?))
                       (list (λ (x) x) (λ (y) y) (λ (y) 'not-a-bool) (λ (y) y)) 'pos 'neg))
      #f))
+  (test/spec-passed/result
+   '*list/c8
+   '(chaperone-contract? (*list/c (-> integer? integer?) boolean?))
+   #t)
   
   )

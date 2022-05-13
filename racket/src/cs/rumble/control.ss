@@ -526,7 +526,7 @@
      (|#%app|
       p
       (make-composable-continuation
-       (extract-metacontinuation 'call-with-composable-continuation (strip-impersonator tag) #f)
+       (extract-metacontinuation 'call-with-composable-continuation (strip-impersonator tag) (not wind?))
        k
        (current-winders)
        (current-mark-stack)
@@ -818,7 +818,10 @@
     (raise-no-prompt-tag who tag)))
 
 (define (raise-no-prompt-tag who tag)
-  (do-raise-arguments-error who "no corresponding prompt in the continuation"
+  (do-raise-arguments-error 'internal
+                            who
+                            primitive-realm
+                            "no corresponding prompt in the continuation"
                             exn:fail:contract:continuation
                             (list "tag" tag)))
 
@@ -998,7 +1001,7 @@
    [(pair? a)
     (if (eq? key (car a))
         (cons key val)
-        (make-mark-frame (mark-table-add/replace* (pair->mark-table a) key val)
+        (make-mark-frame (mark-table-add/replace* (pair->mark-table a) a key val)
                          #f))]
    [(eq? a 'empty)
     ;; The current frame is the mark-splice frame, so update
@@ -1006,7 +1009,7 @@
     (current-mark-splice (mark-frame-update (current-mark-splice) key val))
     'empty]
    [(mark-frame? a)
-    (make-mark-frame (mark-table-add/replace* (mark-frame-table a) key val)
+    (make-mark-frame (mark-table-add/replace* (mark-frame-table a) a key val)
                      (mark-frame-end-uninterupted? a))]
    [else
     ;; assert: (elem+cache? a)
@@ -1473,9 +1476,13 @@
                                 (vector-set! tmp i v)
                                 (key-loop (cdr keys) (cdr wrappers) (add1 i) #t)]))])))]))]))])))))))
 
-(define/who (continuation-mark-set->context marks)
-  (check who continuation-mark-set? marks)
-  (traces->context (continuation-mark-set-traces marks)))
+(define/who continuation-mark-set->context
+  (case-lambda
+   [(marks realms?)
+    (check who continuation-mark-set? marks)
+    (traces->context (continuation-mark-set-traces marks) realms?)]
+   [(marks)
+    (continuation-mark-set->context marks #f)]))
 
 (define/who current-continuation-marks
   (case-lambda
@@ -1540,6 +1547,10 @@
            (prune-mark-chain-prefix (escape-continuation-tag k) (current-mark-chain)))
           null)]
         [else
+         ;; A `#f` is used to get the marks for a completed thread.
+         ;; It would make sense to raise an error for any prompt,
+         ;; since the continuaiton is empty, but `continuation-marks`
+         ;; is defined to return empty marks in this case.
          (make-continuation-mark-set null null)]))]))
 
 (define (get-metacontinuation-traces mc)
@@ -1574,7 +1585,7 @@
            (authentic-continuation-mark-key? (impersonator-val v)))))
 
 ;; Like `mark-table-add/replace`, but handles continuation-mark-key impersonators
-(define (mark-table-add/replace* ht k v)
+(define (mark-table-add/replace* ht old-a k v)
   (cond
    [(and (impersonator? k)
          (authentic-continuation-mark-key? (impersonator-val k)))
@@ -1582,14 +1593,20 @@
       (cond
        [(or (continuation-mark-key-impersonator? k)
             (continuation-mark-key-chaperone? k))
-        (let ([new-v (|#%app|
-                      (if (continuation-mark-key-impersonator? k)
-                          (continuation-mark-key-impersonator-set k)
-                          (continuation-mark-key-chaperone-set k))
-                      v)])
-          (unless (or (continuation-mark-key-impersonator? k)
-                      (chaperone-of? new-v v))
-            (raise-chaperone-error 'with-continuation-mark "value" v new-v))
+        (let ([new-v
+               ;; Restore attachment while interposing
+               (call-setting-continuation-attachment
+                old-a
+                (lambda ()
+                  (let ([new-v (|#%app|
+                                (if (continuation-mark-key-impersonator? k)
+                                    (continuation-mark-key-impersonator-set k)
+                                    (continuation-mark-key-chaperone-set k))
+                                v)])
+                    (unless (or (continuation-mark-key-impersonator? k)
+                                (chaperone-of? new-v v))
+                      (raise-chaperone-error 'with-continuation-mark "value" v new-v))
+                    new-v)))])
           (loop (impersonator-next k) new-v))]
        [(impersonator? k)
         (loop (impersonator-next k) v)]

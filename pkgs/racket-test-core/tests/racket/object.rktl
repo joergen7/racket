@@ -1235,6 +1235,40 @@
 	      (super-new)))])
   (test 16 'send-using-local (send (new c%) pub 3)))
 
+;; Make sure local names are checked correctly for deciding
+;; conflicting method names:
+(let ()
+  (define-syntax-rule (defclss name% x y)
+    (begin
+      (define-local-member-name f)
+      (define name%
+        (class object%
+          (super-new)
+          (define/public (f) 5)
+          (define/public (x) 6)
+          (define/public (y) 7)))
+      (test 5 'local-f (send (new name%) f))))
+
+  (defclss one% f y)
+  (test 6 'normal-f (send (new one%) f))
+  (test 7 'normal-y (send (new one%) y))
+  
+  (define-syntax-rule (defclss2 name% x)
+    (begin
+      (define-local-member-name f)
+      (defclss name% f x)
+      (test 6 'middle-f (send (new name%) f))))
+
+  (defclss2 two% f)
+  (test 7 'normal-f (send (new two%) f)))
+
+(syntax-test #'(let ()
+                 (define-local-member-name f)
+                 (class object%
+                   (super-new)
+                   (define/public (f) 5)
+                   (define/public (f) 6))))
+
 ;; ------------------------------------------------------------
 ;; `send+' tests
 
@@ -1999,7 +2033,11 @@
       (define/public (n) 2)
       (super-new)))
   (test 3 'mixin-with-local-member-names (send (new (mix c%)) x)))
-  
+
+(err/rt-test (mixin (object%) () (super-new))
+             exn:fail:object?
+             #rx"not an interface")
+
 ;; ----------------------------------------
 ;; Class contracts & generics
 
@@ -2322,6 +2360,44 @@
                                (define/public (x) 5))
                               (super-new)))
                        x)))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Check that `class` applies an outside-edge scope
+
+(let ()
+  (define x 'good)
+  (define-syntax-rule (m a) (define/public (a) x))
+  (define c% (class object%
+               (super-new)
+               (define x 'bad)
+               (m f)))
+  (test 'good values (send (new c%) f)))
+
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Check that `class` only removes use-site scopes for
+;; its definition context from internal definitions, and
+;; not those of the surrounding definition context.
+
+(let ()
+  (define x 'outer)
+  
+  (define c1%
+    (class object%
+      (super-new)
+      (define-syntax-rule (m1 a)
+        (define a 'inner-good))
+      (m1 x)
+      (define/public (f) x)))
+  (test 'inner-good values (send (new c1%) f))
+  
+  (define-syntax-rule (m2 a)
+    (class object%
+      (super-new)
+      (define a 'inner-bad)
+      (define/public (f) x)))
+  (define c2% (m2 x))
+  (test 'outer values (send (new c2%) f)))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

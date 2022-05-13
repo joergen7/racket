@@ -9,7 +9,7 @@
                                                           "field index >= initialized-field count for structure type"
                                                           "field index" v
                                                           "initialized-field count" (list-ref info 1)))
-                                 (unless (chez:memv v (list-ref info 5))
+                                 (unless (#%memv v (list-ref info 5))
                                    (raise-arguments-error 'guard-for-prop:object-name "field index not declared immutable"
                                                           "field index" v))
                                  (+ v (let ([p (list-ref info 6)])
@@ -28,13 +28,17 @@
 
 (define (object-name v)
   (cond
+   [(struct-type? v) ; needs to be before `object-name?` check
+    (let ([v (strip-impersonator v)])
+      (and (not (eq? (inspector-ref v) none))
+           (record-type-name v)))]
    [(object-name? v)
     (let ([n (object-name-ref v)])
       (cond
        [(exact-integer? n)
         (unsafe-struct-ref v n)]
        [else
-        (n v)]))]
+        (|#%app| n v)]))]
    [(#%procedure? v)
     (cond
      [(wrapper-procedure? v)
@@ -54,9 +58,6 @@
     (object-name (impersonator-val v))]
    [(procedure? v)
     (extract-procedure-name v)]
-   [(struct-type? v)
-    (and (not (eq? (inspector-ref v) none))
-         (record-type-name v))]
    [(struct-type-property? v)
     (struct-type-prop-name v)]
    [(record? v)

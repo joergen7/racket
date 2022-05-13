@@ -24,6 +24,7 @@
                   [mutex-release rumble:mutex-release]
                   [pthread? rumble:thread?]
                   [fork-place rumble:fork-place]
+                  [place-get-inherit rumble:place-get-inherit]
                   [start-place rumble:start-place]
                   [fork-pthread rumble:fork-thread]
                   [threaded? rumble:threaded?]
@@ -45,7 +46,9 @@
   ;; Special handling of `current-atomic` to use the last virtual register, and
   ;; similarr for other. We rely on the fact that the register's default value is 0
   ;; or the rumble layer installs a suitable default. Also, force inline a few
-  ;; functions and handle other special cases.
+  ;; functions and handle other special cases. Note that the implementation of
+  ;; `start-atomic` and `end-atomic` rely on some specific parameters being thread
+  ;; registers so that the functions can be safely called from any Scheme thread.
   (define-syntax (define stx)
     (let ([define-as-virtual-register
             (lambda (stx n)
@@ -160,6 +163,7 @@
         'get-wakeup-handle get-wakeup-handle
         'wakeup wakeup
         'fork-place rumble:fork-place
+        'place-get-inherit rumble:place-get-inherit
         'start-place rumble:start-place
         'fork-pthread rumble:fork-thread
         'get-initial-place rumble:get-initial-pthread

@@ -51,13 +51,16 @@
         "0.9.8e" "0.9.8b" "0.9.8" "0.9.7"
 
         ;; Known versions for *BSD variants
-        "111")])
+        "111"
+
+        ;; OpenSSL 3 works for most functionality:
+        "3")])
     ;; Don't use the versionless dylib on macOS, as it aborts on 10.15
     (case (system-type)
       [(macosx) versions]
       [else
        (case (path->string (system-library-subpath #f))
-         [("x86_64-darwin" "i386-darwin") versions]
+         [("x86_64-darwin" "i386-darwin" "aarch64-darwin") versions]
          [else
           (cons "" ; versionless (eg from devel pkg)
                 versions)])])))

@@ -8,6 +8,8 @@
 (define SYNC-SLEEP-DELAY 0.025)
 (define SYNC-BUSY-DELAY 0.1) ; go a little slower to check busy waits
 
+(define starting-monotonic-time (current-inexact-monotonic-milliseconds))
+
 ;; ----------------------------------------
 ;;  Semaphore peeks
 
@@ -153,6 +155,16 @@
   (test 'ok sync/timeout 100
         (wrap-evt
          (alarm-evt (+ (current-inexact-milliseconds) 50))
+         (lambda (x) 'ok)))
+
+  (test #f sync/timeout 0.1 (alarm-evt (+ (current-inexact-monotonic-milliseconds) 200) #t))
+  (test 'ok sync/timeout 0.1
+        (wrap-evt
+         (alarm-evt (+ (current-inexact-monotonic-milliseconds) 50) #t)
+         (lambda (x) 'ok)))
+  (test 'ok sync/timeout 100
+        (wrap-evt
+         (alarm-evt (+ (current-inexact-monotonic-milliseconds) 50) #t)
          (lambda (x) 'ok))))
 
 ;; ----------------------------------------
@@ -1039,6 +1051,23 @@
 ;; make sure it's ok for rewind to be the first action:
 (test (void) thread-wait (thread (lambda () (thread-rewind-receive '(1 2 3)))))
 
+(let* ([t (thread/suspend-to-kill
+           (lambda ()
+             (let loop ()
+               (sync
+                (handle-evt
+                 (thread-receive-evt)
+                 (λ (_)
+                   (channel-put (thread-receive) 'ok)
+                   (loop)))))))]
+       [res (for/list ([_ (in-range 2)])
+              (thread-suspend t)
+              (thread-resume t (current-thread))
+              (define ch (make-channel))
+              (thread-send t ch)
+              (channel-get ch))])
+  (test '(ok ok) values res))
+
 ;; ----------------------------------------
 ;; Unsafe poller
 
@@ -1066,7 +1095,7 @@
                               (set! counter (sub1 counter))
                               (when wakeups
                                 ;; Cancel any sleep:
-                                (unsafe-poll-ctx-milliseconds-wakeup wakeups (current-inexact-milliseconds)))
+                                (unsafe-poll-ctx-milliseconds-wakeup wakeups (current-inexact-monotonic-milliseconds)))
                               (values #f self)]))))
   (test #t sync (p)))
 
@@ -1579,7 +1608,7 @@
       (test val values got)))
 
   (try values 'ok-channel)
-  (try (lambda (c) (choice-evt c (alarm-evt (+ 10000 (current-inexact-milliseconds)))))
+  (try (lambda (c) (choice-evt c (alarm-evt (+ 10000 (current-inexact-monotonic-milliseconds)) #t)))
        'ok-channel+alarm))
 
 ;; ----------------------------------------
@@ -1650,6 +1679,30 @@
     ;; This will get stuck if the success of time sync got lost
     (sync s))
   (thread-wait t))
+
+;; ----------------------------------------
+;; regression test to check that when a choice evt replaces a single
+;; event, an already-chosen event (perhaps represented as an index) is
+;; not misinterpreted later
+
+(for ([i (in-range 10)])
+  (define ch (make-channel))
+  (define v
+    (sync (guard-evt
+           (lambda ()
+             (thread (lambda () (channel-put ch 0)))
+             (sync (system-idle-evt))
+             (choice-evt
+              (wrap-evt always-evt (lambda (v) 1))
+              (wrap-evt always-evt (lambda (v) 2))
+              (wrap-evt always-evt (lambda (v) 3)))))
+          ch))
+  (unless (memq v '(0 1 2 3))
+    (error "bad sync result" v)))
+
+;; ----------------------------------------
+
+(test #t <= starting-monotonic-time (current-inexact-monotonic-milliseconds))
 
 ;; ----------------------------------------
 

@@ -21,8 +21,15 @@
   #:public
   ;; in atomic mode; must override
   [read-in/inner
-   (lambda (dest-bstr start end copy?)
+   (lambda (dest-bstr start end copy? to-buffer?)
      0)]
+
+  ;; in atomic mode
+  ;; called when no peeked bytes are available;
+  ;; return 'not-ready as #f, while #f means implement by peeking,
+  ;; and other possibilities are #t or evt 
+  [byte-ready/inner
+   (lambda (work-done!) #f)]
 
   #:static
   ;; in atomic mode
@@ -40,9 +47,19 @@
      (progress!))]
 
   [buffer-adjust-pos
-   (lambda (i)
+   (lambda (i is-converted) ; is-converted reports on CRLF conversions in the buffer
      (define b buffer)
-     (- i (fx- end-pos (if (direct-bstr b) (direct-pos b) pos))))]
+     (define start-pos (if (direct-bstr b) (direct-pos b) pos))
+     (define r (- i (fx- end-pos start-pos)))
+     (cond
+       [is-converted (let loop ([pos start-pos] [r r])
+                       (if (fx= pos end-pos)
+                           r
+                           (loop (fx+ pos 1)
+                                 (if (eqv? 0 (bytes-ref is-converted pos))
+                                     r
+                                     (- r 1)))))]
+       [else r]))]
 
   ;; in atomic mode
   [default-buffer-mode
@@ -55,7 +72,7 @@
   [pull-some-bytes
    (lambda ([amt (if (eq? 'block buffer-mode) (bytes-length bstr) 1)] [offset 0] [init-pos 0])
      (define get-end (min (+ amt offset) (bytes-length bstr)))
-     (define v (send peek-via-read-input-port this read-in/inner bstr offset get-end #f))
+     (define v (send peek-via-read-input-port this read-in/inner bstr offset get-end #f #t))
      (cond
        [(eof-object? v)
         (set! peeked-eof? #t)
@@ -152,7 +169,7 @@
                [(or (eqv? v 0) (evt? v)) v]
                [else (try-again)])]
             [else
-             (define v (send peek-via-read-input-port this read-in/inner dest-bstr start end copy?))
+             (define v (send peek-via-read-input-port this read-in/inner dest-bstr start end copy? #f))
              (unless (eqv? v 0)
                (progress!))
              v])])))]
@@ -195,6 +212,9 @@
        (cond
          [(peeked-amt . fx> . 0) #t]
          [peeked-eof? #t]
+         [(send peek-via-read-input-port this byte-ready/inner work-done!)
+          => (lambda (status) (and (not (eq? status 'not-ready))
+                                   status))]
          [else
           (slow-mode!)
           (define v (pull-some-bytes))

@@ -1,8 +1,10 @@
-m = $(m)
-Scheme=../$m/bin/$m/scheme -b ../$m/boot/$m/petite.boot -b ../$m/boot/$m/scheme.boot
-STEXLIB=../stex
-installdir=/tmp/csv9
-INSTALL=../$m/installsh
+srcdir=oops-missing-srcdir
+installdir=oops-missing-installdir
+m=oops-missing-m
+STEXLIB=oops-missing-stexlib
+# Zuo overrides the above variables when running `make`
+Scheme=../bin/$m/scheme -b ../boot/$m/petite.boot -b ../boot/$m/scheme.boot
+INSTALL=$(srcdir)/../makefiles/installsh
 
 # define default document pathname here
 # override on command line with 'make x=newdoc'
@@ -22,6 +24,9 @@ bib =
 
 include $(STEXLIB)/Mf-stex
 
+srcs = $(x).stex releasenotes.cls releasenotes.hcls \
+  macros.stex releasenotes.css scheme.sty
+
 # define or override suffixes here
 
 # define any additional targets here
@@ -38,13 +43,13 @@ install: $x.pdf $x.html
 	$(INSTALL) -m 2755 -d $(installdir)/gifs
 	$(INSTALL) -m 0644 --ifdiff gifs/*.gif $(installdir)/gifs
 	$(INSTALL) -m 2755 -d $(installdir)/math
-	-/bin/rm -rf $(installdir)/$(mathdir)
+	-rm -rf $(installdir)/$(mathdir)
 	$(INSTALL) -m 2755 -d $(installdir)/$(mathdir)
 	if [ -e $(mathdir)/0.gif ] ; then $(INSTALL) -m 0644 $(mathdir)/*.gif $(installdir)/$(mathdir) ; fi
 
 # define any dependencies here
 
-$(x).firstrun: macros.tex
+$(x).firstrun: macros.tex $(srcs)
 
 # define cleanup targets here:
 
@@ -53,3 +58,10 @@ $(x).clean:
 $(x).reallyclean:
 
 $(x).reallyreallyclean:
+
+$(srcs):
+ifeq ($(OS),Windows_NT)
+	cp -p "${srcdir}"/$@ $@
+else
+	ln -s "${srcdir}"/$@ $@
+endif

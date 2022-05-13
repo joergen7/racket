@@ -61,11 +61,11 @@
 
 (define (can-try-atomic?) (and (freezer-box) (not (in-try-atomic?))))
 
-(define (try-atomic thunk default 
+(define (try-atomic thunk default
                     #:should-give-up? [should-give-up?
-                                       (let ([now (current-inexact-milliseconds)])
+                                       (let ([now (current-inexact-monotonic-milliseconds)])
                                          (lambda ()
-                                           ((current-inexact-milliseconds) . > . (+ now 200))))]
+                                           ((current-inexact-monotonic-milliseconds) . > . (+ now 200))))]
                     #:keep-in-order? [keep-in-order? #t])
   (let ([b (freezer-box)])
     (cond
@@ -103,7 +103,7 @@
                 (lambda ()
                   (call-with-continuation-prompt ; to catch aborts
                    (lambda ()
-                     (when (unsafe-set-on-atomic-timeout! handler)
+                     (when (unsafe-set-on-atomic-timeout! handler) ; also records current atomicity level
                        (error 'try-atomic "nested atomic timeout"))
                      (set! ready? #t)
                      (begin0

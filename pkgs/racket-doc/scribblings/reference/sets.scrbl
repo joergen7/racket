@@ -5,6 +5,11 @@
 @(define set-eval (make-base-eval))
 @examples[#:hidden #:eval set-eval (require racket/set)]
 
+@(define (hash-set-caveats)
+   @elem{For @tech{hash sets}, see also the @concurrency-caveat[]
+         for hash tables, which applies to
+         hash sets.})
+
 A @deftech{set} represents a collection of distinct elements.  The following
 datatypes are all sets:
 
@@ -272,6 +277,8 @@ named by the @racket[sym]s.
  @racket[lazy?] is @racket[#f], and @racket[kind] is @racket['immutable].
  The result will be a @tech{chaperone contract} when @racket[elem/c] is a
  @tech{chaperone contract}.
+
+ @history[#:changed "8.3.0.9" @elem{Added support for random generation.}]
 }
 
 @section{Generic Set Interface}
@@ -354,7 +361,8 @@ Produces a set that includes @racket[v] plus all elements of
 Adds the element @racket[v] to @racket[st].  This operation runs in constant
 time for @tech{hash sets}. Has no fallback.
 
-}
+@hash-set-caveats[]}
+
 
 @defproc[(set-remove [st generic-set?] [v any/c]) generic-set?]{
 
@@ -368,7 +376,8 @@ Produces a set that includes all elements of @racket[st] except
 Removes the element @racket[v] from @racket[st].  This operation runs in constant
 time for @tech{hash sets}. Has no fallback.
 
-}
+@hash-set-caveats[]}
+
 
 @defproc[(set-empty? [st generic-set?]) boolean?]{
 
@@ -462,7 +471,8 @@ Removes all elements from @racket[st].
 Supported for any @racket[st] that @impl{implements} @racket[set-remove!] and either
 @supp{supports} @racket[set->stream] or @impl{implements} @racket[set-first] and either @racket[set-count] or @racket[set-empty?].
 
-}
+@hash-set-caveats[]}
+
 
 @defproc[(set-union [st0 generic-set?] [st generic-set?] ...) generic-set?]{
 
@@ -506,7 +516,7 @@ total size of the @racket[st]s.
 
 Supported for any @racket[st] that @impl{implements} @racket[set-add!] and @supp{supports} @racket[set->stream].
 
-}
+@hash-set-caveats[]}
 
 @defproc[(set-intersect [st0 generic-set?] [st generic-set?] ...) generic-set?]{
 
@@ -541,7 +551,8 @@ size of @racket[st0].
 
 Supported for any @racket[st] that @impl{implements} @racket[set-remove!] and @supp{supports} @racket[set->stream].
 
-}
+@hash-set-caveats[]}
+
 
 @defproc[(set-subtract [st0 generic-set?] [st generic-set?] ...) generic-set?]{
 
@@ -576,7 +587,8 @@ size of @racket[st0].
 
 Supported for any @racket[st] that @impl{implements} @racket[set-remove!] and @supp{supports} @racket[set->stream].
 
-}
+@hash-set-caveats[]}
+
 
 @defproc[(set-symmetric-difference [st0 generic-set?] [st generic-set?] ...) generic-set?]{
 
@@ -616,7 +628,8 @@ total size of the @racket[st]s.
 
 Supported for any @racket[st] that @impl{implements} @racket[set-remove!] and @supp{supports} @racket[set->stream].
 
-}
+@hash-set-caveats[]}
+
 
 @defproc[(set=? [st generic-set?] [st2 generic-set?]) boolean?]{
 

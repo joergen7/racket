@@ -511,7 +511,7 @@
     (define C-test-code
       (lambda (ftype-defn* path* ndefs npaths i* j*)
         (let ([ndefs (length ftype-defn*)])
-          (printf "#include \"ftype.h\"\n\
+          (printf "#include \"~a\"\n\
                    #define offset(x, y) (int)((char *)&y - (char *)&x)\n\
                    EXPORT int *foo() {\n\
                      ~{~a\n~}\
@@ -520,6 +520,7 @@
                      ~{~a\n~}\
                      return a;\
                    }\n"
+            (find-source "ftype.h")
             (map
               (lambda (ftype-defn)
                 (format "typedef ~a typedef_~a ~a;"
@@ -552,14 +553,19 @@
                              (windows?))])
           (with-output-to-file testfile.c thunk 'replace)
           (unless (= (case (machine-type)
-                       [(i3osx ti3osx)
+                       [(i3osx ti3osx ppc32osx tppc32osx)
                         (system (format "cc -m32 -dynamiclib -o ~a ~a" testfile.so testfile.c))]
                        [(a6osx a6osx)
                         (system (format "cc -m64 -dynamiclib -o ~a ~a" testfile.so testfile.c))]
                        [(a6nt ta6nt)
-                        (system (format "set cl= && ..\\c\\vs.bat amd64 && cl /DWIN32 /Fe~a /LD /MD /nologo ~a" testfile.so testfile.c))]
+                        (system (format "set cl= && ~a\\..\\c\\vs.bat amd64 && cl /DWIN32 /Fe~a /LD /MD /nologo ~a"
+                                  (patch-exec-path *mats-dir*) testfile.so testfile.c))]
                        [(i3nt ti3nt)
-                        (system (format "set cl= && ..\\c\\vs.bat x86 && cl /DWIN32 /Fe~a /LD /MD /nologo ~a" testfile.so testfile.c))]
+                        (system (format "set cl= && ~a\\..\\c\\vs.bat x86 && cl /DWIN32 /Fe~a /LD /MD /nologo ~a"
+                                  (patch-exec-path *mats-dir*) testfile.so testfile.c))]
+                       [(arm64nt tarm64nt)
+                        (system (format "set cl= && ~a\\..\\c\\vs.bat x64_arm64 && cl /DWIN32 /Fe~a /LD /MD /nologo ~a"
+                                  (patch-exec-path *mats-dir*) testfile.so testfile.c))]
                        [(arm32le tarm32le arm64le tarm64le)
                         (system (format "cc -fPIC -shared -o ~a ~a" testfile.so testfile.c))]
                        [else ; this should work for most intel-based systems that use gcc...
@@ -1027,7 +1033,7 @@
  ; ----------------
   (begin
     (meta-cond
-     [(eq? (machine-type) 'pb)
+     [(pb?)
       (define-ftype A (endian little (bits [x unsigned 3] [y unsigned 5])))]
      [else
       (define-ftype A (bits [x unsigned 3] [y unsigned 5]))])
@@ -1281,6 +1287,35 @@
   (begin
     (fptr-free b)
     #t)
+
+ ; ----------------
+ (begin
+   ;; Bind a native built-in type as a normal ftype (note this fixes the endianness).
+   (define-ftype integer-8 integer-8)
+   (define-ftype float float)
+   (define-ftype S (struct [i integer-8] [f float]))
+   #t)
+ (let ([int-fptr (make-ftype-pointer integer-8 (foreign-alloc (ftype-sizeof integer-8)))]
+       [flo-fptr (make-ftype-pointer float (foreign-alloc (ftype-sizeof float)))]
+       [s-fptr (make-ftype-pointer S (foreign-alloc (ftype-sizeof S)))])
+   (ftype-set! integer-8 () int-fptr 42)
+   (ftype-set! float () flo-fptr 7.125)
+   (ftype-set! S (i) s-fptr 75)
+   (ftype-set! S (f) s-fptr 8.25)
+   (let ([a (ftype-ref integer-8 () int-fptr)]
+         [b (ftype-ref float () flo-fptr)]
+         [c (ftype-ref S (i) s-fptr)]
+         [d (ftype-ref S (f) s-fptr)])
+     (foreign-free (ftype-pointer-address int-fptr))
+     (foreign-free (ftype-pointer-address flo-fptr))
+     (foreign-free (ftype-pointer-address s-fptr))
+     (equal? (list a b c d) (list 42 7.125 75 8.25))))
+
+ (begin
+   ;; Show that binding does not interfere with native types.
+   (define-syntax unsigned-16 (make-compile-time-value "Non-interfering binding"))
+   (let ([fptr (make-ftype-pointer unsigned-16 0)])
+     (= (ftype-pointer-address fptr) 0)))
 )
 
 (mat ftype-pointer-address-optimizations
@@ -1474,7 +1509,7 @@
         (syntax-case stx ()
           [(_ (define-ftype id t))
            (cond
-             [(eq? (machine-type) 'pb)
+             [(pb?)
               #'(define-ftype id (endian little t))]
              [else
               #'(define-ftype id t)])])))
@@ -2420,22 +2455,22 @@
 
   (eqv? (ftype-ref Bl (a) bl) -3.14)
   (or (not (eq? (native-endianness) 'little))
-      (eq? (machine-type) 'pb)
+      (pb?)
       (eqv? (ftype-ref D () bl) -3.14))
   (eqv? (ftype-ref Dl () bl) -3.14)
   (or (not (eq? (native-endianness) 'little))
-      (eq? (machine-type) 'pb)
+      (pb?)
       (eqv? (ftype-ref double () bl) -3.14))
   (error? ; invalid syntax
     (ftype-ref (endian little double) () bl))
 
   (eqv? (ftype-ref Bb (a) bb) -3.14)
   (or (not (eq? (native-endianness) 'big))
-      (eq? (machine-type) 'pb)
+      (pb?)
       (eqv? (ftype-ref D () bb) -3.14))
   (eqv? (ftype-ref Db () bb) -3.14)
   (or (not (eq? (native-endianness) 'big))
-      (eq? (machine-type) 'pb)
+      (pb?)
       (eqv? (ftype-ref double () bb) -3.14))
   (error? ; invalid syntax
     (ftype-ref (endian big double) () bb))
@@ -5527,6 +5562,8 @@
 
     #t)
 
+  ;; works on most machines, but we can't really guarantee anything about a fault:
+  #;
   (if (memq (machine-type) '(ti3ob ta6ob)) ; avoid openbsd/pthreads signal bugs
       (error #f "openbsd pthreads + signals is fubar")
       (equal?
@@ -5543,6 +5580,8 @@
            [i null]
            [j (* invalid)])))
 
+  ;; works on most machines, but we can't really guarantee anything about a fault:
+  #;
   (if (memq (machine-type) '(ti3ob ta6ob)) ; avoid openbsd/pthreads signal bugs
       (error #f "openbsd pthreads + signals is fubar")
       (equal?
@@ -5577,17 +5616,17 @@
   (equal?
     (ftype-pointer-ftype (make-ftype-pointer A 0))
     (cond
-      [(eq? (machine-type) 'pb) '(endian little double)]
+      [(pb?) '(endian little double)]
       [else
        (case (native-endianness)
-         [(big) '(endian little double)]
+         [(big) '(endian swapped double)]
          [(little) 'double]
          [else (errorf #f "unexpected native endianness")])]))
 
   (equal?
     (ftype-pointer-ftype (make-ftype-pointer B 0))
     (cond
-      [(eq? (machine-type) 'pb) '(endian big double)]
+      [(pb?) '(endian big double)]
       [else
        (case (native-endianness)
          [(big) 'double]

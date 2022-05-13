@@ -755,11 +755,11 @@
              ...
              [else (syntax-error const
                      (format "unhandled value ~s" (constant const)))])]))
-       (define-syntax include
+       (define-syntax include ; defining `include` so that a ".def" can `include` other ".def"s
          (lambda (stx)
            (syntax-case stx ()
              [(k path)
-              #`(#,(datum->syntax #'k 'orig-include) #,(format "../s/~a" (datum path)))])))
+              #`(#,(datum->syntax #'k 'orig-include) #,(find-source (datum path)))])))
        (include "machine.def")
      ; all this work for two constants:
       (define $fd-unaligned-integers (constant unaligned-integers))
@@ -4046,6 +4046,26 @@
         (let ([record? #%$sealed-record?])
           (list (record? 3 Dtd) (record? a Dtd) (record? b Dtd) (record? c Dtd) (record? d Dtd) (record? e Dtd)))
         '(#f #f #f #f #t #f))))
+    (begin
+      (define (get-supertype-uid) '#{supertype a3utgl1aoz8jzrg100-0})
+      (define (get-subtype-uid) '#{subtype a3utgl1aoz8jzrg100-1})
+      (define $keep-rtd (make-record-type-descriptor* 'supertype #f (get-supertype-uid) #f #f 1 1))
+      (define $keep-rtd2 (make-record-type-descriptor* 'subtype $keep-rtd (get-subtype-uid) #f #f 1 1))
+      (let ()
+        (define rtd (make-record-type-descriptor* 'supertype #f (get-supertype-uid) #f #f 1 1))
+        (define rtd2 (make-record-type-descriptor* 'subtype rtd (get-subtype-uid) #f #f 1 1))
+        (define val ((record-constructor rtd2) 0 1))
+        (record? val rtd)))
+    (eval `(let ()
+             (define rtd (make-record-type-descriptor* 'supertype #f (get-supertype-uid) #f #f 1 1))
+             (define rtd2 (make-record-type-descriptor* 'subtype rtd (get-subtype-uid) #f #f 1 1))
+             (define val ',(read (open-string-input-port "#[#{supertype a3utgl1aoz8jzrg100-0} 0]")))
+             (record? val rtd)))
+    (eval `(let ()
+             (define rtd (make-record-type-descriptor* 'supertype #f (get-supertype-uid) #f #f 1 1))
+             (define rtd2 (make-record-type-descriptor* 'subtype rtd (get-subtype-uid) #f #f 1 1))
+             (define val ',(read (open-string-input-port "#[#{subtype a3utgl1aoz8jzrg100-1} 0 1]")))
+             (record? val rtd)))
 )
 
 (mat record-type-mismatch
@@ -6405,10 +6425,10 @@
                        (begin
                          (if (#3%record? b g6) (#2%void) (#3%$record-oops 'unbox b g6))
                          (#3%$object-ref 'scheme-object b ,fixnum?)))])
-             (if (#3%record? b g4) (#2%void) (#3%$record-oops 'set-box! b g4))
+             (if (#3%record-instance? b g4) (#2%void) (#3%$record-oops 'set-box! b g4))
              (#3%$object-set! 'scheme-object b ,fixnum? g7))
            (#2%list
-             (#3%record? b g5)
+             (#3%record-instance? b g5)
              (#3%$object-ref 'scheme-object b ,fixnum?))))))
     (equal?
       (let ()

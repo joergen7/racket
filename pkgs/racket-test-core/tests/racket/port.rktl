@@ -164,6 +164,30 @@
 	     exn:fail?)
 (err/rt-test (port-commit-peeked 100 never-evt always-evt /dev/null-in))
 
+;; A port that produces a stream of 1s, but always
+;; though an evt:
+(let ()
+  (define stubborn-infinite-ones
+    (make-input-port
+     'ones
+     (lambda (s)
+       (wrap-evt always-evt
+                 (lambda (ae)
+                   (bytes-set! s 0 (char->integer #\1))
+                   1)))
+     (lambda (s skip-n progress-evt)
+       (wrap-evt always-evt
+                 (lambda (ae)
+                   (bytes-set! s 0 (char->integer #\1))
+                   1)))
+     void))
+  (test "11111" read-string 5 stubborn-infinite-ones)
+  (test "11111" peek-string 5 0 stubborn-infinite-ones)
+  (test #t byte-ready? stubborn-infinite-ones)
+  (test #t char-ready? stubborn-infinite-ones)
+  (test "11111" read-string 5 stubborn-infinite-ones)
+  (test stubborn-infinite-ones sync/timeout 0 stubborn-infinite-ones))
+
 ;; A port that produces a stream of 1s:
 (define infinite-ones 
   (make-input-port
@@ -911,6 +935,38 @@
   (check-all port-count-lines!))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; attempting to read from or write to a closed byte-string port
+
+(let ()
+  (define (check proc)
+    (define p (open-input-bytes #"x"))
+    (close-input-port p)
+    (err/rt-test (proc p) exn:fail? #rx"closed")
+    (err/rt-test (proc p)  (lambda (e) (not (exn:fail:contract? e)))))
+  (check read-byte)
+  (check peek-byte)
+  (check (lambda (p) (peek-byte p 10)))
+  (check (lambda (p) (read-bytes 10 p)))
+  (check read-char)
+  (check read-char-or-special)
+  (check peek-char)
+  (check (lambda (p) (read-string 10 p)))
+  (check read)
+  (check (lambda (p) (read-syntax (object-name p) p))))
+
+(let ()
+  (define (check proc)
+    (define p (open-output-bytes))
+    (close-output-port p)
+    (err/rt-test (proc p) exn:fail? #rx"closed")
+    (err/rt-test (proc p) (lambda (e) (not (exn:fail:contract? e)))))
+  (check (lambda (p) (write-byte 10 p)))
+  (check (lambda (p) (write-bytes #"hello" p)))
+  (check (lambda (p) (write-char #\x p)))
+  (check (lambda (p) (write-string "hello" p)))
+  (check flush-output))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; port-closed events
 
 (let ()
@@ -987,17 +1043,14 @@
   (test 'line file-stream-buffer-mode ofile)
   (close-output-port ofile)
 
-  (let ()
-    (define ifile (open-input-file path #:mode 'text))
-    (test "abc" read-line ifile)
-    (define pos (file-position ifile))
-    (test "def" read-line ifile)
-    (file-position ifile pos)
-    (test "def" read-line ifile))
+  (test (if (eq? 'windows (system-type))
+            #"abc\r\ndef\r\nghi\r\n"
+            #"abc\ndef\nghi\n")
+        call-with-input-file path (lambda (i) (read-bytes 100 i)))
 
-  (let ()
+  (for ([i '(none block)])
     (define ifile (open-input-file path #:mode 'text))
-    (file-stream-buffer-mode ifile 'none)
+    (file-stream-buffer-mode ifile)
     (test "abc" read-line ifile)
     (define pos (file-position ifile))
     (test "def" read-line ifile)
@@ -1137,6 +1190,15 @@
 
   (delete-file f1)
   (delete-file f2))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Regression test for peek-string! issue #4156.
+
+(let ()
+  (define in (open-input-string "hello"))
+  (define str (make-string 10))
+  (test 5 peek-string! str 0 in)
+  (test "hello" substring str 0 5))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

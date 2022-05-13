@@ -1,5 +1,6 @@
 #lang scribble/doc
-@(require "mz.rkt")
+@(require "mz.rkt"
+          (for-label setup/dirs))
 
 @title[#:tag "eval"]{Evaluation and Compilation}
 
@@ -150,6 +151,7 @@ If the second argument to the load handler is a symbol, then:
        (read-accept-compiled #t)
        (read-accept-bar-quote #t)
        (read-accept-graph #t)
+       (read-syntax-accept-graph #f)
        (read-decimal-as-inexact #t)
        (read-accept-dot #t)
        (read-accept-infix-dot #t)
@@ -395,15 +397,32 @@ A list of paths and @racket['same]s that is is used by the default
 @tech{compiled-load handler} (see @racket[current-load/use-compiled]).
 
 The parameter is normally initialized to @racket[(list 'same)], but
-the parameter's initial value can be adjusted by the
+the parameter's initial value can be adjusted by the installation
+configuration as reported by @racket[(find-compiled-file-roots)],
+and it can be further adjusted by the
 @as-index{@envvar{PLTCOMPILEDROOTS}} environment variable or the
 @DFlag{compiled} or @Flag{R} command-line flag for @exec{racket}.  If
 the environment variable is defined and not overridden by a
 command-line flag, it is parsed by first replacing any
 @litchar["@(version)"] with the result of @racket[(version)], then using
-@racket[path-list-string->path-list] with a default path list
-@racket[(list (build-path 'same))] to arrive at the parameter's
+@racket[path-list-string->path-list] with a path list produced by
+@racket[(find-compiled-file-roots)] to arrive at the parameter's
 initial value.}
+
+
+@defproc[(find-compiled-file-roots) 
+         (listof (or/c path? 'same))]{
+
+Produces a list of paths and @racket['same], which is normally used to
+initialize @racket[current-compiled-file-roots]. The list is
+determined by consulting the @filepath{config.rtkd} file in the
+directory reported by @racket[(find-config-dir)], and it defaults to
+@racket[(list 'same)] if not configured there.
+
+See also @racket['compiled-file-roots] in @secref[#:doc raco-doc
+"config-file"].
+
+@history[#:added "8.0.0.9"]}
 
 
 @defparam[use-compiled-file-check check (or/c 'modify-seconds 'exists)]{
@@ -483,6 +502,29 @@ port so that GUI events can be handled when reading from the port
 blocks.}
 
 
+@defparam[current-get-interaction-evt proc (-> evt?)]{
+
+A @tech{parameter} that determines the @deftech{interaction event
+handler}, which returns an @tech{synchronizable event} that should be
+used in combination with blocking that is similar to
+@racket[read-eval-print-loop] waiting for input---but where an input
+port is not read directly, so
+@racket[current-get-interaction-input-port] does not apply.
+
+When the interaction event handler returns an event that becomes
+ready, and when the event's ready value is a procedure, then the
+procedure is meant to be called with zero arguments blocking resumes.
+The default interaction event handler returns @racket[never-evt].
+
+The @racketmodname[racket/gui/base] library adjusts this parameter's
+value by extending the current value. The extension combines the
+current value's result with @racket[choice-evt] and an event that
+becomes ready when a GUI event is available, and the event's value is
+a procedure that yields to one or more available GUI events.
+
+@history[#:added "8.3.0.3"]}
+
+
 @defparam[current-read-interaction proc (any/c input-port? -> any)]{
 
 A @tech{parameter} that determines the current @deftech{read interaction
@@ -535,7 +577,12 @@ For internal testing purposes, when the
 @as-index{@envvar{PLT_VALIDATE_COMPILE}} environment variable is set,
 the default compilation handler runs a bytecode validator immediately
 on its own compilation results (instead of relying only on validation
-when compiled bytecode is loaded).}
+when compiled bytecode is loaded).
+
+The @racket[current-compile] binding is provided as @tech{protected}
+in the sense of @racket[protect-out].
+
+@history[#:changed "8.2.0.4" @elem{Changed binding to protected.}]}
 
 
 @defproc[(compile [top-level-form any/c]) compiled-expression?]{
@@ -641,6 +688,14 @@ supported. The @racket['target-machine] mode of @racket[system-type]
 reports the running Racket's native target machine.
 
 @history[#:added "7.1.0.6"]}
+
+
+@defparam[current-compile-realm realm symbol?]{
+
+Determines the @tech{realm} that is assigned to modules and procedures
+when they are compiled.
+
+@history[#:added "8.4.0.2"]}
 
 
 @defboolparam[eval-jit-enabled on?]{

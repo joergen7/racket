@@ -59,7 +59,8 @@
                 fxarithmetic-shift-left fxlshift
                 fxsll/wraparound fxlshift/wraparound
                 real->flonum ->fl
-                time-utc->date seconds->date)
+                time-utc->date seconds->date
+                make-record-type-descriptor* make-struct-type)
         (set! rewrites-added? #t)))
     (getprop n 'error-rename n)))
 
@@ -90,25 +91,32 @@
                                                 s)))
             null)]
    [(equal? str "~s is not a pair")
-    (format-error-values "contract violation\n  expected: pair?\n  given: ~s"
+    (format-error-values (string-append
+                          "contract violation\n  expected: "
+                          (error-contract->adjusted-string "pair?" primitive-realm)
+                          "\n  given: ~s")
                          irritants)]
    [(and (equal? str "incorrect list structure ~s")
          (cxr->contract who))
     => (lambda (ctc)
-         (format-error-values (string-append "contract violation\n  expected: " ctc "\n  given: ~s")
+         (format-error-values (string-append "contract violation\n  expected: "
+                                             (error-contract->adjusted-string ctc primitive-realm)
+                                             "\n  given: ~s")
                               irritants))]
    [(and (or (eq? who 'list-ref) (eq? who 'list-tail))
          (equal? str "index ~s is out of range for list ~s"))
-    (values (string-append "index too large for list\n"
-                           "  index: ~s\n"
-                           "  in: ~s")
-            irritants)]
+    (format-error-values (string-append "index too large for list\n"
+                                        "  index: ~s\n"
+                                        "  in: ~s")
+                         irritants)]
    [(and (or (eq? who 'list-ref) (eq? who 'list-tail))
          (equal? str "index ~s reaches a non-pair in ~s"))
-    (values (string-append "index reaches a non-pair\n"
-                           "  index: ~s\n"
-                           "  in: ~s")
-            irritants)]
+    (format-error-values (string-append "index reaches a non-pair\n"
+                                        "  index: ~s\n"
+                                        "  in: ~s")
+                         irritants)]
+   [(or (eq? who 'memq) (eq? who 'memv))
+    (format-error-values "not a proper list\n  in: ~s" irritants)]
    [(equal? str  "~s is not a valid index for ~s")
     (cond
      [(exact-nonnegative-integer? (car irritants))
@@ -121,11 +129,16 @@
                        [(fxvector? v) (values "fxvector" (fxvector-length v))]
                        [(flvector? v) (values "flvector" (flvector-length v))]
                        [else (values "value" #f)]))])
-        (format-error-values (string-append "index is out of range\n"
-                                            "  index: ~s\n"
-                                            "  valid range: [0, " (if len (number->string (sub1 len)) "...") "]\n"
-                                            "  " what ": ~s")
-                             irritants))]
+        (if (eqv? len 0)
+            (format-error-values (string-append "index is out of range for empty " what "\n"
+                                                "  index: ~s\n"
+                                                "  " what ": ~s")
+                                 irritants)
+            (format-error-values (string-append "index is out of range\n"
+                                                "  index: ~s\n"
+                                                "  valid range: [0, " (if len (number->string (sub1 len)) "...") "]\n"
+                                                "  " what ": ~s")
+                                 irritants)))]
      [else
       (format-error-values (string-append "contract violation\n"
                                           "  expected: exact-nonnegative-integer?\n"
@@ -138,8 +151,15 @@
          (equal? (substring str 0 (string-length is-not-a-str)) is-not-a-str)
          (= 1 (length irritants)))
     (let ([ctc (desc->contract (substring str (string-length is-not-a-str) (string-length str)))])
-      (format-error-values (string-append "contract violation\n  expected: " ctc "\n  given: ~s")
+      (format-error-values (string-append "contract violation\n  expected: "
+                                          (error-contract->adjusted-string ctc primitive-realm)
+                                          "\n  given: ~s")
                            irritants))]
+   [(equal? str "cannot extend sealed record type ~s as ~s")
+    (format-error-values (string-append "cannot make a subtype of a sealed type\n"
+                                        "  type name: ~s\n"
+                                        "  sealed type: ~s")
+                         (reverse irritants))]
    [(eq? who 'time-utc->date)
     (values "integer is out-of-range" null)]
    [else

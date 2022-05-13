@@ -1,31 +1,9 @@
-;; vfasl conversion uses the 
-
+;; vfasl conversion uses the fasl parser from "strip.ss"; it creates
+;; an image of the memory that fasl_in from "fasl.c" would create
 
 (let ()
 
 (include "strip-types.ss")
-
-;; cooperates better with auto-indent than `fasl-case`:
-(define-syntax (fasl-case* stx)
-  (syntax-case stx (else)
-    [(_ target [(op fld ...) body ...] ... [else e-body ...])
-     #'(fasl-case target [op (fld ...) body ...] ... [else e-body ...])]
-    [(_ target [(op fld ...) body ...] ...)
-     #'(fasl-case target [op (fld ...) body ...] ...)]))
-
-;; reverse quoting convention compared to `constant-case`:
-(define-syntax (constant-case* stx)
-  (syntax-case stx (else)
-    [(_ target [(const ...) body ...] ... [else e-body ...])
-     (with-syntax ([((val ...) ...)
-                    (map (lambda (consts)
-                           (map (lambda (const)
-                                  (lookup-constant const))
-                                consts))
-                         (datum ((const ...) ...)))])
-       #'(case target [(val ...) body ...] ... [else e-body ...]))]
-    [(_ target [(const ...) body ...] ...)
-     #'(constant-case* target [(const ...) body ...] ... [else ($oops 'constant-case* "no matching case ~s" 'target)])]))
 
 ;; ************************************************************
 ;; Encode-time data structures                              */
@@ -100,8 +78,12 @@
 
                    #f)) ; installs-library-entry?
 
-;; Creates a vfasl image for the fasl content `v` (as read by "strip.ss")
+;; Creates a vfasl image for the fasl content `v` (as read by "strip.ss").
+;; The target endianness must be statically known.
 (define (to-vfasl v)
+  (constant-case native-endianness
+    [(unknown) ($oops 'vfasl "cannot vfasl with unknown endianness")]
+    [else (void)])
   (let ([v (ensure-reference v)]
         [vfi (new-vfasl-info)])
     ;; First pass: determine sizes
@@ -753,11 +735,19 @@
           (when maybe-uid
             (eq-hashtable-set! (vfasl-info-rtds vfi) (unpack-symbol maybe-uid) v)
             ;; make sure parent type is earlier
-            (for-each (lambda (fld)
-                        (field-case (car fld*)
-                                    [ptr (elem) (copy elem vfi)]
-                                    [else (void)]))
-                      fld*))
+            (safe-assert (pair? fld*))
+            (let ([ancestry (car fld*)])
+              (field-case ancestry
+                          [ptr (elem)
+                               (let loop ([elem elem])
+                                 (fasl-case* elem
+                                   [(vector ty vec)
+                                    (let ([parent (vector-ref vec (fx- (vector-length vec)
+                                                                       (constant ancestry-parent-offset)))])
+                                      (copy parent vfi))]
+                                   [(indirect g i) (loop (vector-ref g i))]
+                                   [else ($oops 'vfasl "parent type not recognized ~s" elem)]))]
+                          [else (safe-assert (not 'ptr)) (void)])))
           (let* ([vspc (cond
                          [maybe-uid
                           (constant vspace-rtd)]
@@ -1024,7 +1014,7 @@
   (let* ([new-p (find-room 'reloc vfi
                            (constant vspace-reloc)
                            (fx+ (constant header-size-reloc-table) (fx* m (constant ptr-bytes)))
-                           (constant typemod))])
+                           (constant type-untyped))])
     (set-uptr! new-p (constant reloc-table-size-disp) m vfi)
     (set-ptr!/no-record new-p (constant reloc-table-code-disp) code-p vfi)
     (let loop ([n 0] [a 0] [i 0])

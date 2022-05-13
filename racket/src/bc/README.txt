@@ -2,6 +2,9 @@ This directory contains most of the source code to the Racket BC
 implementation. See "../README.txt" for general information on
 building.
 
+You will need to use `zuo` instead of `make` for working at the level
+of this directory. See "../zuo".
+
 
 ========================================================================
  CGC versus 3m
@@ -14,38 +17,22 @@ usually provides better overall performance.
 
 The default build mode creates 3m executables only (except for a CGC
 executable that is used to build the 3m executable). To create CGC
-executables in addition to 3m executables, use `make cgc` in addition
-to `make`, or run `make both`. To install both variants, use `make
+executables in addition to 3m executables, use `zuo . cgc` in addition
+to `zuo`, or run `zuo . both`. To install both variants, use `make
 install-both` instead of just `make install`. Alternatively, use just
-`make cgc` and `make install-cgc` to build and install just the CGC
+`zuo . cgc` and `zuo . install-cgc` to build and install just the CGC
 variants.
 
-CGC variants are installed with a "cgc" suffix.  To swap the default
-build and install mode, supply `--enable-cgcdefault` to `configure`.  In
-that case, CGC variants are built by default, `make 3m` creates 3m
-executables, and `make install-both` installs CGC variants without a suffix
-and 3m variants with a "3m" suffix.
+CGC variants are installed with a "cgc" suffix. To swap the default
+build and install mode, supply `--enable-cgcdefault` to `configure`.
+In that case, CGC variants are built by default, `zuo . 3m` creates 3m
+executables, and `make install-both` installs CGC variants without a
+suffix and 3m variants with a "3m" suffix.
 
 
 ========================================================================
  Additional Compilation Notes
 ========================================================================
-
-CGC Build Options
------------------
-
-As noted above in "CGC versus 3m", Racket builds a CGC variant in the
-process of creating the normal 3m variant. Within the CGC variant, two
-implementations are possible.
-
-By default, Racket CGC is implemented with SenoraGC (in the "sgc"
-directory), which is relativey portable. Provide `--disable-sgc` to
-instead use the Boehm GC (in the "gc" directory), which should perform
-better and was the default for Racket CGC through version 6.1.
-
-The variant of the Boehm GC that is included with Racket has been
-modified slightly from Boehm's standard distribution; mostly, the
-changes modify the way that object finalization is handled.
 
 Floating point, x87, SSE, Extflonums, and the JIT
 -------------------------------------------------
@@ -96,11 +83,11 @@ information.
  Modifying Racket
 ========================================================================
 
-If you modify Racket and change any primitive syntax or the collection
-of built-in identifiers, be sure to update the version number in
-"../version/racket_version.h", so that various tools know to rebuild
-bytecode. If you add or remove primitives, you'll also need to adjust
-the counter in "src/schminc.h" .
+If you modify Racket in a way that changes compiled code, including
+changing the set of primitives, be sure to update the version number
+in "../version/racket_version.h", so that various tools know to
+rebuild bytecode. If you add or remove primitives, you'll also need to
+adjust the counter in "src/schminc.h" .
 
 Some general guidelines for modying this code:
 

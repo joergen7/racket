@@ -1,6 +1,8 @@
 #lang racket/base
 (require racket/promise
          racket/private/config
+         (only-in '#%utils
+                  [get-installation-name utils:get-installation-name])
          (for-syntax racket/base))
 
 ;; ----------------------------------------
@@ -61,15 +63,21 @@
 (define-config config:lib-dir 'lib-dir to-path)
 (define-config config:lib-search-dirs 'lib-search-dirs to-path)
 (define-config config:share-dir 'share-dir to-path)
+(define-config config:share-search-dirs 'share-search-dirs to-path)
 (define-config config:apps-dir 'apps-dir to-path)
 (define-config config:include-dir 'include-dir to-path)
 (define-config config:include-search-dirs 'include-search-dirs to-path)
 (define-config config:bin-dir 'bin-dir to-path)
+(define-config config:bin-search-dirs 'bin-search-dirs to-path)
 (define-config config:gui-bin-dir/raw 'gui-bin-dir to-path)
 (define config:gui-bin-dir (delay/sync (or (force config:gui-bin-dir/raw) (force config:bin-dir))))
+(define-config config:gui-bin-search-dirs/raw 'gui-bin-search-dirs to-path)
+(define config:gui-bin-search-dirs (delay/sync (or (force config:gui-bin-search-dirs/raw) (force config:bin-search-dirs))))
 (define-config config:config-tethered-console-bin-dir 'config-tethered-console-bin-dir to-path)
 (define-config config:config-tethered-gui-bin-dir 'config-tethered-gui-bin-dir to-path)
+(define-config config:config-tethered-apps-dir 'config-tethered-apps-dir to-path)
 (define-config config:man-dir 'man-dir to-path)
+(define-config config:man-search-dirs 'man-search-dirs to-path)
 (define-config config:links-file 'links-file to-path)
 (define-config config:links-search-files 'links-search-files to-path)
 (define-config config:pkgs-dir 'pkgs-dir to-path)
@@ -99,8 +107,11 @@
 (define (get-doc-search-url) (or (force config:doc-search-url)
                                  "http://docs.racket-lang.org/local-redirect/index.html"))
 (define (get-doc-open-url) (force config:doc-open-url))
-(define (get-installation-name) (or (force config:installation-name)
-                                    (version)))
+(define installation-name (delay/sync (utils:get-installation-name (force config-table))))
+(define get-installation-name
+  (case-lambda
+    [() (force installation-name)]
+    [(config) (utils:get-installation-name config)]))
 (define (get-build-stamp) (force config:build-stamp))
 
 ;; ----------------------------------------
@@ -209,24 +220,15 @@
 ;; ----------------------------------------
 ;; "doc"
 
-(define delayed-#f (delay/sync #f))
-
-(provide find-doc-dir
-         find-user-doc-dir
-         get-doc-search-dirs)
-(define-finder no-provide
+(define-finder provide
   config:doc-dir
   find-doc-dir
   find-user-doc-dir
-  delayed-#f
-  get-new-doc-search-dirs
+  config:doc-search-dirs
+  get-doc-search-dirs
   "doc")
-;; For now, include "doc" pseudo-collections in search path:
-(define (get-doc-search-dirs)
-  (combine-search (force config:doc-search-dirs)
-                  (append (get-new-doc-search-dirs)
-                          (map (lambda (p) (build-path p "doc"))
-                               (current-library-collection-paths)))))
+
+(provide config:doc-search-dirs)
 
 ;; ----------------------------------------
 ;; "include"
@@ -250,6 +252,8 @@
   get-cross-lib-search-dirs
   "lib")
 
+(provide config:lib-search-dirs)
+
 ;; ----------------------------------------
 ;; "share"
 
@@ -258,6 +262,8 @@
   find-share-dir
   find-user-share-dir
   "share")
+
+(provide config:share-search-dirs)
 
 ;; ----------------------------------------
 ;; "apps"
@@ -278,15 +284,20 @@
   find-user-man-dir
   "man")
 
+(provide config:man-search-dirs)
+
 ;; ----------------------------------------
 ;; Executables
 
-;; `setup/dirs`
+;; See `setup/dirs`
 
 (provide config:bin-dir
          config:gui-bin-dir
          config:config-tethered-console-bin-dir
-         config:config-tethered-gui-bin-dir)
+         config:config-tethered-gui-bin-dir
+         config:config-tethered-apps-dir
+         config:bin-search-dirs
+         config:gui-bin-search-dirs)
 
 ;; ----------------------------------------
 ;; DLLs

@@ -10,7 +10,8 @@
             [call-with-input-file   -call-with-input-file]
             [call-with-output-file  -call-with-output-file]
             [with-input-from-file   -with-input-from-file]
-            [with-output-to-file    -with-output-to-file])
+            [with-output-to-file    -with-output-to-file]
+            [raise-syntax-error     -raise-syntax-error])
            call-with-input-file*
            call-with-output-file*
            (rename-out
@@ -24,6 +25,11 @@
   (define binary-or-text-desc
     "(or/c 'binary 'text)")
 
+  (define DEFAULT-CREATE-PERMS #o666)
+  (define (permissions? perms)
+    (and (exact-integer? perms) (<= 0 perms 65535)))
+  (define perms-desc "(integer-in 0 65535)")
+
   (define (open-input-file path #:mode [mode 'binary] #:for-module? [for-module? #f])
     (unless (path-string? path)
       (raise-argument-error 'open-input-file "path-string?" path))
@@ -32,24 +38,30 @@
     (k:open-input-file path mode (if for-module? 'module 'none)))
 
   (define (open-output-file path #:mode [mode 'binary]
-                            #:exists [exists 'error])
+                            #:exists [exists 'error]
+                            #:permissions [perms DEFAULT-CREATE-PERMS])
     (unless (path-string? path)
       (raise-argument-error 'open-output-file "path-string?" path))
     (unless (memq mode '(binary text))
       (raise-argument-error 'open-output-file binary-or-text-desc mode))
     (unless (memq exists exists-syms)
       (raise-argument-error 'open-output-file exists-desc exists))
-    (k:open-output-file path mode exists))
+    (unless (permissions? perms)
+      (raise-argument-error 'open-output-file perms-desc perms))
+    (k:open-output-file path mode exists perms))
 
   (define (open-input-output-file path #:mode [mode 'binary]
-                                  #:exists [exists 'error])
+                                  #:exists [exists 'error]
+                                  #:permissions [perms DEFAULT-CREATE-PERMS])
     (unless (path-string? path)
       (raise-argument-error 'open-input-output-file "path-string?" path))
     (unless (memq mode '(binary text))
       (raise-argument-error 'open-input-output-file binary-or-text-desc mode))
     (unless (memq exists exists-syms)
       (raise-argument-error 'open-input-output-file exists-desc exists))
-    (k:open-input-output-file path mode exists))
+    (unless (permissions? perms)
+      (raise-argument-error 'open-input-output-file perms-desc perms))
+    (k:open-input-output-file path mode exists perms))
 
   (define (call-with-input-file path proc #:mode [mode 'binary])
     (unless (path-string? path)
@@ -63,7 +75,8 @@
 
   (define (call-with-output-file path proc
                                  #:mode [mode 'binary]
-                                 #:exists [exists 'error])
+                                 #:exists [exists 'error]
+                                 #:permissions [perms DEFAULT-CREATE-PERMS])
     (unless (path-string? path)
       (raise-argument-error 'call-with-output-file "path-string?" path))
     (unless (and (procedure? proc)
@@ -73,7 +86,9 @@
       (raise-argument-error 'call-with-output-file binary-or-text-desc mode))
     (unless (memq exists exists-syms)
       (raise-argument-error 'call-with-output-file exists-desc exists))
-    (k:call-with-output-file path proc mode exists))
+    (unless (permissions? perms)
+      (raise-argument-error 'call-with-output-file perms-desc perms))
+    (k:call-with-output-file path proc mode exists perms))
 
   (define (with-input-from-file path proc #:mode [mode 'binary])
     (unless (path-string? path)
@@ -87,7 +102,8 @@
 
   (define (with-output-to-file path proc
                                #:mode [mode 'binary]
-                               #:exists [exists 'error])
+                               #:exists [exists 'error]
+                               #:permissions [perms DEFAULT-CREATE-PERMS])
     (unless (path-string? path)
       (raise-argument-error 'with-output-to-file "path-string?" path))
     (unless (and (procedure? proc)
@@ -97,7 +113,9 @@
       (raise-argument-error 'with-output-to-file binary-or-text-desc mode))
     (unless (memq exists exists-syms)
       (raise-argument-error 'with-output-to-file exists-desc exists))
-    (k:with-output-to-file path proc mode exists))
+    (unless (permissions? perms)
+      (raise-argument-error 'with-output-to-file perms-desc perms))
+    (k:with-output-to-file path proc mode exists perms))
 
   (define (call-with-input-file* path proc #:mode [mode 'binary])
     (unless (path-string? path)
@@ -115,7 +133,8 @@
 
   (define (call-with-output-file* path proc 
                                   #:mode [mode 'binary]
-                                  #:exists [exists 'error])
+                                  #:exists [exists 'error]
+                                  #:permissions [perms DEFAULT-CREATE-PERMS])
       (unless (path-string? path)
         (raise-argument-error 'call-with-output-file* "path-string?" path))
       (unless (and (procedure? proc)
@@ -125,7 +144,9 @@
         (raise-argument-error 'call-with-output-file* binary-or-text-desc mode))
       (unless (memq exists exists-syms)
         (raise-argument-error 'call-with-output-file* exists-desc exists))
-      (let ([p (k:open-output-file path mode exists)])
+      (unless (permissions? perms)
+        (raise-argument-error 'call-with-output-file* perms-desc perms))
+      (let ([p (k:open-output-file path mode exists perms)])
         (dynamic-wind
             void
             (lambda () (proc p))
@@ -141,4 +162,14 @@
                            path<?)])
         (if build?
             (map (lambda (i) (build-path dir i)) content)
-            content)))))
+            content))))
+
+  (define (raise-syntax-error given-name message
+                              [expr #f] [sub-expr #f]
+                              [extra-sources null]
+                              [message-suffix ""]
+                              #:exn [exn exn:fail:syntax])
+    (do-raise-syntax-error 'raise-syntax-error exn given-name message
+                           expr sub-expr
+                           extra-sources
+                           message-suffix)))

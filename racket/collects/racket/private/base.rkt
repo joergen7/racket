@@ -12,7 +12,9 @@
              "cert.rkt"
              "submodule.rkt"
              "generic-interfaces.rkt"
+             "print-value-columns.rkt"
              "kw-syntax-binding.rkt" ; shadows `syntax-binding-set-extend`
+             "kw-syntax-serialize.rkt" ; shadows `syntax-serialize` and `syntax-deserialize
              (for-syntax "stxcase-scheme.rkt"))
 
   (#%provide (all-from-except "pre-base.rkt"
@@ -25,7 +27,9 @@
                               with-output-to-file
                               directory-list
                               regexp-replace*
-                              new-apply-proc)
+                              new-apply-proc
+                              do-raise-syntax-error
+                              raise-syntax-error)
              struct
              (all-from-except "hash.rkt" paired-fold)
              (all-from "list.rkt")
@@ -39,7 +43,9 @@
              (all-from "cert.rkt")
              (all-from "submodule.rkt")
              (all-from "generic-interfaces.rkt")
+             (all-from "print-value-columns.rkt")
              (all-from "kw-syntax-binding.rkt")
+             (all-from "kw-syntax-serialize.rkt")
              (for-syntax syntax-rules syntax-id-rules ... _)
              (rename -open-input-file open-input-file)
              (rename -open-output-file open-output-file)
@@ -49,5 +55,6 @@
              (rename -with-input-from-file with-input-from-file)
              (rename -with-output-to-file with-output-to-file)
              (rename -directory-list directory-list)
+             (rename -raise-syntax-error raise-syntax-error)
              call-with-input-file*
              call-with-output-file*))

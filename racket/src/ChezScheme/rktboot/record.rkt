@@ -39,7 +39,7 @@
          record-type-field-names
          record-type-field-indices
          csv7:record-type-field-names
-         csv7:record-type-field-indices
+         $record-type-field-indices
          csv7:record-type-field-decls
          record-writer
          $object-ref)
@@ -59,6 +59,9 @@
          #(fld flags #f scheme-object 57)
          #(fld uid #f scheme-object 65)
          #(fld counts #f scheme-object 73))))
+
+(define base-rtd-ancestry (vector #f base-rtd))
+(define ANCESTRY-PARENT-OFFSET 2)
 
 (define (s:struct-type? v)
   (or (struct-type? v)
@@ -138,16 +141,17 @@
 (define rtd-ancestors (make-weak-hasheq))
 
 (define (register-rtd-ancestors! struct:name parent)
+  ;; ancestry vector is `(vector #f ... parent self)`
   (unless (hash-ref rtd-ancestors struct:name #f)
     (cond
       [(not parent)
-       (hash-set! rtd-ancestors struct:name (vector #f))]
+       (hash-set! rtd-ancestors struct:name (vector #f struct:name))]
       [(eq? parent struct:base-rtd-subtype)
-       (hash-set! rtd-ancestors struct:name (vector base-rtd #f))]
+       (hash-set! rtd-ancestors struct:name (vector #f base-rtd struct:name))]
       [else
        (define p-vec (hash-ref rtd-ancestors parent))
-       (define vec (make-vector (+ 1 (vector-length p-vec)) parent))
-       (vector-copy! vec 1 p-vec)
+       (define vec (make-vector (+ 1 (vector-length p-vec)) struct:name))
+       (vector-copy! vec 0 p-vec)
        (hash-set! rtd-ancestors struct:name vec)])))
 
 (define rtd-fields (make-weak-hasheq))
@@ -344,7 +348,7 @@
         (assert-accessor)
         (lambda (rtd)
           (cond
-            [(base-rtd? rtd) '#(#f)]
+            [(base-rtd? rtd) base-rtd-ancestry]
             [else
              (define vec (hash-ref rtd-ancestors rtd))
              (define-values (r-name init-cnt auto-cnt ref set immutables super skipped?)
@@ -353,7 +357,7 @@
                (if (eq? super struct:base-rtd-subtype)
                    base-rtd
                    super))
-             (unless (eq? parent (vector-ref vec 0))
+             (unless (eq? parent (vector-ref vec (- (vector-length vec) ANCESTRY-PARENT-OFFSET)))
                (error "ancestry sanity check failed" rtd vec parent))
              vec]))]
        [(size)
@@ -519,7 +523,7 @@
      (map fld-name (hash-ref rtd-fields rtd))]))
 
 ;; all fields, including from parent
-(define (csv7:record-type-field-indices rtd)
+(define ($record-type-field-indices rtd)
   (cond
     [(base-rtd? rtd)
      (for/list ([f (in-list base-rtd-fields)]
@@ -546,7 +550,7 @@
 (define (record-type-field-indices rtd)
   (cond
     [(base-rtd? rtd)
-     (list->vector (csv7:record-type-field-indices rtd))]
+     (list->vector ($record-type-field-indices rtd))]
     [else
      (define-values (r-name init-cnt auto-cnt ref set immutables super skipped?)
        (struct-type-info rtd))

@@ -2,6 +2,9 @@ name: LLVM Static Analysis
 
 on: push
 
+permissions:
+  security-events: write
+
 jobs:
 
 #
@@ -9,8 +12,8 @@ jobs:
 #
   scanbuild-racketcgc:
 
-    runs-on: ubuntu-18.04
-    container: pmatos/scan-build:10.0.0
+    runs-on: ubuntu-20.04
+    container: pmatos/scan-build:12.0.1
 
     steps:
     - name: Install dependencies
@@ -63,8 +66,8 @@ jobs:
 
   scanbuild-racket3m:
 
-    runs-on: ubuntu-18.04
-    container: pmatos/scan-build:10.0.0
+    runs-on: ubuntu-20.04
+    container: pmatos/scan-build:12.0.1
 
     steps:
     - name: Install dependencies
@@ -126,8 +129,8 @@ jobs:
 
   scanbuild-racketcs:
 
-    runs-on: ubuntu-18.04
-    container: pmatos/scan-build:10.0.0
+    runs-on: ubuntu-20.04
+    container: pmatos/scan-build:12.0.1
 
     steps:
     - name: Install pkg dependencies

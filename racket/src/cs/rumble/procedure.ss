@@ -93,12 +93,12 @@
         (#3%$app/no-inline slow-extract-procedure tmp n-args))))
 
 (define (slow-extract-procedure f n-args)
-  (do-extract-procedure f f n-args #f not-a-procedure))
+  (do-extract-procedure f f f n-args #f not-a-procedure))
 
 ;; Returns a host-Scheme procedure, but first checks arity so that
 ;; checking and reporting use the right top-level function, and
 ;; the returned procedure may just report a not-a-procedure error
-(define (do-extract-procedure f orig-f n-args success-k fail-k)
+(define (do-extract-procedure f self-f orig-f n-args success-k fail-k)
   (cond
    [(#%procedure? f)
     (if (or (not n-args)
@@ -117,44 +117,56 @@
     (let* ([rtd (record-rtd f)]
            [v (struct-property-ref prop:procedure rtd none)])
       (cond
-       [(eq? v none) (fail-k orig-f)]
-       [(fixnum? v)
-        (let ([a (struct-property-ref prop:procedure-arity rtd #f)])
-          (cond
-           [(and a n-args (not (bitwise-bit-set? (unsafe-struct*-ref f a) n-args)))
-            (wrong-arity-wrapper orig-f)]
-           [else
-            (do-extract-procedure (unsafe-struct-ref f v) orig-f n-args success-k wrong-arity-wrapper)]))]
-       [(eq? v 'unsafe)
-        (do-extract-procedure
-         (if (chaperone? f)
-             (unsafe-procedure-chaperone-replace-proc f)
-             (unsafe-procedure-impersonator-replace-proc f))
-         orig-f
-         n-args
-         success-k
-         wrong-arity-wrapper)]
-       [else
-        (let ([a (struct-property-ref prop:procedure-arity rtd #f)])
-          (cond
-           [(and a n-args (not (bitwise-bit-set? (unsafe-struct*-ref f a) n-args)))
-            (wrong-arity-wrapper orig-f)]
-           [else
-            (do-extract-procedure
-             v
-             orig-f
-             (and n-args (fx+ n-args 1))
-             (lambda (v)
-               (let ([proc (case-lambda
-                            [() (v f)]
-                            [(a) (v f a)]
-                            [(a b) (v f a b)]
-                            [(a b c) (v f a b c)]
-                            [args (chez:apply v f args)])])
-                 (if success-k
-                     (success-k proc)
-                     proc)))
-             wrong-arity-wrapper)]))]))]
+        [(eq? v none) (fail-k orig-f)]
+        [(fixnum? v)
+         (let ([a (struct-property-ref prop:procedure-arity rtd #f)])
+           (cond
+             [(and a n-args (not (bitwise-bit-set? (unsafe-struct*-ref f a) n-args)))
+              (wrong-arity-wrapper orig-f)]
+             [else
+              (let ([new-f (unsafe-struct-ref self-f v)])
+                (do-extract-procedure new-f new-f orig-f n-args success-k wrong-arity-wrapper))]))]
+        [(eq? v 'unsafe)
+         (let ([new-f (if (chaperone? f)
+                          (unsafe-procedure-chaperone-replace-proc f)
+                          (unsafe-procedure-impersonator-replace-proc f))])
+           (do-extract-procedure
+            new-f
+            new-f
+            orig-f
+            n-args
+            success-k
+            wrong-arity-wrapper))]
+        [(eq? v 'struct-impersonate-apply)
+         (do-extract-procedure (impersonator-next f) self-f orig-f n-args success-k fail-k)]
+        [else
+         (let ([a (struct-property-ref prop:procedure-arity rtd #f)])
+           (cond
+             [(and a n-args (not (bitwise-bit-set? (unsafe-struct*-ref f a) n-args)))
+              (wrong-arity-wrapper orig-f)]
+             [(eq? v 'impersonate-apply)
+              (let ([proc (lambda args
+                            (impersonate-apply/parameter f self-f #t args))])
+                (if success-k
+                    (success-k proc)
+                    proc))]
+             [else
+              (do-extract-procedure
+               v
+               v
+               orig-f
+               (and n-args (fx+ n-args 1))
+               (lambda (v)
+                 (let ([proc (case-lambda
+                              [() (v self-f)]
+                              [(a) (v self-f a)]
+                              [(a b) (v self-f a b)]
+                              [(a b c) (v self-f a b c)]
+                              [args (chez:apply v self-f args)])])
+                   (if success-k
+                       (success-k proc)
+                       proc)))
+               wrong-arity-wrapper)]))]))]
    [else (fail-k orig-f)]))
 
 (define (extract-procedure-name f)
@@ -183,6 +195,47 @@
                (unsafe-procedure-impersonator-replace-proc f)))]
          [else (struct-object-name f)]))])]
    [else #f]))
+
+(define/who (procedure-realm f)
+  (check who procedure? f)
+  (cond
+    [(eq? f (hash-ref primitive-names (object-name f) #f))
+     primitive-realm]
+    [(#%procedure? f)
+     (cond
+       [(wrapper-procedure? f)
+        (or (extract-wrapper-procedure-realm f) default-realm)]
+       [else
+        (or (#%$procedure-realm f) default-realm)])]
+    [(impersonator-property-accessor-procedure? f)
+     (impersonator-property-accessor-procedure-realm f)]
+    [(record? f)
+     (cond
+       [(named-procedure? f)
+        (named-procedure-realm f)]
+       [(reduced-arity-procedure? f)
+        (or (reduced-arity-procedure-realm f)
+            (procedure-realm (reduced-arity-procedure-proc f)))]
+       [(position-based-accessor? f)
+        default-realm]
+       [(position-based-mutator? f)
+        default-realm]
+       [else
+        (let* ([v (struct-property-ref prop:procedure (record-rtd f) #f)])
+          (cond
+            [(fixnum? v)
+             (let ([v (unsafe-struct-ref f v)])
+               (cond
+                 [(procedure? v) (procedure-realm v)]
+                 [else default-realm]))]
+            [(eq? v 'unsafe)
+             (procedure-realm
+              (if (chaperone? f)
+                  (unsafe-procedure-chaperone-replace-proc f)
+                  (unsafe-procedure-impersonator-replace-proc f)))]
+            [(procedure? v) (procedure-realm v)]
+            [else default-realm]))])]
+    [else default-realm]))
 
 (define/who procedure-arity-includes?
   (case-lambda
@@ -299,8 +352,9 @@
      [(arity-string-maker f)
       => (lambda (make-str)
            (let ([expected (make-str)])
-             (do-raise-arity-error
+             (do-arity-error
               f
+              #f
               (if (string? expected)
                   (string-append "  expected: " expected "\n")
                   "")
@@ -346,12 +400,13 @@
 
 ;; Host Scheme wrapper procedures data content:
 ;;
-;;  - (vector <symbol-or-#f> <proc>) => not a method, and name is either
-;;                                      <symbol-or-#f> or name of <proc>
-;;  - (vector <symbol-or-#f> <proc> 'method) => is a method
+;;  - (vector <symbol-or-#f> <realm-or-#f> <proc>) => not a method, and name is either
+;;                                                    <symbol-or-#f> or name of <proc>
+;;  - (vector <symbol-or-#f> <realm-or-#f> <proc> 'method) => is a method
 ;;  - (box <symbol>) => JIT function generated, name is <symbol>, not a method
 ;;  - <parameter-data> => parameter
-;;  - <symbol> => JITted with <symbol> name
+;;  - <symbol> => JITted with <symbol> name and default realm
+;;  - (cons <symbol-or-#f> <symbol>) => <symbol-or-#f> name and <symbol> realm
 ;;  - #\c => struct constructor
 ;;  - #\p => struct predicate
 ;;  - (cons rtd pos) => struct accessor
@@ -362,7 +417,7 @@
 (define-record method-procedure (proc))
 
 (define (method-wrapper-vector? vec)
-  (fx= 3 (#%vector-length vec)))
+  (fx= 4 (#%vector-length vec)))
 
 (define/who (procedure->method proc)
   (check who procedure? proc)
@@ -376,14 +431,15 @@
                     (and (#%vector? v)
                          v)))])
       (if v
-          (make-arity-wrapper-procedure (#%vector-ref v 1)
+          (make-arity-wrapper-procedure (#%vector-ref v 2)
                                         (procedure-arity-mask proc)
                                         (vector (#%vector-ref v 0)
                                                 (#%vector-ref v 1)
+                                                (#%vector-ref v 2)
                                                 'method))
           (make-arity-wrapper-procedure proc
                                         (procedure-arity-mask proc)
-                                        (vector #f proc 'method))))]
+                                        (vector #f #f proc 'method))))]
    [else
     (make-method-procedure proc)]))
 
@@ -474,91 +530,106 @@
 
 ;; ----------------------------------------
 
-(define-record reduced-arity-procedure (proc mask name))
+(define-record reduced-arity-procedure (proc mask name realm))
 
 (define/who procedure-reduce-arity
   (case-lambda
-    [(proc a name)
+    [(proc a name realm)
      (check who procedure? proc)
      (let ([mask (arity->mask a)])
        (unless mask
          (raise-arguments-error who "procedure-arity?" a))
        (check who symbol? :or-false name)
+       (check who symbol? realm)
        (unless (= mask (bitwise-and mask (procedure-arity-mask proc)))
          (raise-arguments-error who
                                 "arity of procedure does not include requested arity"
                                 "procedure" proc
                                 "requested arity" a))
-       (do-procedure-reduce-arity-mask proc mask name))]
-    [(proc a) (procedure-reduce-arity proc a #f)]))
+       (do-procedure-reduce-arity-mask proc mask name (and name realm)))]
+    [(proc a name) (procedure-reduce-arity proc a name default-realm)]
+    [(proc a) (procedure-reduce-arity proc a #f default-realm)]))
 
 (define/who procedure-reduce-arity-mask
   (case-lambda
-    [(proc mask name)
+    [(proc mask name realm)
      (check who procedure? proc)
      (check who exact-integer? mask)
      (check who symbol? :or-false name)
+     (check who symbol? realm)
      (unless (= mask (bitwise-and mask (procedure-arity-mask proc)))
        (raise-arguments-error who
                               "arity mask of procedure does not include requested arity mask"
                               "procedure" proc
                               "requested arity mask" mask))
-     (do-procedure-reduce-arity-mask proc mask name)]
-    [(proc mask) (procedure-reduce-arity-mask proc mask #f)]))
+     (do-procedure-reduce-arity-mask proc mask name (and name realm))]
+    [(proc mask name) (procedure-reduce-arity-mask proc mask name default-realm)]
+    [(proc mask) (procedure-reduce-arity-mask proc mask #f default-realm)]))
 
 ;; see also `procedure-rename*` in "struct.ss"
-(define (do-procedure-reduce-arity-mask proc mask name)
+(define (do-procedure-reduce-arity-mask proc mask name realm)
   (cond
    [(and (wrapper-procedure? proc)
          (#%vector? (wrapper-procedure-data proc)))
     (let ([v (wrapper-procedure-data proc)])
-      (make-arity-wrapper-procedure (#%vector-ref v 1)
+      (make-arity-wrapper-procedure (#%vector-ref v 2)
                                     mask
                                     (cond
                                      [(method-wrapper-vector? v)
                                       (vector (or name (#%vector-ref v 0))
-                                              (#%vector-ref v 1)
+                                              (or realm (#%vector-ref v 1))
+                                              (#%vector-ref v 2)
                                               'method)]
-                                     [name (vector (or name (#%vector-ref v 0))
-                                                   (#%vector-ref v 1))]
+                                     [name (vector name
+                                                   realm
+                                                   (#%vector-ref v 2))]
                                      [else v])))]
    [(#%procedure? proc)
     (make-arity-wrapper-procedure proc
                                   mask
                                   (if (procedure-is-method-by-name? proc)
-                                      (vector name proc 'method)
-                                      (vector name proc)))]
+                                      (vector name realm proc 'method)
+                                      (vector name realm proc)))]
    [(reduced-arity-procedure? proc)
     (do-procedure-reduce-arity-mask (reduced-arity-procedure-proc proc)
                                     mask
-                                    (or name (reduced-arity-procedure-name proc)))]
+                                    (or name (reduced-arity-procedure-name proc))
+                                    (or realm (reduced-arity-procedure-realm proc)))]
    [else
     (make-reduced-arity-procedure proc
                                   mask
-                                  name)]))
+                                  name
+                                  realm)]))
 
 ;; ----------------------------------------
 
-(define-record named-procedure (proc name))
+(define-record named-procedure (proc name realm))
 
-(define/who (procedure-rename proc name)
-  (cond
-   [(#%procedure? proc)
-    ;; Potentially avoid an extra wrapper layer, and also work before
-    ;; `procedure?` is fully filled in
-    (check who symbol? name)
-    (do-procedure-reduce-arity-mask proc (#%procedure-arity-mask proc) name)]
-   [(reduced-arity-procedure? proc)
-    ;; Avoid an extra wrapper layer, and also work before
-    ;; `procedure?` is fully filled in
-    (check who symbol? name)
-    (make-reduced-arity-procedure (reduced-arity-procedure-proc proc)
-                                  (reduced-arity-procedure-mask proc)
-                                  name)]
-   [else
-    (check who procedure? proc)
-    (check who symbol? name)
-    (make-named-procedure proc name)]))
+(define/who procedure-rename
+  (case-lambda
+   [(proc name) (procedure-rename proc name default-realm)]
+   [(proc name realm)
+    (cond
+      [(#%procedure? proc)
+       ;; Potentially avoid an extra wrapper layer, and also work before
+       ;; `procedure?` is fully filled in
+       (check who symbol? name)
+       (check who symbol? realm)
+       (do-procedure-reduce-arity-mask proc (#%procedure-arity-mask proc) name realm)]
+      [(reduced-arity-procedure? proc)
+       ;; Avoid an extra wrapper layer, and also work before
+       ;; `procedure?` is fully filled in
+       (check who symbol? name)
+       (check who symbol? realm)
+       (make-reduced-arity-procedure (reduced-arity-procedure-proc proc)
+                                     (reduced-arity-procedure-mask proc)
+                                     name
+                                     realm)]
+      [else
+       (check who procedure? proc)
+       (check who symbol? name)
+       (check who symbol? realm)
+       (make-named-procedure proc name realm)])]))
 
 (define (procedure-maybe-rename proc name)
   (if name
@@ -567,7 +638,7 @@
 
 ;; ----------------------------------------
 
-(define (make-jit-procedure force mask name)
+(define (make-jit-procedure force mask name realm)
   (letrec ([p (make-wrapper-procedure
                (lambda args
                  (let ([f (force)])
@@ -579,27 +650,43 @@
                         (set-wrapper-procedure-data! p (box name)))))
                    (apply p args)))
                mask
-               name)])
+               (if realm
+                   (vector name realm)
+                   name))])
     p))
 
 ;; A boxed `name` means a method
-(define (make-interp-procedure proc mask name)
+(define (make-interp-procedure proc mask name+realm)
+  (define (name-part n+r) (if (pair? n+r) (car n+r) n+r))
+  (define (realm-part n+r) (if (pair? n+r) (cdr n+r) default-realm))
   (make-arity-wrapper-procedure
    proc
    mask
-   (if (box? name)
-       (vector (unbox name) proc 'method)
-       (vector name proc))))
+   (if (box? name+realm)
+       (vector (name-part (unbox name+realm)) (realm-part (unbox name+realm)) proc 'method)
+       (vector (name-part name+realm) (realm-part name+realm) proc))))
 
 (define (extract-wrapper-procedure-name p)
   (let ([name (wrapper-procedure-data p)])
     (cond
      [(#%box? name) (#%unbox name)]
      [(#%vector? name) (or (#%vector-ref name 0)
-                           (object-name (#%vector-ref name 1)))]
+                           (object-name (#%vector-ref name 2)))]
      [(parameter-data? name) (parameter-data-name name)]
      [(symbol? name) name]
+     [(and (pair? name) (symbol? (car name))) (car name)]
      [else (object-name (wrapper-procedure-procedure p))])))
+
+(define (extract-wrapper-procedure-realm p)
+  (let ([name (wrapper-procedure-data p)])
+    (cond
+     [(#%box? name) (#%unbox name)]
+     [(#%vector? name) (or (#%vector-ref name 1)
+                           (procedure-realm (#%vector-ref name 2)))]
+     [(parameter-data? name) (parameter-data-realm name)]
+     [(symbol? name) default-realm]
+     [(and (pair? name) (symbol? (car name))) (cdr name)]
+     [else (procedure-realm (wrapper-procedure-procedure p))])))
 
 ;; ----------------------------------------
 
@@ -680,21 +767,18 @@
      [else
       (k #f #f #f)])))
 
-(define (impersonate-apply proc . args)
-  (impersonate-apply/parameter proc #t args))
-
 ;; If `actually-call?` is #f, then don't call the procedure in `proc`,
 ;; because we're trying to get an inpersonated-parameter value
-(define (impersonate-apply/parameter proc actually-call? args)
+(define (impersonate-apply/parameter p self-p actually-call? args)
   (let ([n (length args)])
     (cond
-     [(not (procedure-arity-includes? (impersonator-val proc) n))
+      [(not (procedure-arity-includes? (impersonator-val p) n))
       ;; Let primitive application complain:
-      (|#%app| (impersonator-val proc) args)]
+      (|#%app| (impersonator-val p) args)]
      [else
       ;; Loop through wrappers so that `{chaperone,impersonate}-procedure*`
       ;; wrappers can receive the original `proc` argument
-      (let loop ([p proc] [args args])
+      (let loop ([p p] [args args])
         (cond
          [(or (procedure-impersonator? p)
               (procedure-chaperone? p))
@@ -723,7 +807,7 @@
                                     (if (if chaperone?
                                             (procedure*-chaperone? p)
                                             (procedure*-impersonator? p))
-                                        (apply wrapper proc args)
+                                        (apply wrapper self-p args)
                                         (apply wrapper args)))])
                              ;; Set mark, if any, while calling:
                              (cond
@@ -783,7 +867,7 @@
                   [(fx> nn n)
                    (raise-wrapper-bad-extra-result-error chaperone? pos (car new-args) next-p wrapper)]
                   [else
-                   (raise-wrapper-result-arity-error chaperone? proc wrapper n nn)])))))]
+                   (raise-wrapper-result-arity-error chaperone? self-p wrapper n nn)])))))]
          [(unsafe-procedure-impersonator? p)
           (apply p args)]
          [(unsafe-procedure-chaperone? p)
@@ -795,15 +879,16 @@
          [else
           ;; If `p` is a structure whose `prop:procedure` value is an
           ;; integer `i`, then we should extract the field at position
-          ;; `i` from `proc`, not from `p`, so that any interpositions
+          ;; `i` from `self-p`, not from `p`, so that any interpositions
           ;; on that access are performed.
           (let ([v (and (record? p)
                         (struct-property-ref prop:procedure (record-rtd p) #f))])
             (cond
              [(integer? v)
-              (apply (unsafe-struct-ref proc v) args)]
+              (apply (unsafe-struct-ref self-p v) args)]
              [else
-              (apply p args)]))]))])))
+              (#%apply (do-extract-procedure p self-p self-p (length args) #f not-a-procedure)
+                       args)]))]))])))
 
 (define (set-procedure-impersonator-hash!)
   (record-type-hash-procedure (record-type-descriptor procedure-chaperone)
@@ -940,9 +1025,9 @@
 ;; ----------------------------------------
 
 (define (primitive? v)
-  (or (eq? v make-struct-type-property)
-      (eq? v make-struct-type)
-      (eq? v car)))
+  (and (procedure? v)
+       (not (object-name? v))
+       (eq? v (hash-ref primitive-names (object-name v) #f))))
 
 (define (primitive-closure? v) #f)
 
@@ -950,16 +1035,12 @@
   (cond
    [(eq? prim make-struct-type-property) 3]
    [(eq? prim make-struct-type) 5]
-   [(eq? prim car) 1]
+   [(primitive? prim)
+    (if (procedure-known-single-valued? prim)
+        1
+        (arity-at-least 0))]
    [else
     (raise-argument-error 'primitive-result-arity "primitive?" prim)]))
-
-;; ----------------------------------------
-
-;; Used to encode an 'inferred-name property as a Scheme expression
-(define-syntax (|#%name| stx)
-  (syntax-case stx ()
-    [(_ name val) #`(let ([name val]) name)]))
 
 ;; ----------------------------------------
 
@@ -984,7 +1065,7 @@
                                                 rtd
                                                 p
                                                 s
-                                                #f #f)]
+                                                #f #f #f)]
                               [else
                                (let ([who (position-based-accessor-name pba)])
                                  (unless (or (record? s rtd)
@@ -1023,7 +1104,7 @@
                                                    abs-pos
                                                    s
                                                    v
-                                                   #f #f))]
+                                                   #f #f #f))]
                               [else
                                (let ([who (position-based-mutator-name pbm)])
                                  (unless (or (record? s rtd)
@@ -1061,22 +1142,24 @@
                         #t)
 
   (let ([register-procedure-impersonator-struct-type!
-         (lambda (rtd)
-           (struct-property-set! prop:procedure rtd impersonate-apply))])
+         (lambda (rtd struct?)
+           (struct-property-set! prop:procedure rtd (if struct?
+                                                        'struct-impersonate-apply
+                                                        'impersonate-apply)))])
     (let ([register-procedure-impersonator-struct-type!
-           (lambda (rtd)
-             (register-procedure-impersonator-struct-type! rtd)
+           (lambda (rtd struct?)
+             (register-procedure-impersonator-struct-type! rtd struct?)
              (struct-property-set! prop:procedure-arity rtd 4))])
-      (register-procedure-impersonator-struct-type! (record-type-descriptor procedure-chaperone))
-      (register-procedure-impersonator-struct-type! (record-type-descriptor procedure-impersonator))
-      (register-procedure-impersonator-struct-type! (record-type-descriptor procedure*-chaperone))
-      (register-procedure-impersonator-struct-type! (record-type-descriptor procedure*-impersonator))
-      (register-procedure-impersonator-struct-type! (record-type-descriptor procedure-struct-chaperone))
-      (register-procedure-impersonator-struct-type! (record-type-descriptor procedure-struct-impersonator))
-      (register-procedure-impersonator-struct-type! (record-type-descriptor procedure~-struct-chaperone))
-      (register-procedure-impersonator-struct-type! (record-type-descriptor procedure~-struct-impersonator)))
-    (register-procedure-impersonator-struct-type! (record-type-descriptor procedure-struct-undefined-chaperone))
-    (register-procedure-impersonator-struct-type! (record-type-descriptor procedure~-struct-undefined-chaperone)))
+      (register-procedure-impersonator-struct-type! (record-type-descriptor procedure-chaperone) #f)
+      (register-procedure-impersonator-struct-type! (record-type-descriptor procedure-impersonator) #f)
+      (register-procedure-impersonator-struct-type! (record-type-descriptor procedure*-chaperone) #f)
+      (register-procedure-impersonator-struct-type! (record-type-descriptor procedure*-impersonator) #f)
+      (register-procedure-impersonator-struct-type! (record-type-descriptor procedure-struct-chaperone) #t)
+      (register-procedure-impersonator-struct-type! (record-type-descriptor procedure-struct-impersonator) #t)
+      (register-procedure-impersonator-struct-type! (record-type-descriptor procedure~-struct-chaperone) #t)
+      (register-procedure-impersonator-struct-type! (record-type-descriptor procedure~-struct-impersonator) #t))
+    (register-procedure-impersonator-struct-type! (record-type-descriptor procedure-struct-undefined-chaperone) #t)
+    (register-procedure-impersonator-struct-type! (record-type-descriptor procedure~-struct-undefined-chaperone) #t))
 
   (let ([register-procedure-incomplete-arity!
          (lambda (rtd)

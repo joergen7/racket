@@ -43,13 +43,20 @@ void S_doflush(uptr start, uptr end) {
   sys_icache_invalidate((void *)start, (char *)end-(char *)start);
 #else
   __clear_cache((char *)start, (char *)end);
+# if defined(__clang__) && defined(__aarch64__) && !defined(__APPLE__)
+  /* Seem to need an extra combination of barriers here to make up for
+     something in Clang's __clear_cache() */
+  asm volatile ("dsb ish\n\t"
+                "isb"
+                : : : "memory");
+# endif
 #endif
 }
 
-void S_machine_init() {
+void S_machine_init(void) {
   int l1_dcache_line_size, l1_icache_line_size;
 
-#if defined(__linux__)
+#if defined(__linux__) && defined(_SC_LEVEL1_DCACHE_LINESIZE)
   if ((l1_dcache_line_size = sysconf(_SC_LEVEL1_DCACHE_LINESIZE)) <= 0) {
     l1_dcache_line_size = DEFAULT_L1_MAX_CACHE_LINE_SIZE;
   }

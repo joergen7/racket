@@ -107,6 +107,9 @@
   (ptest "#<a>" (a 1 2))
   (ptest "(b 1 2)" (b 1 2))
   (ptest "'#s(c 1 2)" (c 1 2))
+  (test "#s(c 1 2)" 'prefab
+        (parameterize ([print-unreadable #f])
+          (format "~s" (c 1 2))))
 
   (let ([s (b 1 2)])
     (ptest "(list (cons (b 1 2) 0) (cons (b 1 2) 0))" (list (cons s 0) (cons s 0))))
@@ -336,9 +339,13 @@
   (test "'()" format "~e" (list (show-nothing))))
 
 ;; ----------------------------------------
-;; make sure +inf.0 is ok for `print-syntax-width':
+;; make sure +inf.0, 3, and 0 are ok for `print-syntax-width':
 (parameterize ([print-syntax-width +inf.0])
   (test +inf.0 print-syntax-width))
+(parameterize ([print-syntax-width 0])
+  (test 0 print-syntax-width))
+(parameterize ([print-syntax-width 3])
+  (test 3 print-syntax-width))
 
 ;; ----------------------------------------
 ;; Try to provoke a stack overflow during printing of truncated
@@ -670,6 +677,14 @@
                     "('a ,a `a ,@a #'a #,a #`a #,@a)"
                     "'('a ,a `a ,@a #'a #,a #`a #,@a)"
                     "('a ,a `a ,@a #'a #,a #`a #,@a)"))
+
+  (parameterize ([print-reader-abbreviations #t])
+    (test-print/all (list (mcons 'unquote '()) (vector (mcons 1 2) 'unquote '()))
+                    "({unquote} #({1 . 2} unquote ()))"
+                    "({unquote} #({1 . 2} unquote ()))"
+                    "({unquote} #({1 . 2} unquote ()))"
+                    "(list (mcons 'unquote '()) (vector (mcons 1 2) 'unquote '()))"
+                    "({unquote} #({1 . 2} unquote ()))"))
     
   (void)))
 
@@ -825,5 +840,45 @@
 
   (show println writeln displayln)
   (show pretty-print pretty-write pretty-display))
+
+;; ----------------------------------------
+
+(let ()
+  (struct named-procedure (procedure name)
+    #:property prop:procedure (struct-field-index procedure)
+    #:property prop:object-name (struct-field-index name))
+
+  (define f (named-procedure (lambda (x) x) "string name"))
+  (test "#<procedure:string name>" format "~s" f)
+  (test "string name" object-name f)
+
+  (define f2 (named-procedure (lambda (x) x) '("string name")))
+  (test "#<procedure>" format "~s" f2)
+  (test '("string name") object-name f2)
+
+  (define f3 (procedure-rename f 'other-name))
+  (test "#<procedure:other-name>" format "~a" f3)
+  (test 'other-name object-name f3))
+
+(let ()
+  (struct named-procedure (procedure name)
+    #:property prop:procedure (struct-field-index procedure)
+    #:property prop:object-name (struct-field-index name)
+    #:transparent)
+
+  (define f (named-procedure (procedure-rename (lambda (x) x) 'inner) "string name"))
+  (test "(named-procedure #<procedure:inner> \"string name\")" format "~v" f)
+  (test "string name" object-name f)
+
+  (define f2 (named-procedure (procedure-rename (lambda (x) x) 'inner) '("string name")))
+  (test "(named-procedure #<procedure:inner> '(\"string name\"))" format "~v" f2)
+  (test '("string name") object-name f2)
+
+  (define f3 (procedure-rename f 'other-name))
+  (test "#<procedure:other-name>" format "~a" f3)
+  (test 'other-name object-name f3))
+
+
+;; ----------------------------------------
 
 (report-errs)

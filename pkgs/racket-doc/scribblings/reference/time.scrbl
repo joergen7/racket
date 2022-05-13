@@ -5,8 +5,8 @@
 
 @defproc[(current-seconds) exact-integer?]{
 
-Returns the current time in seconds since midnight UTC, January 1,
-1970.}
+Returns the current time in seconds since @deftech{the epoch}:
+midnight UTC, January 1, 1970.}
 
 
 @defproc[(current-inexact-milliseconds) real?]{
@@ -21,6 +21,24 @@ Returns the current time in milliseconds since midnight UTC, January
 
 In this example, @racket[1289513737015] is in milliseconds and @racket[418]
 is in microseconds.}
+
+
+@defproc[(current-inexact-monotonic-milliseconds) real?]{
+
+Returns the number of milliseconds since an unspecified starting time.
+Unlike @racket[current-inexact-milliseconds], which is sensitive to
+the system clock and may therefore retreat or advance more quickly
+than real time if the system clock is adjusted, results from
+@racket[current-inexact-monotonic-milliseconds] will always advance
+with real time within a Racket process, but results across processes
+are not comparable.
+
+@examples[(eval:alts
+(current-inexact-monotonic-milliseconds)
+12772.418
+)]
+
+@history[#:added "8.1.0.4"]}
 
 
 @defproc[(seconds->date [secs-n real?]

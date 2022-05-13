@@ -610,7 +610,18 @@
 	     (c 4 5))))
   (test '(1 2 4 5) values l))
 
-  
+(err/rt-test (continuation-marks (current-thread) (make-continuation-prompt-tag)))
+(let ([t (thread (lambda () (semaphore-wait (make-semaphore))))])
+  (err/rt-test (continuation-marks t (make-continuation-prompt-tag)))
+  (sync (system-idle-evt))
+  (err/rt-test (continuation-marks t (make-continuation-prompt-tag))))
+
+(let ([t (thread void)])
+  (sync (system-idle-evt))
+  (define m (continuation-marks t (make-continuation-prompt-tag)))
+  (test #t continuation-mark-set? m)
+  (test null continuation-mark-set->list m 'anything))
+
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Try to test internal caching strategies
 
@@ -837,6 +848,9 @@
     (test (list s #t)
           list s (for/and ([i (in-range 100)]) (go)))))
 
+(test #t andmap (lambda (p) (pair? p)) (continuation-mark-set->context (current-continuation-marks)))
+(test #t andmap (lambda (v) (vector? v)) (continuation-mark-set->context (current-continuation-marks) #t))
+
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Test interaction of prompts and `continuation-mark-set-first'
 
@@ -1062,6 +1076,29 @@
   (err/rt-test (do-test/no-lookup cha2-mark #t) exn:fail?)
   (err/rt-test (do-test bad-mark 5) exn:fail?)
   (err/rt-test (do-test bad-mark-2 5) exn:fail?))
+
+;; Make sure chaperoned keys are not collapsed, and make sure
+;; parameters are in place for a chaperone invoked for a mark
+;; that is in tail position with respect to `parameterize`
+(module regression-test-for-chaperoned-keys racket/base
+  (provide f)
+  (define key
+    (chaperone-continuation-mark-key
+     (make-continuation-mark-key)
+     (lambda (v) (printf "get\n") v)
+     (lambda (v) (printf "set\n") v)))
+  (define (f)
+    (with-continuation-mark
+     key 1
+     (with-continuation-mark
+      key 2
+      'ok))))
+
+(let ([o (open-output-bytes)])
+  (let ([f (dynamic-require ''regression-test-for-chaperoned-keys 'f)])
+    (parameterize ([current-output-port o])
+      (f)))
+  (test #"set\nset\n" get-output-bytes o))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Check that caching works right for marks in continuations that

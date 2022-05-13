@@ -1,5 +1,6 @@
 #lang racket/base
-(require ffi/unsafe/custodian)
+(require ffi/unsafe/custodian
+         ffi/unsafe)
 
 (define c (make-custodian))
 
@@ -77,3 +78,70 @@
   (error "custodian-shutdown callback wasn't called"))
 
 (unregister-custodian-shutdown 'anything #f)
+
+;; ----------------------------------------
+;; Check unregistration callback after successful register
+
+(let ([c2 (make-custodian)]
+      [val (gensym)]
+      [ran? #f])
+  (define unreg
+    (register-finalizer-and-custodian-shutdown
+     val (lambda (v) (set! ran? #t)) c2
+     #:custodian-available (lambda (unreg) unreg)))
+  (unless (and (procedure? unreg)
+               (procedure-arity-includes? unreg 1))
+    (error "custodian-shutdown unregister is not a suitable procedure"))
+  (unreg val)
+  (custodian-shutdown-all c2)
+  (when ran?
+    (error "custodian-shutdown unregister did not work")))
+
+;; check that the unregister function doesn't retain the value:
+(let ([c2 (make-custodian)]
+      [val (gensym)])
+  (define unreg
+    (register-finalizer-and-custodian-shutdown
+     val void c2
+     #:custodian-available (lambda (unreg) unreg)))
+  (unless (eq? 'cgc (system-type 'gc))
+    (let ([we (make-will-executor)]
+          [done? #f])
+      (will-register we val (lambda (val)
+                              (unreg val)
+                              (set! done? #t)))
+      (collect-garbage)
+      (unless (and (will-try-execute we)
+                   done?)
+        (error "will wasn't ready")))))
+
+;; ----------------------------------------
+;; Check that `#:ordered?` works with  `register-finalizer`,
+;; including the case where an intermediate custodian is GCed
+
+(define (check-finalization #:forget-custodian? [forget-custodian? #f])
+  (define gone? #f)
+
+  (define c0 (make-custodian))
+  (define c1 (make-custodian c0))
+
+  (define x (vector 1 2))
+  ; (vector-set! x 1 x) ; prevents finalization in CS
+
+  (parameterize ([current-custodian c1])
+    (vector-set! x 0 (register-custodian-shutdown x void #:ordered? #t))
+    (register-finalizer x (lambda (x) (set! gone? #t))))
+
+  (when forget-custodian?
+    (set! c1 #f)
+    (collect-garbage)
+    (sync (system-idle-evt)))
+
+  (set! x #f)
+  (collect-garbage)
+  (sync (system-idle-evt))
+
+  (unless gone? (error "finalizer should have been called")))
+
+(check-finalization)
+(check-finalization #:forget-custodian? #t)

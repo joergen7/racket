@@ -243,21 +243,23 @@ URLs is:
 @optional{@exec{.git}}@optional{@exec{/}}@optional{@exec{?path=}@nonterm{path}}@;
 @optional{@exec{#}@nonterm{rev}}}
 
-where @nonterm{scheme} is @litchar{git}, @litchar{http}, or
-@litchar{https}, except when @nonterm{scheme} is @litchar{git} and
+where @nonterm{scheme} is @litchar{git}, @litchar{http},
+@litchar{https}, @litchar{git+http}, or @litchar{git+https},
+except when @nonterm{scheme} is @litchar{git} and
 @nonterm{host} is @litchar{github.com} (which is treated more specifically as a GitHub
 reference). The @nonterm{path} can contain multiple
 @litchar{/}-separated elements to form a path within the repository,
 and it defaults to the empty path. The @nonterm{rev} can be a branch,
-tag, or commit, and it defaults to @exec{master}.
+tag, or commit, and it defaults to using the default branch as reported
+by the server.
 
 @margin-note{Due to properties of the Git protocol, the archive might
 be accessed more efficiently when @nonterm{rev} refers to a branch or
 tag (even if it is written as a commit). In those cases, the content
 typically can be obtained without downloading irrelevant history.}
 
-For example, @filepath{http://bitbucket.org/game/tic-tac-toe#master}
-is a Git package source. 
+For example, @filepath{http://bitbucket.org/game/tic-tac-toe#main}
+is a Git package source.
 
 A checkout of the repository at @nonterm{rev} provides the content of
 the package, and @nonterm{scheme} determines the protocol
@@ -270,11 +272,17 @@ A package source is inferred to be a Git reference when it starts with
 source is also inferred to be a Git reference when it starts with
 @litchar{http://} or @litchar{https://} and the last non-empty path
 element ends in @litchar{.git}; a @litchar{.git} suffix is added if
-the source is otherwise specified to be a Git reference. The inferred
-package name is the last element of @nonterm{path} if it is non-empty,
-otherwise the inferred name is @nonterm{repo}.
+the source is otherwise specified to be a Git reference. Finally, a
+package source is inferred to be a Git reference when it starts with
+@litchar{git+https://} or @litchar{git+http://}, in which case no
+@litchar{.git} suffix in the path is needed to designate the source as
+a Git reference (and no @litchar{.git} suffix is implicitly added).
+The inferred package name is the last element of @nonterm{path} if it
+is non-empty, otherwise the inferred name is @nonterm{repo}.
 
-@history[#:changed "6.1.1.1" @elem{Added Git repository support.}]}
+@history[#:changed "6.1.1.1" @elem{Added Git repository support.}
+         #:changed "8.0.0.13" @elem{Added @litchar{git+https://}
+                                    and @litchar{git+http://} support.}]}
 
 @; ----------------------------------------
 @item{a remote URL naming a GitHub repository --- The format for such
@@ -285,7 +293,7 @@ URLs is the same as for a Git repository reference starting
 @optional{@exec{.git}}@optional{@exec{/}}@optional{@exec{?path=}@nonterm{path}}@;
 @optional{@exec{#}@nonterm{rev}}}
 
-For example, @filepath{git://github.com/game/tic-tac-toe#master}
+For example, @filepath{git://github.com/game/tic-tac-toe#main}
 is a GitHub package source.
 
 @margin-note{A Github repository source that starts with
@@ -452,8 +460,10 @@ sub-commands.
  @itemlist[
 
  @item{@DFlag{type} @nonterm{type} or @Flag{t} @nonterm{type} --- Specifies an interpretation of the package source,
-       where @nonterm{type} is either @exec{file}, @exec{dir}, @exec{file-url}, @exec{dir-url}, @exec{git}, @exec{github}, 
-       or @exec{name}. The type is normally inferred for each @nonterm{pkg-source}.}
+       where @nonterm{type} is either @exec{file}, @exec{dir}, @exec{file-url}, @exec{dir-url}, @exec{git},
+       @exec{git-url}, @exec{github}, or @exec{name}. The difference between @exec{git} and @exec{git-url}
+       is that a @litchar{.git} suffix is added to a @litchar{http} or @litchar{https} URL for type @exec{git}, but
+       not for type @exec{git-url}. The type is normally inferred for each @nonterm{pkg-source}.}
 
  @item{@DFlag{name} @nonterm{pkg} or @Flag{n} @nonterm{pkg} --- Specifies the name of the package,
        which makes sense only when a single @nonterm{pkg-source} is provided. The name is normally
@@ -657,7 +667,8 @@ sub-commands.
          #:changed "6.4.0.14" @elem{Added the @DFlag{dry-run} flag.}
          #:changed "7.2.0.8" @elem{Added the @DFlag{recompile-only} flag.}
          #:changed "7.4.0.4" @elem{Added the @DFlag{no-docs}, @Flag{D} flags.}
-         #:changed "7.6.0.14" @elem{Allowed multiple @DFlag{catalog} flags.}]}
+         #:changed "7.6.0.14" @elem{Allowed multiple @DFlag{catalog} flags.}
+         #:changed "8.0.0.13" @elem{Added @litchar{git-url} as a @DFlag{type} option.}]}
 
 
 @subcommand{@command/toc{update} @nonterm{option} ... @nonterm{pkg-source} ... 
@@ -1331,6 +1342,56 @@ The following @filepath{info.rkt} fields are used by the package manager:
        set up (plus collections for global documentation indexes and
        links).}
 
+ @item{@definfofield{license} --- a @deftech{license S-expression}
+  specifying the package's license. A license S-expression represents an @deftech{SPDX}
+  @hyperlink["https://spdx.github.io/spdx-spec/appendix-IV-SPDX-license-expressions/"]{
+   license expression} as a datum with the quoted form:
+
+  @racketgrammar[#:literals (AND OR WITH) license-sexp
+                 license-id
+                 (license-id WITH exception-id)
+                 (license-sexp AND license-sexp)
+                 (license-sexp OR license-sexp)]
+
+  @margin-note{See @elemref["spdx-plus-operator"]{further details below}
+   about @racket[_license-id] and the @litchar{+} operator.}
+
+  where a:
+
+  @itemize[
+ @item{@racket[_license-id] is a short-form identifier from the
+    @hyperlink["https://spdx.org/licenses/index.html"]{SPDX License List},
+    e.g@._ @racketvalfont{LGPL-3.0-or-later}, @racketvalfont{Apache-2.0},
+    or @racket[BSD-3-Clause]; and an}
+ @item{@racket[_exception-id] is an identifier from the
+    @hyperlink["https://spdx.org/licenses/exceptions-index.html"]{
+     SPDX License Exceptions} list, e.g@._ @racketvalfont{Classpath-exception-2.0}.}]
+
+  For example, packages in the main Racket distribution
+  define @racketidfont{license} as:
+  @racketblock[(define license
+                 '(Apache-2.0 OR MIT))]
+
+  The grammar of @tech{license S-expressions} is designed so that
+  @racket[(format "~s" license)] produces a string conforming to the grammar in
+  @hyperlink["https://spdx.github.io/spdx-spec/appendix-IV-SPDX-license-expressions/"]{
+  Appendix IV} and
+  @hyperlink["https://spdx.github.io/spdx-spec/appendix-V-using-SPDX-short-identifiers-in-source-files/"]{
+  Appendix V}
+  of the SPDX Specification v2.2.0,
+  which is specified in terms of character sequences.
+
+  @elemtag["spdx-plus-operator"]{If the @litchar{+} operator is used,}
+  it must be written as part of the @racket[_license-id],
+  e.g@._ @racketvalfont{AFL-2.0+}.
+  Note that the @hyperlink["https://spdx.dev/ids/"]{SPDX Workgroup has deprecated}
+  (under ``Allowing later versions of a license'') the use of the @litchar{+}
+  operator with GNU licenses: thus, one writes
+  @racketvalfont{AFL-2.0} or @racketvalfont{AFL-2.0+} but
+  @racketvalfont{GPL-3.0-only} or @racketvalfont{GPL-3.0-or-later}
+  (and neither @racket[GPL-3.0] nor @racket[GPL-3.0+] are correct).
+ }
+
  @item{@definfofield{distribution-preference} --- either
        @racket['source], @racket['built], or @racket['binary],
        indicating the most suitable distribution mode for the package
@@ -1356,7 +1417,8 @@ The following @filepath{info.rkt} fields are used by the package manager:
 ]
 
 @history[#:changed "6.1.0.5" @elem{Added @racketidfont{update-implies}.}
-         #:changed "6.1.1.6" @elem{Added @racketidfont{distribution-preference}.}]
+         #:changed "6.1.1.6" @elem{Added @racketidfont{distribution-preference}.}
+         #:changed "8.2.0.7" @elem{Added @racketidfont{license}.}]
 
 @; ----------------------------------------
 
@@ -1725,7 +1787,7 @@ packages can install DrDr metadata to it.}
 improvements to pieces of Racket. In particular, it would be wonderful
 to have a very thorough @filepath{data} collection of different
 data-structures. However, our existing setup for Scribble would force
-each new data structue to have a different top-level documentation
+each new data structure to have a different top-level documentation
 manual, rather than extending the documentation of the existing
 @filepath{data} collection. Similar issues will exist for the
 @filepath{net} and @filepath{file} collections. We should design a way

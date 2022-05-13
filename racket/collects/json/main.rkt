@@ -174,12 +174,23 @@
     (define-values [l c p] (port-next-location i))
     (raise-read-error (format "~a: ~a" who (apply format fmt args))
                       (object-name i) l c p #f))
+  (define (json-whitespace? ch)
+    (or (eq? ch #\space)
+        (eq? ch #\tab)
+        (eq? ch #\newline)
+        (eq? ch #\return)))
   (define (skip-whitespace)
     (define ch (peek-char i))
     (cond
-      [(and (char? ch) (char-whitespace? ch))
-       (read-char i)
-       (skip-whitespace)]
+      [(char? ch)
+       (cond
+         [(json-whitespace? ch)
+          (read-char i)
+          (skip-whitespace)]
+         [(char-whitespace? ch)
+          (err "found whitespace that is not allowed by the JSON specification\n  char: ~s"
+               ch)]
+         [else ch])]
       [else ch]))
   (define (byte-char=? b ch)
     (eqv? b (char->integer ch)))
@@ -296,13 +307,18 @@
                           (reverse l)]
            [(eqv? ch #\,) (read-byte i)
                           (loop (cons (read-one) l))]
-           [else (err "error while parsing a json ~a" what)]))]))
+           [else
+            (read-byte i) ;; consume the eof
+            (err "error while parsing a json ~a" what)]))]))
   ;;
   (define (read-hash)
     (define (read-pair)
       (define k (read-json))
       (unless (string? k) (err "non-string value used for json object key"))
       (define ch (skip-whitespace))
+      (when (eof-object? ch)
+        (read-byte i) ;; consume the eof
+        (err "unexpected end-of-file while parsing a json object pair"))
       (unless (char=? #\: ch)
         (err "error while parsing a json object pair"))
       (read-byte i)
@@ -342,6 +358,25 @@
       (- c (char->integer #\0)))
     (define (maybe-bytes c)
       (if (eof-object? c) #"" (bytes c)))
+    ;; evaluate n * 10^exp to inexact? without passing large arguments to expt
+    ;; assumes n is an integer
+    (define (safe-exponential->inexact n exp)
+      (define result-exp
+        (if (= n 0)
+            exp
+            (+ (log (abs n) 10) exp)))
+      (cond
+        [(< result-exp -400)
+         (cond
+           [(>= n 0) 0.0]
+           [else -0.0])]
+        [(> result-exp 400)
+         (cond
+           [(= n 0) 0.0]
+           [(> n 0) +inf.0]
+           [(< n 0) -inf.0])]
+        [else
+         (exact->inexact (* n (expt 10 exp)))]))
     ;; used to reconstruct input for error reporting:
     (define (n->string n exp)
       (define s (number->string n))
@@ -429,13 +464,14 @@
         [(digit-byte? c)
          (read-byte i)
          (read-exponent-rest n exp (+ (* 10 exp2) (to-number c)) sgn)]
-        [else (exact->inexact (* n (expt 10 (+ exp (* sgn exp2)))))]))
+        [else (safe-exponential->inexact n (+ exp (* sgn exp2)))]))
     (start))
   ;;
   (define (read-json [top? #f])
     (define ch (skip-whitespace))
     (cond
       [(eof-object? ch)
+       (read-byte i) ;; consume the eof
        (if top?
            eof
            (bad-input))]
@@ -455,16 +491,17 @@
       [else (bad-input)]))
   ;;
   (define (bad-input [prefix #""] #:eof? [eof? #f])
-    (define bstr (peek-bytes (sub1 (error-print-width)) 0 i))
-    (if (or (and (eof-object? bstr) (equal? prefix #""))
+    (define bstr (make-bytes (sub1 (error-print-width))))
+    (define bytes-read (peek-bytes-avail!* bstr 0 #f i))
+    (if (or (and (eof-object? bytes-read) (equal? prefix #""))
             eof?)
         (err (string-append "unexpected end-of-file"
                             (if (equal? prefix #"")
                                 ""
                                 (format "after ~e" prefix))))
-        (err (format "bad input starting ~e" (bytes-append prefix (if (eof-object? bstr)
-                                                                      #""
-                                                                      bstr))))))
+        (err (format "bad input starting ~e" (bytes-append prefix (if (number? bytes-read)
+                                                                      (subbytes bstr 0 bytes-read)
+                                                                      #""))))))
   ;;
   (read-json #t))
 

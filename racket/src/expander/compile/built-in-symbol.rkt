@@ -85,13 +85,16 @@
                record-accessor
                record-mutator
                record-predicate
-               struct-type-install-properties!
+               make-struct-type-install-properties
                #%struct-constructor
                #%struct-predicate
                #%struct-field-accessor
                #%struct-field-mutator
                #%nongenerative-uid
+               #%struct-ref-error
+               #%struct-set!-error
                unsafe-struct?
+               unsafe-sealed-struct?
                unsafe-struct
                raise-binding-result-arity-error
                raise-definition-result-arity-error

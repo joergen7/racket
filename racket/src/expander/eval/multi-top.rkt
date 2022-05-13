@@ -7,13 +7,14 @@
          "../compile/reserved-symbol.rkt"
          "../compile/namespace-scope.rkt"
          "../compile/multi-top.rkt"
-         "../compile/linklet.rkt")
+         "../compile/linklet.rkt"
+         "../compile/correlated-linklet.rkt")
 
 (provide create-compiled-in-memorys-using-shared-data)
 
 (define (create-compiled-in-memorys-using-shared-data tops data-linklet ns)
   (define data-instance
-    (instantiate-linklet data-linklet
+    (instantiate-linklet (force-compile-linklet data-linklet)
                          (list deserialize-instance
                                (make-eager-instance-instance
                                 #:namespace ns
@@ -64,6 +65,7 @@
                         (vector-ref phase-to-link-modules-vector (vector-ref phase-to-link-modules-tree 0))
                         #f ; compile-time-inspector
                         #hasheqv() ; phase-to-link-extra-inspectorsss
+                        #hasheqv() ; portal-stxes
                         (for/vector #:length (vector-length mpi-pos-vec) ([pos (in-vector mpi-pos-vec)])
                                     (vector-ref mpi-vector pos))
                         (for/vector #:length (cdr syntax-literals-spec) ([i (in-range (cdr syntax-literals-spec))])

@@ -41,9 +41,14 @@
 ;; ----------------------------------------
 
 (define/who (dynamic-place path sym in out err)
+  ;; Normally, we'd check argument here, but the relevant
+  ;; predicates on ports are from a later layer, and the
+  ;; `racket/place` export is a wrapper with its own checking.
+  ;; So, we just leave this layer as unsafe.
   (when (eq? initial-place current-place)
     ;; needed by custodian GC callback for memory limits:
     (atomically (ensure-wakeup-handle!)))
+  (define inherited (host:place-get-inherit))
   (define orig-cust (create-custodian #f))
   (define lock (host:make-mutex))
   (define started (host:make-condition))
@@ -90,11 +95,11 @@
   (define host-thread
     (host:fork-place
      (lambda ()
+       (set! current-place new-place)
        (start-implicit-atomic-mode)
        (call-in-another-main-thread
         orig-cust
         (lambda ()
-          (set! current-place new-place)
           (set-place-id! new-place (get-pthread-id))
           (set-place-host-roots! new-place (host:current-place-roots))
           (current-thread-group root-thread-group)
@@ -106,7 +111,8 @@
           (define finish
             (host:start-place child-pch path sym
                               child-in-fd child-out-fd child-err-fd
-                              orig-cust orig-plumber))
+                              orig-cust orig-plumber
+                              inherited))
           (call-with-continuation-prompt
            (lambda ()
              (host:mutex-acquire lock)
@@ -155,6 +161,7 @@
      (place-has-activity! p))
    (host:mutex-release (place-lock p))))
 
+;; called with place's lock held or for the current place
 (define (place-has-activity! p)
   (set-box! (place-activity-canary p) #t)
   (sandman-wakeup (place-wakeup-handle p)))
@@ -277,7 +284,7 @@
                  '()
                  '()
                  (box #f)
-                 #hash()
+                 #hasheq()
                  (box #f)))
 
 (define (enqueue! mq msg wk)
@@ -286,7 +293,7 @@
    (host:mutex-acquire lock)
    (set-message-queue-rev-q! mq (cons msg (message-queue-rev-q mq)))
    (define waiters (message-queue-waiters mq))
-   (set-message-queue-waiters! mq '#hash())
+   (set-message-queue-waiters! mq '#hasheq())
    (set-box! (message-queue-out-key-box mq) wk)
    (set-box! (message-queue-in-key-box mq) #f)
    (host:mutex-release lock)

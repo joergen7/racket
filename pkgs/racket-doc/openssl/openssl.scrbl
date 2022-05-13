@@ -15,6 +15,9 @@
      (define sha1-bytes-id @racket[sha1-bytes])))
 @(define-racket/base racket:sha1-bytes)
 
+@(define alpn-url
+   "https://en.wikipedia.org/wiki/Application-Layer_Protocol_Negotiation")
+
 @title{OpenSSL: Secure Communication}
 
 @defmodule[openssl]
@@ -77,7 +80,8 @@ using the functions described in @secref["cert-procs"].
                              'secure
                              'auto
                              'sslv2-or-v3 'sslv2 'sslv3 'tls 'tls11 'tls12)
-                       'auto])
+                       'auto]
+                      [#:alpn alpn-protocols (listof bytes?) null])
          (values input-port? output-port?)]{
 
 Connect to the host given by @racket[hostname], on the port given by
@@ -103,6 +107,12 @@ If hostname verification is enabled (see
 @racket[ssl-set-verify-hostname!]), the peer's certificate is checked
 against @racket[hostname].
 
+If @racket[alpn-protocols] is not empty, the client attempts to use
+@hyperlink[alpn-url]{ALPN} to negotiate the application-level
+protocol. The protocols should be listed in order of preference, and
+each protocol must be a byte string with a length between 1 and 255
+(inclusive). See also @racket[ssl-get-alpn-selected].
+
 @;{
 See `enforce-retry?' in "mzssl.rkt", currently set to #f so that this
 paragraph does not apply:
@@ -119,7 +129,8 @@ whether the other end is supposed to be sending or reading data.
 }
 
 @history[#:changed "6.3.0.12" @elem{Added @racket['secure] for
-                                    @racket[client-protocol].}]}
+                                    @racket[client-protocol].}
+         #:changed "8.0.0.13" @elem{Added @racket[#:alpn] argument.}]}
 
 @defproc[(ssl-connect/enable-break
           [hostname string?]
@@ -414,7 +425,8 @@ current platform for server connections.
 	   [#:close-original? close-original? boolean? #f]
 	   [#:shutdown-on-close? shutdown-on-close? boolean? #f]
 	   [#:error/ssl error procedure? error]
-           [#:hostname hostname (or/c string? #f) #f])
+           [#:hostname hostname (or/c string? #f) #f]
+           [#:alpn alpn-protocols (listof bytes?) null])
          (values input-port? output-port?)]{
 
 Returns two values---an input port and an output port---that
@@ -464,7 +476,16 @@ writing to an SSL connection (i.e., one direction at a time).
 If hostname verification is enabled (see
 @racket[ssl-set-verify-hostname!]), the peer's certificate is checked
 against @racket[hostname].
-}
+
+If @racket[alpn-protocols] is not empty and @racket[mode] is
+@racket['connect], then the client attempts to use
+@hyperlink[alpn-url]{ALPN}; see also @racket[ssl-connect] and
+@racket[ssl-get-alpn-selected]. If @racket[alpn-protocols] is not
+empty and @racket[mode] is @racket['accept], an exception
+(@racket[exn:fail]) is raised; use @racket[ssl-set-server-alpn!] to set
+the ALPN protocols for a server context.
+
+@history[#:changed "8.0.0.13" @elem{Added @racket[#:alpn] argument.}]}
 
 @; ----------------------------------------------------------------------
 
@@ -475,7 +496,7 @@ against @racket[hostname].
             [src (or/c path-string?
                        (list/c 'directory path-string?)
                        (list/c 'win32-store string?)
-                       (list/c 'macosx-keychain path-string?))]
+                       (list/c 'macosx-keychain (or/c #f path-string?)))]
             [#:try? try? any/c #f])
          void?]{
 
@@ -502,6 +523,11 @@ needs verification.}
 certificates from the store named @racket[_store] are loaded
 immediately. Only supported on Windows.}
 
+@item{If @racket[src] is @racket[(list 'macosx-keychain #f)], then the
+certificates from the Mac OS trust anchor (root) certificates (as
+returned by @hyperlink["https://developer.apple.com/documentation/security/1401507-sectrustcopyanchorcertificates"]{@tt{SecTrustCopyAnchorCertificates}})
+are loaded immediately. Only supported on Mac OS.}
+
 @item{If @racket[src] is @racket[(list 'macosx-keychain _path)], then
 the certificates from the keychain stored at @racket[_path] are loaded
 immediately. Only supported on Mac OS.}
@@ -516,13 +542,15 @@ failure is ignored.
 You can use the file @filepath{test.pem} of the @filepath{openssl}
 collection for testing purposes. Since @filepath{test.pem} is public,
 such a test configuration obviously provides no security.
-}
+
+@history[#:changed "8.4.0.5" @elem{Added @racket[(list 'macosx-keychain #f)]
+                             variant.}]}
 
 @defparam[ssl-default-verify-sources srcs
           (let ([source/c (or/c path-string?
                                 (list/c 'directory path-string?)
                                 (list/c 'win32-store string?)
-                                (list/c 'macosx-keychain path-string?))])
+                                (list/c 'macosx-keychain (or/c #f path-string?)))])
             (listof source/c))]{
 
 Holds a list of verification sources, used by
@@ -535,16 +563,16 @@ on the platform:
 @tt{SSL_CERT_FILE} and @tt{SSL_CERT_DIR} environment variables, if the
 variables are set, or the system-wide default locations otherwise.}
 
-@item{On Mac OS, the default sources consist of the system keychain
-for root certificates: @racket['(macosx-keychain
-"/System/Library/Keychains/SystemRootCertificates.keychain")].}
+@item{On Mac OS, the default sources consist of the OS trust anchor
+(root) certificates: @racket['(macosx-keychain #f)].}
 
 @item{On Windows, the default sources consist of the system
 certificate store for root certificates: @racket['(win32-store
 "ROOT")].}
 
 ]
-}
+
+@history[#:changed "8.4.0.5" @elem{Changed default source on Mac OS.}]}
 
 @defproc[(ssl-load-default-verify-sources!
            [context (or/c ssl-client-context? ssl-server-context?)])
@@ -739,6 +767,24 @@ using the original server context.
 
 }
 
+@defproc[(ssl-set-server-alpn! [context ssl-server-context?]
+                               [alpn-protocols (listof bytes?)]
+                               [allow-no-match? boolean? #t])
+         void?]{
+
+Sets the @hyperlink[alpn-url]{ALPN} protocols supported by the server
+context. The protocols are listed in order of preference,
+most-preferred first. That is, when a client connects, the server
+selects the first protocol in its @racket[alpn-protocols] that is
+supported by the client. If the client does not use ALPN, then the
+connection is accepted and no protocol is selected. If the client uses
+ALPN but has no protocols in common with the server, then if
+@racket[allow-no-match?] is true, the connection is accepted and no
+protocol is selected; if @racket[allow-no-match?]  is false, then the
+connection is refused.
+
+@history[#:added "8.4.0.5"]}
+
 @; ----------------------------------------------------------------------
 @section[#:tag "peer-verif"]{Peer Verification}
 
@@ -855,6 +901,20 @@ connection is closed), an exception is raised.
 
 @history[#:added "7.7.0.9"]}
 
+
+@defproc[(ssl-get-alpn-selected [p ssl-port?])
+         (or/c bytes? #f)]{
+
+Returns the ALPN protocol selected during negotiation, or @racket[#f]
+if no protocol was selected.
+
+If a server does not support any of the protocols proposed by a
+client, it might reject the connection or it might accept the
+connection without selecting an application protocol. So it is
+recommended to always check the selected protocol after making a
+connection.
+
+@history[#:added "8.0.0.13"]}
 
 @; ----------------------------------------------------------------------
 

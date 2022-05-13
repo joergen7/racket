@@ -185,6 +185,7 @@ extern double scheme_get_inexact_milliseconds(void);
 
 GC_Out_Of_Memory_Proc GC_out_of_memory;
 void (*GC_report_out_of_memory)(void);
+void (*GC_report_signal_handle_modify)(int);
 
 GC_Out_Of_Memory_Proc GC_get_out_of_memory(void)
 {
@@ -5516,7 +5517,7 @@ static void garbage_collect(NewGC *gc, int force_full, int no_full,
 
   /* ------------------------------------------------------------ */
   /* Determine this collection's configuration                    */
-  
+
   /* full collection or not */
   gc->gc_full = (force_full
                  || !gc->generations_available

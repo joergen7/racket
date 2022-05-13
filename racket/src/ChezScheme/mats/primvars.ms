@@ -18,13 +18,13 @@
     (define (mat-id? x)
       (memq x
         '(equivalent-expansion? mat-run mat mat/cf
-           mat-file mat-output enable-cp0 windows? embedded?
-           *examples-directory* *scheme*
+           mat-file mat-output for-each-mat enable-cp0 windows? embedded? pb?
+           *scheme* *mats-dir*
            *fuzz* ~= fl~= cfl~= == nan pi +pi +pi/2 +pi/4 -pi -pi/2 -pi/4 +e -e
            separate-eval-tools separate-compile separate-eval run-script patch-exec-path $record->vector
            $cat_flush
            test-cp0-expansion
-           mkfile rm-rf touch
+           mkfile rm-rf touch find-source path-build-normal path-equal?
            heap-check-interval
            preexisting-profile-dump-entry?
            coverage-table record-run-coverage load-coverage-files combine-coverage-files coverage-percent
@@ -162,7 +162,15 @@
             0 a*))
         (define prim-arity
           (lambda (x)
-            (module (primref-arity) (include "../s/primref.ss"))
+            (module (primref-arity)
+              (define-syntax include-from-s
+                (lambda (x)
+                  (syntax-case x ()
+                    [(k ?path)
+                     (string? (datum ?path))
+                     (let ([s-path (find-source (datum ?path))])
+                       (datum->syntax #'k `(include ,s-path)))])))
+              (include-from-s "primref.ss"))
             (let ([primref2 (#%$sgetprop x '*prim2* #f)] [primref3 (#%$sgetprop x '*prim3* #f)])
               (if primref2
                   (if primref3
@@ -255,8 +263,7 @@
         ;    warning conditions, non-violation conditions, and invalid memory references.
         (meta define feature*
           (call-with-port
-            (open-input-file (let ([fn (format "../s/~a.def" (machine-type))])
-                               (if (file-exists? fn) fn (format "../~a" fn))))
+            (open-input-file (find-source "machine.def"))
             (lambda (ip)
               (let loop ()
                 (let ([x (read ip)])
@@ -292,13 +299,14 @@
                        [((in ...) ...) #`(((in ...) #,outs) ...)])))
                  (define do-entry
                    (lambda (x)
-                     (syntax-case x (feature sig flags ->)
+                     (syntax-case x (feature sig pred flags ->)
                        [(prim [feature f] . more)
                         (if (memq (datum f) feature*)
                             (do-entry #'(prim . more))
                             #'(void))]
                        [(prim [flags flag ...]) (do-entry #'(prim [sig] [flags flag ...]))]
-                       [(prim [sig [(in ...) ... -> (out ...)] ...] [flags flag ...])
+                       [(prim [sig sigs ...] [flags flag ...]) (do-entry #'(prim [sig sigs ...] [pred #f] [flags flag ...]))]
+                       [(prim [sig [(in ...) ... -> (out ...)] ...] [pred p] [flags flag ...])
                         (with-syntax ([(unprefixed . prim) (prim-name #'prim)])
                           (with-syntax ([((((in ...) (out ...)) ...) ...)
                                          (map ins-and-outs #'(((in ...) ...) ...) #'((out ...) ...))])
@@ -380,6 +388,7 @@
               [(boolean) #f '()]
               [(box) &a '((a)) #f]
               [(bytevector) '#vu8(0) "a" #f]
+              [(sub-bytevector) no-good]
               [(cflonum) 0.0+1.0i 0 'a #f]
               [(char) #\a 0 #f]
               [(codec) (latin-1-codec) 0 #f]
@@ -665,9 +674,14 @@
                             (car bad**)))
                         (loop (cdr good*) (cdr bad**) (cons (car good*) rgood*)))))))
               (map car in*/out**))))
-        (meta-cond
-          [(file-exists? "../s/primdata.ss") (include "../s/primdata.ss")]
-          [else (include "../../s/primdata.ss")])
+        (define-syntax include-from-s
+          (lambda (x)
+            (syntax-case x ()
+              [(k ?path)
+               (string? (datum ?path))
+               (let ([s-path (find-source (datum ?path))])
+                 (datum->syntax #'k `(include ,s-path)))])))
+        (include-from-s "primdata.ss")
         #t))
 )
 

@@ -57,6 +57,8 @@
 
 #define IN_FIXNUM_RANGE_ON_ALL_PLATFORMS(v) (((v) >= -1073741824) && ((v) <= 1073741823))
 
+#define MOST_POSITIVE_FIXNUM (((uintptr_t)-1) >> 2)
+#define MOST_NEGATIVE_FIXNUM ((((uintptr_t)-1) >> 1) ^ (((uintptr_t)-1) >> 2))
 
 /* We support 2^SCHEME_PRIM_OPT_INDEX_SIZE combinations of optimization flags: */
 
@@ -328,6 +330,7 @@ void scheme_init_resolve();
 void scheme_init_sfs();
 void scheme_init_validate();
 void scheme_init_port_wait();
+void scheme_init_realm();
 void scheme_init_logger_wait();
 void scheme_init_struct_wait();
 void scheme_init_list(Scheme_Startup_Env *env);
@@ -377,6 +380,7 @@ void scheme_init_bool(Scheme_Startup_Env *env);
 void scheme_init_syntax(Scheme_Startup_Env *env);
 void scheme_init_marshal(Scheme_Startup_Env *env);
 void scheme_init_error(Scheme_Startup_Env *env);
+void scheme_init_unsafe_error(Scheme_Startup_Env *env);
 void scheme_init_exn(Scheme_Startup_Env *env);
 void scheme_init_debug(Scheme_Startup_Env *env);
 void scheme_init_thread(Scheme_Startup_Env *env);
@@ -398,6 +402,7 @@ void scheme_init_inspector(void);
 void scheme_init_compenv_symbol(void);
 void scheme_init_param_symbol(void);
 void scheme_init_longdouble_fixup(void);
+void scheme_init_terminal(Scheme_Startup_Env *env);
 
 #ifndef DONT_USE_FOREIGN
 void scheme_init_foreign_globals();
@@ -700,6 +705,7 @@ extern Scheme_Object *scheme_app_mark_impersonator_property;
 extern Scheme_Object *scheme_no_arity_property;
 
 extern Scheme_Object *scheme_authentic_property;
+extern Scheme_Object *scheme_sealed_property;
 
 extern Scheme_Object *scheme_chaperone_undefined_property;
 
@@ -720,6 +726,12 @@ extern Scheme_Object *scheme_int32_ctype;
 extern Scheme_Object *scheme_uint32_ctype;
 extern Scheme_Object *scheme_int64_ctype;
 extern Scheme_Object *scheme_uint64_ctype;
+
+extern Scheme_Object *scheme_default_realm;
+extern Scheme_Object *scheme_primitive_realm;
+
+/* For `scheme_contract_error` and maybe others: */
+#define SCHEME_NAME_PLUS_REALM_ARGUMENTS ((const char *)scheme_default_realm)
 
 /*========================================================================*/
 /*                    thread state and maintenance                        */
@@ -949,6 +961,7 @@ struct Scheme_Config {
 extern Scheme_Object *scheme_parameterization_key;
 extern Scheme_Object *scheme_exn_handler_key;
 extern Scheme_Object *scheme_break_enabled_key;
+extern Scheme_Object *scheme_error_message_adjuster_key;
 
 Scheme_Object *scheme_extend_parameterization(int argc, Scheme_Object *args[]);
 XFORM_NONGCING int scheme_is_parameter(Scheme_Object *o);
@@ -958,6 +971,8 @@ extern void scheme_flatten_config(Scheme_Config *c);
 extern Scheme_Object *scheme_apply_thread_thunk(Scheme_Object *rator);
 
 Scheme_Custodian* scheme_custodian_extract_reference(Scheme_Custodian_Reference *mr);
+
+const char *scheme_contract_realm_adjust(const char *contract, Scheme_Object *realm);
 
 /*========================================================================*/
 /*                    hash tables and linklet instances                   */
@@ -1018,6 +1033,10 @@ struct Scheme_Hash_Tree {
 
 Scheme_Object *scheme_intern_literal_string(Scheme_Object *str);
 Scheme_Object *scheme_intern_literal_number(Scheme_Object *num);
+
+#define SCHEME_BT_KIND_WEAK      1
+#define SCHEME_BT_KIND_LATE      2
+#define SCHEME_BT_KIND_EPHEMERON 3
 
 /*========================================================================*/
 /*                    hash functions                                      */
@@ -1085,6 +1104,8 @@ typedef struct Scheme_Struct_Property {
   Scheme_Object *name; /* a symbol */
   Scheme_Object *guard; /* NULL, a procedure, or 'can-impersonate */
   Scheme_Object *supers; /* implied properties: listof (cons <prop> <proc>) */
+  Scheme_Object *contract_name; /* a symbole, string, or NULL */
+  Scheme_Object *realm; /* a symbol */
 } Scheme_Struct_Property;
 
 int scheme_inspector_sees_part(Scheme_Object *s, Scheme_Object *insp, int pos);
@@ -1095,9 +1116,10 @@ typedef struct Scheme_Struct_Type {
   mzshort num_slots;   /* initialized + auto + parent-initialized + parent-auto */
   mzshort num_islots; /* initialized + parent-initialized */
   mzshort name_pos;
-  char authentic; /* 1 => chaperones/impersonators disallowed */
-  char more_flags; /* STRUCT_TYPE_FLAG_NONFAIL_CONSTRUCTOR => constructor never fails
-                      STRUCT_TYPE_FLAG_SYSTEM_OPAQUE => #f for `object-name`, for example */
+  int more_flags; /* STRUCT_TYPE_FLAG_AUTHENTIC => chaperones/impersonators disallowed
+                     STRUCT_TYPE_FLAG_SEALED => subtypes disallowed
+                     STRUCT_TYPE_FLAG_NONFAIL_CONSTRUCTOR => constructor never fails
+                     STRUCT_TYPE_FLAG_SYSTEM_OPAQUE => #f for `object-name`, for example */
 
   Scheme_Object *name;
 
@@ -1131,6 +1153,8 @@ typedef struct Scheme_Struct_Type {
 /* for `more_flags` field */
 #define STRUCT_TYPE_FLAG_NONFAIL_CONSTRUCTOR 0x1
 #define STRUCT_TYPE_FLAG_SYSTEM_OPAQUE       0x2
+#define STRUCT_TYPE_FLAG_AUTHENTIC           0x4
+#define STRUCT_TYPE_FLAG_SEALED              0x8
 
 typedef struct Scheme_Structure
 {
@@ -1214,7 +1238,7 @@ void scheme_force_struct_type_info(Scheme_Struct_Type *stype);
 
 Scheme_Object *scheme_extract_checked_procedure(int argc, Scheme_Object **argv);
 
-Scheme_Object *scheme_rename_struct_proc(Scheme_Object *p, Scheme_Object *sym);
+Scheme_Object *scheme_rename_struct_proc(Scheme_Object *p, Scheme_Object *sym, Scheme_Object *realm);
 
 #if defined(MZ_GC_BACKTRACE) && defined(MZ_PRECISE_GC)
 Scheme_Object *scheme_add_builtin_struct_types(Scheme_Object *accum);
@@ -2035,6 +2059,7 @@ int scheme_is_cm_deeper(struct Scheme_Meta_Continuation *m1, MZ_MARK_POS_TYPE p1
 void scheme_recheck_prompt_and_barrier(struct Scheme_Cont *c);
 
 Scheme_Object *scheme_all_current_continuation_marks(void);
+Scheme_Object *scheme_current_continuation_marks_as(const char *who, Scheme_Object *prompt_tag);
 
 void scheme_about_to_move_C_stack(void);
 
@@ -2121,6 +2146,7 @@ Scheme_Object *scheme_poll_evt(int argc, Scheme_Object *argv[]);
 Scheme_Object *scheme_do_chaperone_evt(const char*, int, int, Scheme_Object *argv[]);
 
 extern Scheme_Object *scheme_always_ready_evt;
+extern Scheme_Object *scheme_never_ready_evt;
 
 void scheme_get_outof_line(Scheme_Channel_Syncer *ch_w);
 void scheme_get_back_into_line(Scheme_Channel_Syncer *ch_w);
@@ -2664,6 +2690,7 @@ XFORM_NONGCING int scheme_strncmp(const char *a, const char *b, int len);
 Scheme_Object *scheme_default_print_handler(int, Scheme_Object *[]);
 Scheme_Object *scheme_default_prompt_read_handler(int, Scheme_Object *[]);
 Scheme_Object *scheme_default_read_input_port_handler(int argc, Scheme_Object *[]);
+Scheme_Object *scheme_default_read_get_evt(int argc, Scheme_Object *argv[]);
 Scheme_Object *scheme_default_read_handler(int argc, Scheme_Object *[]);
 
 extern Scheme_Object *scheme_eof_object_p_proc;
@@ -2705,13 +2732,14 @@ typedef struct Scheme_Comp_Env
   Scheme_Hash_Tree *vars; /* symbol -> Scheme_IR_Local */
   Scheme_Object *value_name; /* propagated down */
   Scheme_Linklet *linklet;
+  Scheme_Object *realm;
 } Scheme_Comp_Env;
 
 #define COMP_ENV_CHECKING_CONSTANT    0x1
 #define COMP_ENV_DONT_COUNT_AS_USE    0x2
 #define COMP_ENV_ALLOW_SET_UNDEFINED  0x4
 
-Scheme_Comp_Env *scheme_new_comp_env(Scheme_Linklet *linklet, int flags);
+Scheme_Comp_Env *scheme_new_comp_env(Scheme_Linklet *linklet, int flags, Scheme_Object *realm);
 Scheme_Comp_Env *scheme_extend_comp_env(Scheme_Comp_Env *env, Scheme_Object *id, Scheme_Object *var,
                                         int mutate, int check_dups);
 Scheme_Comp_Env *scheme_set_comp_env_flags(Scheme_Comp_Env *env, int flags);
@@ -2779,7 +2807,7 @@ typedef struct Scheme_Lambda
                              total size = closure_size + (closure_size + num_params) * LAMBDA_TYPE_BITS_PER_ARG */
   };
   Scheme_Object *body;
-  Scheme_Object *name; /* name or (vector name src line col pos span generated?) */
+  Scheme_Object *name; /* name or (vector name src line col pos span generated? [realm]) */
   void *tl_map; /* fixnum or bit array (as array of `int's) indicating which globals+lifts in prefix are used */
 #ifdef MZ_USE_JIT
   union {
@@ -3031,7 +3059,8 @@ Scheme_Object *scheme_toplevel_to_flagged_toplevel(Scheme_Object *tl, int flags)
 int scheme_expr_produces_local_type(Scheme_Object *expr, int *_involves_k_cross);
 
 Scheme_Linklet *scheme_compile_and_optimize_linklet(Scheme_Object *form, Scheme_Object *name);
-Scheme_Linklet *scheme_compile_linklet(Scheme_Object *form, int set_undef, Scheme_Object *import_keys);
+Scheme_Linklet *scheme_compile_linklet(Scheme_Object *form, int set_undef, Scheme_Object *import_keys,
+                                       Scheme_Object *realm);
 
 Scheme_Object *scheme_make_sequence_compilation(Scheme_Object *compiled_list,
 						int strip_values,
@@ -3057,8 +3086,6 @@ struct Start_Module_Args;
 Scheme_Object *scheme_linklet_run_start(Scheme_Linklet* linklet, Scheme_Instance *instance, Scheme_Object *name);
 #endif
 Scheme_Object *scheme_linklet_run_finish(Scheme_Linklet* linklet, Scheme_Instance *instance, int use_prompt);
-
-Scheme_Object *scheme_build_closure_name(Scheme_Object *code, Scheme_Comp_Env *env);
 
 /* flags reported by scheme_resolve_info_flags */
 #define SCHEME_INFO_BOXED 0x1
@@ -3107,6 +3134,7 @@ typedef struct {
   int normal_ops;  /* are selectors and predicates in the usual order? */
   int indexed_ops; /* do selectors have the index built in (as opposed to taking an index argument)? */
   int authentic; /* conservatively 0 is ok */
+  int sealed; /* conservatively 0 is ok */
   int nonfail_constructor;
   int prefab;
   int num_gets, num_sets;
@@ -3143,7 +3171,8 @@ Scheme_Object *scheme_make_struct_proc_shape(intptr_t k, Scheme_Object *identity
 #define STRUCT_PROC_SHAPE_GETTER  3
 #define STRUCT_PROC_SHAPE_SETTER  4
 #define STRUCT_PROC_SHAPE_OTHER   5
-#define STRUCT_PROC_SHAPE_MASK    0xF
+#define STRUCT_PROC_SHAPE_MASK    0x7
+#define STRUCT_PROC_SHAPE_SEALED  0x8
 #define STRUCT_PROC_SHAPE_AUTHENTIC       0x10
 #define STRUCT_PROC_SHAPE_NONFAIL_CONSTR  0x20
 #define STRUCT_PROC_SHAPE_PREFAB  0x40
@@ -3485,7 +3514,7 @@ void scheme_dup_symbol_check(DupCheckRecord *r, const char *where,
 void scheme_check_identifier(const char *formname, Scheme_Object *id, 
 			     const char *where, Scheme_Object *form);
 
-Scheme_Object *scheme_get_stack_trace(Scheme_Object *mark_set);
+Scheme_Object *scheme_get_stack_trace(Scheme_Object *mark_set, int with_realms);
 
 XFORM_NONGCING int scheme_fast_check_arity(Scheme_Object *v, int a);
 Scheme_Object *scheme_get_or_check_arity(Scheme_Object *p, intptr_t a);
@@ -3660,6 +3689,8 @@ void scheme_rktio_socket_to_input_port(struct rktio_fd_t *fd, Scheme_Object *nam
 void scheme_rktio_socket_to_output_port(struct rktio_fd_t *fd, Scheme_Object *name, int takeover,
                                         Scheme_Object **_outp);
 
+void scheme_rktio_write_all(struct rktio_fd_t *fd, const char *data, intptr_t len);
+
 void scheme_fs_change_properties(int *_supported, int *_scalable, int *_low_latency, int *_file_level);
 
 THREAD_LOCAL_DECL(extern struct rktio_ltps_t *scheme_semaphore_fd_set);
@@ -3827,6 +3858,9 @@ Scheme_Bucket_Table *scheme_make_weak_equal_table(void);
 Scheme_Bucket_Table *scheme_make_weak_eqv_table(void);
 Scheme_Bucket_Table *scheme_make_nonlock_equal_bucket_table(void);
 
+Scheme_Bucket_Table *scheme_make_ephemeron_equal_table(void);
+Scheme_Bucket_Table *scheme_make_ephemeron_eqv_table(void);
+
 int scheme_hash_table_equal_rec(Scheme_Hash_Table *t1, Scheme_Object *orig_t1,
                                 Scheme_Hash_Table *t2, Scheme_Object *orig_t2,
                                 void *eql);
@@ -3892,6 +3926,7 @@ Scheme_Object *scheme_maybe_build_path(Scheme_Object *base, Scheme_Object *elem)
 Scheme_Object *scheme_current_library_collection_paths(int argc, Scheme_Object *argv[]);
 Scheme_Object *scheme_current_library_collection_links(int argc, Scheme_Object *argv[]);
 Scheme_Object *scheme_compiled_file_roots(int argc, Scheme_Object *argv[]);
+Scheme_Object *scheme_current_directory(int argc, Scheme_Object *argv[]);
 
 int scheme_can_enable_write_permission(void);
 
