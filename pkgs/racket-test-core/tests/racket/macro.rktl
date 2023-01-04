@@ -831,7 +831,20 @@
 
 (module bins-bread-and-butter-for-label racket/base
   (#%require (for-meta #f (portal check-top-level-portal (yes ok #f)))))
-  
+
+(module check-syntax-local-lift-portal racket/base
+  (require (for-syntax racket/base))
+  (define-syntax (lift stx)
+    (define x-id (syntax-local-lift-require #'(portal x #t) #'x))
+    (unless (portal-syntax? (syntax-local-value x-id))
+      (error "portal lift failed"))
+    #'(void))
+  (lift)
+  (#%expression (lift))
+  (let ()
+    (lift)
+    (void)))
+
 ;; ----------------------------------------
 
 (module distinct-binding-tests racket/base
@@ -1495,6 +1508,41 @@
           (m)))
  exn:fail:syntax?
  #rx"provided identifier is not defined or required")
+
+;; ----------------------------------------
+;; Check require lifting without adding a new scope
+
+(module uses-a-no-scope-lifted-require racket/base
+  (require (for-syntax racket/base))
+  (provide also-sub)
+  (module sub racket/base
+    (provide sub)
+    (define sub "sub"))
+  (define-syntax (lift stx)
+    (syntax-local-lift-require #'(submod "." sub) #'(void) #f))
+  (lift)
+  (define also-sub sub))
+
+(test "sub" dynamic-require ''uses-a-no-scope-lifted-require 'also-sub)
+
+
+;; ----------------------------------------
+;; Check portal lifting to the top level
+
+(parameterize ([current-namespace (make-base-namespace)])
+  (eval '(require (for-syntax racket/base)))
+  (eval '(define-syntax (lift stx)
+           (define id (syntax-local-lift-require
+                       #'(portal ptl 5)
+                       #'ptl))
+           #`(portal-lookup #,id)))
+  (eval '(define-syntax (portal-lookup stx)
+           (syntax-case stx ()
+             [(_ id)
+              (datum->syntax
+               #'id
+               (portal-syntax? (syntax-local-value #'id #f)))])))
+ (test #t eval '(lift)))
 
 ;; ----------------------------------------
 ;; Check module lifting in a top-level context
@@ -3149,7 +3197,26 @@
                         (displayln 1)
                         1)
                       (begin-for-syntax
-                        (g)))))
+                        (g))))
+             exn:fail:contract:arity?
+             #rx"received: 2")
+
+
+;; ----------------------------------------
+;; regression test
+
+(err/rt-test
+ (eval
+  '(module m '#%kernel
+     (#%require (for-syntax '#%kernel))
+     (begin-for-syntax
+       (define-values (ctx) (syntax-local-make-definition-context))
+       (define-values (x-id) (internal-definition-context-add-scopes ctx (quote-syntax deadbeef-x)))
+       (define-values (y-id) (internal-definition-context-add-scopes ctx (quote-syntax deadbeef-y)))
+       (syntax-local-bind-syntaxes (list (syntax-shift-phase-level x-id -1)) (quote-syntax (lambda (s) (quote-syntax 1000))) ctx)
+       (syntax-local-bind-syntaxes (list y-id) (datum->syntax x-id '(+ 1 (deadbeef-x))) ctx))))
+ exn:fail:syntax?
+ #rx"deadbeef-x: identifier used out of context")
 
 ;; ----------------------------------------
 

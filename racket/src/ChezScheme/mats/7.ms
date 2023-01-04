@@ -1152,7 +1152,7 @@
   ; which scheme-start is set, which was failing because its relocation information was discarded
   ; by the static-generation collection.
   (or
-   (case (machine-type) [(pb tpb pb32 tpb32) #t] [else #f]) ; callables not always in pb
+   (pb?) ; callables not always in pb, and boot files may not work with pbchunk
    (equal?
     (let ([would-be-scheme (find-source (format "..~abin~a~a~ascheme~a" 
                                                 (directory-separator)
@@ -4983,7 +4983,7 @@ evaluating module init
   (error?
     (verify-loadability 'load "testfile-clI1.so"))
 
-  ; make sure compile-whole-program perserves the information verify-loadability needs
+  ; make sure compile-whole-program preserves the information verify-loadability needs
   (begin
     (mkfile "testfile-clJ0.ss"
       '(library (testfile-clJ0) (export x0) (import (chezscheme)) (define x0 'eat) (printf "invoking J0\n")))

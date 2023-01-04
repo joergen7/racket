@@ -77,10 +77,12 @@ default_warning_flags="-Wpointer-arith -Wall -Wextra -Wno-implicit-fallthrough"
 : ${ARFLAGS:="rc"}
 : ${RANLIB:="ranlib"}
 : ${WINDRES:="windres"}
+: ${STRIP:="strip"}
 zlibLib=
 LZ4Lib=
 Kernel=KernelLib
 buildKernelOnly=no
+enableFrompb=yes
 pbendian=l
 emscripten=no
 empetite=no
@@ -99,6 +101,11 @@ fi
 case "${CONFIG_UNAME}" in
   Linux)
     unixsuffix=le
+    installprefix=/usr
+    installmansuffix=share/man
+    ;;
+  GNU)
+    unixsuffix=gnu # the Hurd
     installprefix=/usr
     installmansuffix=share/man
     ;;
@@ -167,6 +174,8 @@ case "${CONFIG_UNAME}" in
     ;;
 esac
 
+unknownm=no
+
 if [ "$unixsuffix" != "" ] ; then
     if uname -a | egrep 'i386|i686|amd64|athlon|x86_64' > /dev/null 2>&1 ; then
         m32=i3${unixsuffix}
@@ -176,12 +185,30 @@ if [ "$unixsuffix" != "" ] ; then
     elif uname -a | egrep 'power|ppc' > /dev/null 2>&1 ; then
         m32=ppc32${unixsuffix}
         tm32=tppc32${unixsuffix}
-        pbendian=b
+        m64=ppc64${unixsuffix}
+        tm64=tppc64${unixsuffix}
+        if uname -a | egrep 'ppc64le' > /dev/null 2>&1 ; then
+            pbendian=l
+        else
+            pbendian=b
+        fi
     elif uname -a | egrep 'armv|aarch64' > /dev/null 2>&1 ; then
         m32=arm32${unixsuffix}
         m64=arm64${unixsuffix}
         tm32=tarm32${unixsuffix}
         tm64=tarm64${unixsuffix}
+    elif uname -a | grep 'riscv64' > /dev/null 2>&1 ; then
+        m32=""
+        m64=rv64${unixsuffix}
+        tm32=""
+        tm64=trv64${unixsuffix}
+    else
+        # using "unknown" helps at least select OS-based flags
+        m32=unknown32${unixsuffix}
+        m64=unknown64${unixsuffix}
+        tm32=tunknown32${unixsuffix}
+        tm64=tunknown64${unixsuffix}
+        unknownm=yes
     fi
 fi
 
@@ -219,6 +246,7 @@ while [ $# != 0 ] ; do
       ;;
     --emscripten)
       emscripten=yes
+      CC_FOR_BUILD="${CC}"
       CC="emcc"
       LD="emld"
       AR="emar"
@@ -226,6 +254,7 @@ while [ $# != 0 ] ; do
       ;;
     --force)
       forceworkarea=yes
+      enableFrompb=no
       ;;
     --installprefix=*)
       installprefix=`echo $1 | sed -e 's/^--installprefix=//'`
@@ -270,6 +299,7 @@ while [ $# != 0 ] ; do
       AR="${toolprefix}${AR}"
       RANLIB="${toolprefix}${RANLIB}"
       WINDRES="${toolprefix}${WINDRES}"
+      STRIP="${toolprefix}${STRIP}"
       ;;
     --gzip-man-pages)
       gzipmanpages=yes
@@ -330,8 +360,8 @@ while [ $# != 0 ] ; do
       CFLAGS=`echo $1 | sed -e 's/^CFLAGS=//'`
       cflagsset=yes
       ;;
-    HOSTCC=*)
-      HOSTCC=`echo $1 | sed -e 's/^HOSTCC=//'`
+    CC_FOR_BUILD=*)
+      CC_FOR_BUILD=`echo $1 | sed -e 's/^CC_FOR_BUILD=//'`
       ;;
     LD=*)
       LD=`echo $1 | sed -e 's/^LD=//'`
@@ -353,6 +383,9 @@ while [ $# != 0 ] ; do
       ;;
     WINDRES=*)
       WINDRES=`echo $1 | sed -e 's/^WINDRES=//'`
+      ;;
+    STRIP=*)
+      STRIP=`echo $1 | sed -e 's/^STRIP=//'`
       ;;
     ZLIB=*)
       zlibLib=`echo $1 | sed -e 's/^ZLIB=//'`
@@ -379,7 +412,8 @@ if [ $emscripten = yes ] ; then
         echo "Don't combine --emscripten with -m or --machine"
         exit 1
     fi
-    m32=em
+    m32=pb32l
+    tm32=tpb32l
 fi
 
 case "$m" in
@@ -392,7 +426,7 @@ case "$m" in
 esac
 
 if [ "$bits" = "" ] ; then
-  if uname -a | egrep 'amd64|x86_64|aarch64|arm64|ppc64|powerpc64' > /dev/null 2>&1 ; then
+  if uname -a | egrep 'amd64|x86_64|aarch64|arm64|ppc64|powerpc64|riscv64' > /dev/null 2>&1 ; then
     bits=64
   else
     bits=32
@@ -434,8 +468,10 @@ if [ "$m" = "" ] ; then
          flagsm=unknown
      fi
   else
-    m=$defaultm
-    flagsm=$m
+    if [ "$unknownm" != "yes" ] ; then
+        m=$defaultm
+    fi
+    flagsm=$defaultm
   fi
 elif [ $pb = yes ] ; then
   mpbhost=$m
@@ -443,6 +479,7 @@ elif [ $pb = yes ] ; then
   m=pb
 else
   flagsm=$m
+  defaultm=$m
 fi
 
 if [ $pbarch = yes ] ; then
@@ -498,7 +535,7 @@ fi
 if [ "$help" = "yes" ]; then
   echo "Purpose:"
   echo "  $0 determines the machine type and constructs a custom Makefile"
-  echo "  and Mf-install, taking into account the options below."
+  echo "  taking into account the options below."
   echo ""
   echo "Options (defaults shown in parens):"
   echo "  --machine=<machine type>          explicitly specify machine type ($m)"
@@ -538,11 +575,11 @@ if [ "$help" = "yes" ]; then
   echo "  --start=<name>                    load <boot>.boot instead of <exe>.boot"
   echo "  --[no]gzip-man-pages              compress manual pages ($gzipmanpages)"
   echo "  --workarea=<pathname>             build directory ($w)"
-  echo "  --force                           configure even without boot files"
+  echo "  --force                           disable use of pb to (re)build boot files"
   echo "  CC=<C compiler>                   C compiler"
   echo "  CPPFLAGS=<C preprocessor flags>   C preprocessor flags"
   echo "  CFLAGS=<C compiler flags>         C compiler flags"
-  echo "  HOSTCC=<C compiler>               C compiler and flags for host"
+  echo "  CC_FOR_BUILD=<C compiler>         C compiler and flags for build machine"
   echo "  LD=<linker>                       linker"
   echo "  LDFLAGS=<linker flags>            additional linker flags"
   echo "  LIBS=<libraries>                  additional libraries"
@@ -550,6 +587,7 @@ if [ "$help" = "yes" ]; then
   echo "  ARFLAGS=<archiver flgs>           archiver flags"
   echo "  RANLIB=<archive indexer>          archive indexer"
   echo "  WINDRES=<resource compiler>       resource compiler"
+  echo "  STRIP=<strip>                     executable stripper"
   echo "  ZLIB=<lib>                        link to <lib> instead of own zlib"
   echo "  LZ4=<lib>                         link to <lib> instead of own LZ4"
   echo ""
@@ -591,7 +629,7 @@ fi
 
 # Infer flags needed for threads:
 case "${flagsm}" in
-  *le|*fb|*ob|*nb)
+  *le|*gnu|*fb|*ob|*nb)
       threadFlags="-D_REENTRANT -pthread"
       threadLibs="-lpthread"
       ;;
@@ -627,7 +665,7 @@ if [ "$cflagsset" = "no" ] ; then
     a6*)
         CFLAGS="-m64 ${optFlags}"
         ;;
-    i3le)
+    i3le) # intentionally not including i3gnu, which may not support sse2
         CFLAGS="-m32 -msse2 -mfpmath=sse ${optFlags}"
         ;;
     i3nt)
@@ -652,17 +690,22 @@ if [ "$cflagsset" = "no" ] ; then
     ppc32*)
         CFLAGS="-m32 ${optFlags}"
         ;;
+    rv64*)
+        CFLAGS="-mabi=lp64d ${optFlags}"
+        ;;
     em)
-        if [ "$zlibLib" = "" ]; then
-          zlibLib="-s USE_ZLIB=1"
-        fi
+        CFLAGS="${optFlags}"
+        ;;
+    *)
         CFLAGS="${optFlags}"
         ;;
   esac
 fi
 
-if [ "$HOSTCC" = "" ] ; then
-    HOSTCC="${CC} ${CFLAGS}"
+if [ "$CC_FOR_BUILD" = "" ] ; then
+    CC_FOR_BUILD="${CC} ${CFLAGS}"
+else
+    enableFrompb=no
 fi
 
 # Add automatic thread compilation flags, unless suppressed by --disable-auto-flags
@@ -671,6 +714,13 @@ if [ "$addflags" = "yes" ] ; then
         if [ "$threadFlags" != "" ] ; then
             CFLAGS="${CFLAGS} ${threadFlags}"
         fi
+    fi
+fi
+
+# Add libffi library, unless suppressed by --disable-auto-flags
+if [ "$addflags" = "yes" ] ; then
+    if [ "$libffi" = "yes" ] ; then
+        LIBS="${LIBS} -lffi"
     fi
 fi
 
@@ -691,7 +741,7 @@ fi
 # Add automatic linking flags, unless suppressed by --disable-auto-flags
 if [ "$addflags" = "yes" ] ; then
   case "${flagsm}" in
-    *le)
+    *le|*gnu)
         LDFLAGS="${LDFLAGS} -rdynamic"
         ;;
     *fb|*nb)
@@ -705,7 +755,7 @@ if [ "$addflags" = "yes" ] ; then
   esac
 
   case "${flagsm}" in
-    *le)
+    *le|*gnu)
         LIBS="${LIBS} -lm -ldl ${ncursesLib} -lrt"
         ;;
     *fb|*ob)
@@ -752,7 +802,7 @@ exeSuffix=
 
 # compile flags for c/Mf-unix and mats/Mf-unix
 case "${flagsmuni}" in
-    *le)
+    *le|*gnu)
         mdcflags="-fPIC -shared"
         ;;
     *fb|*ob)
@@ -763,6 +813,9 @@ case "${flagsmuni}" in
         mdcflags="-fPIC -shared"
         mdinclude="-I/usr/X11R7/include -I/usr/pkg/include -I/usr/pkg/include/ncurses -I/usr/X11R6/include"
         ;;
+    *nt)
+        mdcflags="-shared"
+	;;
     *osx)
         mdcflags="-dynamiclib -undefined dynamic_lookup"
         ;;
@@ -784,7 +837,7 @@ case "${flagsmuni}" in
     i3le)
         mdldflags="-melf_i386"
         ;;
-    *le)
+    *le|*gnu)
         ;;
     i3nb)
         mdldflags="-m elf_i386"
@@ -814,7 +867,7 @@ case "${flagsmuni}" in
         exePostStep='paxctl +m'
         ;;
     em)
-        if [ "$empetite" == yes ]; then
+        if [ "$empetite" = yes ]; then
             preloadBootFiles="$w/boot/$m/petite.boot"
         else
             preloadBootFiles="$w/boot/$m/petite.boot $w/boot/$m/scheme.boot"
@@ -829,6 +882,7 @@ case "${flagsmuni}" in
     em)
         if  [ "$zlibLib" = "" ]; then
             zlibLib="-s USE_ZLIB=1"
+            CFLAGS="${CFLAGS} -s USE_ZLIB=1"
             # not used, but this is how we might build our own zlib:
             zlibConfigureEnv="CROSS_PREFIX=em uname=wasm-em"
         fi
@@ -841,8 +895,19 @@ else
     configuringin=" in $w"
 fi
 
+if [ "$m" = "" ] ; then
+    enableFrompb=no
+    forceworkarea=no
+fi
+
+if [ "$buildKernelOnly" = yes ] ; then
+    enableFrompb=no
+fi
+
 if [ -f boot/$m/scheme.boot -o -f "$srcdir"/boot/$m/scheme.boot ] ; then
     echo "Configuring for $m$configuringin"
+elif [ -f "$srcdir"/boot/pb/scheme.boot -a "$enableFrompb" = "yes" ] ; then
+    echo "Configuring for $m$configuringin, and will create boot files via pb"
 elif [ "$forceworkarea" = yes ] ; then
     echo "Configuring for $m$configuringin despite missing boot files"
 else
@@ -851,7 +916,7 @@ else
   else
       maybem=$m
   fi
-  echo 'No suitable machine type found in "boot".'
+  echo "No suitable machine type found in \"${srcdir}/boot\"."
   echo ""
   echo "Available machine types:"
   echo "  $machs"
@@ -868,23 +933,7 @@ else
       echo "to specify one of the available machine types."
   fi
   echo ""
-  if [ "$m" = "" ] ; then
-      echo 'If no directory in "boot" exists for the correct machine type,'
-      echo "then you can use Racket v7.1 or later with"
-  else
-      echo "Since no directory in "'"boot"'" exists for $m, you can try"
-      echo "using Racket v7.1 or later with"
-  fi
-  echo "  racket rktboot/main.rkt --machine=$maybem"
-  echo "to create the boot files, and then try $0 again."
-  if [ -f boot/pb/scheme.boot ] ; then
-      echo ""
-      echo "Alternatively, a pb machine type is available, so try"
-      echo "  $0 --pb"
-      echo "  make $maybem.bootquick"
-      echo "to create the boot files using a portable-bytecode build,"
-      echo "and then try $0 again."
-  fi
+  echo "See \"${srcdir}/BUILDING\" for ways of getting boot files."
   exit 1
 fi
 
@@ -919,6 +968,7 @@ m=$m
 defaultm=$defaultm
 mboot=$mboot
 buildKernelOnly=$buildKernelOnly
+enableFrompb=$enableFrompb
 mdinclude=$mdinclude
 mdcppflags=$mdcppflags
 mdcflags=$mdcflags
@@ -929,7 +979,7 @@ exePostStep=$exePostStep
 exeSuffix=$exeSuffix
 zlibConfigureEnv=$zlibConfigureEnv
 zlibConfigureFlags=
-HOSTCC=$HOSTCC
+CC_FOR_BUILD=$CC_FOR_BUILD
 CC=$CC
 CPPFLAGS=$CPPFLAGS
 CFLAGS=$CFLAGS
@@ -940,6 +990,7 @@ AR=$AR
 ARFLAGS=$ARFLAGS
 RANLIB=$RANLIB
 WINDRES=$WINDRES
+STRIP=$STRIP
 cursesLib=$cursesLib
 ncursesLib=$ncursesLib
 zlibLib=$zlibLib

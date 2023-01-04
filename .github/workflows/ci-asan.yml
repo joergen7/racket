@@ -2,10 +2,13 @@ name: Test with ASan
 
 on: [push]
 
+permissions:
+  contents: read
+
 jobs:
 
   racketcs-asan:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-22.04
     container: racket/racket-ci:latest
 
     env:

@@ -20,4 +20,8 @@
            (thread)
            (io)
            (regexp)
-           (linklet)))
+           (linklet)
+           (rename (only $system
+                         $lambda/lift-barrier
+                         $begin-unsafe)
+                   [$begin-unsafe begin-unsafe])))

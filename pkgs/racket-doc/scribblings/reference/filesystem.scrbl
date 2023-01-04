@@ -606,18 +606,55 @@ OS, this size excludes the resource-fork size. On error (e.g., if no
 such file exists), the @exnraise[exn:fail:filesystem].}
 
 
-@defproc[(copy-file [src path-string?] [dest path-string?] [exists-ok? any/c #f]) void?]{
+@defproc[(copy-file [src path-string?] 
+                    [dest path-string?]
+                    [exists-ok?/pos any/c #f]
+                    [#:exists-ok? exists-ok? any/c exists-ok?/pos]
+                    [#:permissions permissions (or/c #f (integer-in 0 65535)) #f]
+                    [#:replace-permissions? replace-permissions? any/c #t])
+         void?]{
 
 Creates the file @racket[dest] as a copy of @racket[src], if
 @racket[dest] does not already exist. If @racket[dest] already exists
-and @racket[exists-ok?] is @racket[#f], the copy fails with
+and @racket[exists-ok?] is @racket[#f], the copy fails and the
 @exnraise[exn:fail:filesystem:exists?]; otherwise, if @racket[dest]
-exists, its content is replaced with the content of @racket[src]. File
-permissions are transferred from @racket[src] to @racket[dest]; on Windows,
-the modification time of @racket[src] is also transferred to @racket[dest]. If
-@racket[src] refers to a link, the target of the link is copied,
-rather than the link itself; if @racket[dest] refers to a link and
-@racket[exists-ok?] is true, the target of the link is updated.}
+exists, its content is replaced with the content of @racket[src]. 
+
+If @racket[src] refers to a link, the target of the link is copied,
+rather than the link itself. If @racket[dest] refers to a link and
+@racket[exists-ok?] is true, the target of the link is updated.
+
+File permissions are transferred from @racket[src] to @racket[dest],
+unless @racket[permissions] is supplied as non-@racket[#f] on Unix and
+Mac OS, in which case @racket[permissions] is used for @racket[dest].
+Beware that permissions are transferred without regard for the
+process's umask setting by default, but see
+@racket[replace-permissions?] below. On Windows, the modification time
+of @racket[src] is also transferred to @racket[dest]; if
+@racket[permissions] is supplied as non-@racket[#f], then after
+copying, @racket[dest] is set to read-only or not depending on whether
+the @racketvalfont{#o2} bit is present in @racket[permissions].
+
+The @racket[replace-permissions?] argument is used only on Unix and
+Mac OS. When @racket[dest]s is created, it is created with
+@racket[permissions] or the permissions of @racket[src]; however, the
+process's umask may unset bits in the requested permissions. When
+@racket[dest] already exists (and @racket[exists-ok?] is true), then
+the permissions of @racket[dest] are initially left as-is. Finally,
+when @racket[replace-permissions?] is a true value, then the
+permissions of @racket[dest] are set after the file content is copied
+to @racket[permissions] or the permissions of @racket[src], without
+modification by umask.
+
+The @racket[exists-ok?/pos] by-position argument is for backward
+compatibility. That by-position argument can be supplied, or the
+@racket[exists-ok?] keyword argument can be supplied, but the
+@exnraise[exn:fail:contract] if both are supplied.
+
+@history[#:changed "8.7.0.9" @elem{Added @racket[#:exists-ok?],
+                                   @racket[#:permissions], and
+                                   @racket[#:replace-permissions?]
+                                   arguments.}]}
 
 
 @defproc[(make-file-or-directory-link [to path-string?] [path path-string?]) 
@@ -644,7 +681,7 @@ link. Beware that directory links must be deleted using
 @history[#:changed "6.0.1.12" @elem{Added support for links on Windows.}]}
 
 
-@defparam[current-force-delete-permissions any/c boolean?]{
+@defboolparam[current-force-delete-permissions force? #:value #t]{
 
 A @tech{parameter} that determines on Windows whether
 @racket[delete-file] and @racket[delete-directory] attempt to change a
@@ -1176,8 +1213,8 @@ Displays each element of @racket[lst] to @racket[path], adding
 @racket[open-output-file].}
 
 @defproc[(copy-directory/files [src path-string?] [dest path-string?]
-                               [#:keep-modify-seconds? keep-modify-seconds? #f]
-                               [#:preserve-links? preserve-links? #f])
+                               [#:keep-modify-seconds? keep-modify-seconds? any/c #f]
+                               [#:preserve-links? preserve-links? any/c #f])
          void?]{
 
 Copies the file or directory @racket[src] to @racket[dest], raising
@@ -1197,7 +1234,7 @@ the modification date of the original.
 
 
 @defproc[(delete-directory/files [path path-string?]
-                                 [#:must-exist? must-exist? #t])
+                                 [#:must-exist? must-exist? any/c #t])
          void?]{
 
 Deletes the file or directory specified by @racket[path], raising
@@ -1226,8 +1263,8 @@ than the file), then the file is deleted directly with
 
 @defproc[(find-files [predicate (path? . -> . any/c)]
                      [start-path (or/c path-string? #f) #f]
-                     [#:skip-filtered-directory? skip-filtered-directory? #f]
-                     [#:follow-links? follow-links? #f])
+                     [#:skip-filtered-directory? skip-filtered-directory? any/c #f]
+                     [#:follow-links? follow-links? any/c #f])
          (listof path?)]{
 
 Traverses the filesystem starting at @racket[start-path] and creates a
@@ -1512,9 +1549,9 @@ from generating a @racket[template] using the source location.
  ]}
 
 @defproc[(call-with-atomic-output-file [file path-string?] 
-                                       [proc ([port output-port?] [tmp-path path?]  . -> . any)]
+                                       [proc (output-port? path? . -> . any)]
                                        [#:security-guard security-guard (or/c #f security-guard?) #f]
-                                       [#:rename-fail-handler rename-fail-handler (or/c #f (exn:fail:filesystem? path> . -> . any)) #f])
+                                       [#:rename-fail-handler rename-fail-handler (or/c #f (exn:fail:filesystem? path? . -> . any)) #f])
          any]{
 
 Opens a temporary file for writing in the same directory as
@@ -1558,15 +1595,15 @@ file path to be moved to @racket[path]. The
 @defproc[(get-preference [name symbol?]
                          [failure-thunk (-> any) (lambda () #f)]
                          [flush-mode any/c 'timestamp]
-                         [filename (or/c string-path? #f) #f]
+                         [filename (or/c path-string? #f) #f]
                          [#:use-lock? use-lock? any/c #t]
-                         [#:timeout-lock-there timeout-lock-there 
+                         [#:timeout-lock-there timeout-lock-there
                                                (or/c (path? . -> . any) #f)
                                                #f]
-                         [#:lock-there 
+                         [#:lock-there
                           lock-there
                           (or/c (path? . -> . any) #f)
-                          (make-handle-get-preference-locked 
+                          (make-handle-get-preference-locked
                            0.01 name failure-thunk flush-mode filename
                            #:lock-there timeout-lock-there)])
          any]{
@@ -1762,9 +1799,9 @@ in the sense of @racket[port-try-file-lock?].
     #:lock-file (make-lock-file-name filename))]
 
 
-@defproc*[([(make-lock-file-name [path (or path-string? path-for-some-system?)]) 
+@defproc*[([(make-lock-file-name [path (or/c path-string? path-for-some-system?)])
             path?]
-           [(make-lock-file-name [dir (or path-string? path-for-some-system?)] 
+           [(make-lock-file-name [dir (or/c path-string? path-for-some-system?)]
                                  [name path-element?]) 
             path?])]{
 

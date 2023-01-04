@@ -357,7 +357,7 @@
 ;; ---------------------------------------------------------------------
 ;; Version and machine types:
 
-(define-constant scheme-version #x09050707)
+(define-constant scheme-version #x0909090E)
 
 (define-syntax define-machine-types
   (lambda (x)
@@ -376,40 +376,45 @@
 (define-machine-types
   any
   pb        tpb
-  pb64l     tpb64l
-  pb64b     tpb64b
   pb32l     tpb32l
   pb32b     tpb32b
-  i3le      ti3le
+  pb64l     tpb64l
+  pb64b     tpb64b
   i3nt      ti3nt
+  i3osx     ti3osx
+  i3le      ti3le
   i3fb      ti3fb
   i3ob      ti3ob
-  i3osx     ti3osx
-  a6le      ta6le
-  a6osx     ta6osx
-  a6ob      ta6ob
-  a6s2      ta6s2
-  i3s2      ti3s2
-  a6fb      ta6fb
   i3nb      ti3nb
-  a6nb      ta6nb
-  a6nt      ta6nt
+  i3s2      ti3s2
   i3qnx     ti3qnx
-  arm32le   tarm32le
-  ppc32le   tppc32le
-  arm64le   tarm64le
-  arm64osx  tarm64osx
+  i3gnu     ti3gnu
+  a6nt      ta6nt
+  a6osx     ta6osx
+  a6le      ta6le
+  a6fb      ta6fb
+  a6ob      ta6ob
+  a6nb      ta6nb
+  a6s2      ta6s2
   ppc32osx  tppc32osx
-  arm32fb   tarm32fb
+  ppc32le   tppc32le
   ppc32fb   tppc32fb
-  arm64fb   tarm64fb
-  arm32ob   tarm32ob
   ppc32ob   tppc32ob
-  arm64ob   tarm64ob
-  arm32nb   tarm32nb
   ppc32nb   tppc32nb
-  arm64nb   tarm64nb
+  arm32le   tarm32le
+  arm32fb   tarm32fb
+  arm32ob   tarm32ob
+  arm32nb   tarm32nb
   arm64nt   tarm64nt
+  arm64osx  tarm64osx
+  arm64le   tarm64le
+  arm64fb   tarm64fb
+  arm64ob   tarm64ob
+  arm64nb   tarm64nb
+  rv64le    trv64le
+  rv64fb    trv64fb
+  rv64ob    trv64ob
+  rv64nb    trv64nb
 )
 
 (include "machine.def")
@@ -509,32 +514,33 @@
 (define-constant fasl-type-exactnum 20)
 (define-constant fasl-type-uninterned-symbol 21)
 (define-constant fasl-type-stencil-vector 22)
-(define-constant fasl-type-record 23)
-(define-constant fasl-type-rtd 24)
-(define-constant fasl-type-small-integer 25)
-(define-constant fasl-type-base-rtd 26)
-(define-constant fasl-type-fxvector 27)
-(define-constant fasl-type-ephemeron 28)
-(define-constant fasl-type-bytevector 29)
-(define-constant fasl-type-weak-pair 30)
-(define-constant fasl-type-eq-hashtable 31)
-(define-constant fasl-type-symbol-hashtable 32)
-(define-constant fasl-type-phantom 33)
-(define-constant fasl-type-visit 34)
-(define-constant fasl-type-revisit 35)
-(define-constant fasl-type-visit-revisit 36)
+(define-constant fasl-type-system-stencil-vector 23)
+(define-constant fasl-type-record 24)
+(define-constant fasl-type-rtd 25)
+(define-constant fasl-type-small-integer 26)
+(define-constant fasl-type-base-rtd 27)
+(define-constant fasl-type-fxvector 28)
+(define-constant fasl-type-ephemeron 29)
+(define-constant fasl-type-bytevector 30)
+(define-constant fasl-type-weak-pair 31)
+(define-constant fasl-type-eq-hashtable 32)
+(define-constant fasl-type-symbol-hashtable 33)
+(define-constant fasl-type-phantom 34)
+(define-constant fasl-type-visit 35)
+(define-constant fasl-type-revisit 36)
+(define-constant fasl-type-visit-revisit 37)
 
-(define-constant fasl-type-immutable-vector 37)
-(define-constant fasl-type-immutable-string 38)
-(define-constant fasl-type-flvector 39)
-(define-constant fasl-type-immutable-bytevector 40)
-(define-constant fasl-type-immutable-box 41)
+(define-constant fasl-type-immutable-vector 38)
+(define-constant fasl-type-immutable-string 39)
+(define-constant fasl-type-flvector 40)
+(define-constant fasl-type-immutable-bytevector 41)
+(define-constant fasl-type-immutable-box 42)
 
-(define-constant fasl-type-begin 42)
+(define-constant fasl-type-begin 43)
 
-(define-constant fasl-type-uncompressed 43)
-(define-constant fasl-type-gzip 44)
-(define-constant fasl-type-lz4 45)
+(define-constant fasl-type-uncompressed 44)
+(define-constant fasl-type-gzip 45)
+(define-constant fasl-type-lz4 46)
 
 (define-constant fasl-type-fasl 100)
 (define-constant fasl-type-vfasl 101)
@@ -590,6 +596,7 @@
   (arm32 reloc-arm32-abs reloc-arm32-call reloc-arm32-jump)
   (arm64 reloc-arm64-abs reloc-arm64-call reloc-arm64-jump)
   (ppc32 reloc-ppc32-abs reloc-ppc32-call reloc-ppc32-jump)
+  (riscv64 reloc-riscv64-abs reloc-riscv64-call reloc-riscv64-jump)
   (pb reloc-pb-abs reloc-pb-proc))
 
 (constant-case ptr-bits
@@ -829,9 +836,9 @@
 (define-constant type-char              #b00010110)
 (define-constant ptr sunbound           #b00011110)
 (define-constant ptr snil               #b00100110)
-(define-constant ptr forward-marker     #b00101110)
+(define-constant ptr forward-marker     #b00111110)
 (define-constant ptr seof               #b00110110)
-(define-constant ptr svoid              #b00111110)
+(define-constant ptr svoid              #b00101110)
 (define-constant ptr black-hole         #b01000110)
 (define-constant ptr sbwp               #b01001110)
 (define-constant ptr ftype-guardian-rep #b01010110)
@@ -860,29 +867,32 @@
 ;;; bytevector or string, with the length above that.
 (define-constant type-vector (constant type-fixnum))
 ; #b000 occupied by vectors on 32- and 64-bit machines
-(define-constant type-bytevector             #b01)
-(define-constant type-string                #b010)
-(define-constant type-fxvector             #b0011)
-(define-constant type-flvector             #b1011)
+(define-constant type-bytevector              #b01)
+(define-constant type-string                 #b010)
+(define-constant type-fxvector              #b0011)
+(define-constant type-flvector              #b1011)
 ; #b100 occupied by vectors on 32-bit machines, unused on 64-bit machines
-(define-constant type-other-number         #b0110) ; bit 3 reset for numbers
-(define-constant type-bignum              #b00110) ; bit 4 reset for bignums
-(define-constant type-positive-bignum    #b000110)
-(define-constant type-negative-bignum    #b100110)
-(define-constant type-ratnum           #b00010110) ; bit 4 set for non-bignum numbers
-(define-constant type-inexactnum       #b00110110)
-(define-constant type-exactnum         #b01010110)
-(define-constant type-box               #b0001110) ; bit 3 set for non-numbers
-(define-constant type-immutable-box    #b10001110) ; low 7 bits match `type-box`
-(define-constant type-stencil-vector     #b011110) ; remaining bits for mask; type looks like immediate
-; #b00101110 (forward_marker) must not be used
-(define-constant type-code             #b00111110)
-(define-constant type-port             #b11001110)
-(define-constant type-thread           #b01001110)
-(define-constant type-tlc              #b10111110)
-(define-constant type-rtd-counts       #b01101110)
-(define-constant type-phantom          #b01111110)
-(define-constant type-record                #b111)
+(define-constant type-other-number          #b0110) ; bit 3 reset for numbers
+(define-constant type-bignum               #b00110) ; bit 4 reset for bignums
+(define-constant type-positive-bignum     #b000110)
+(define-constant type-negative-bignum     #b100110)
+;; bit 4 set for non-bignum numbers
+(define-constant type-ratnum            #b00010110) ; bit 4 set for non-bignum numbers
+(define-constant type-inexactnum        #b00110110)
+(define-constant type-exactnum          #b01010110)
+;; bit 3 set for non-vector-like non-numbers
+(define-constant type-stencil-vector     #b001110) ; remaining bits for mask; type looks like immediate
+(define-constant type-sys-stencil-vector #b101110) ; low 6 bits the same as `type-stencil-vector`
+;; bit 5 set for non-vector-like non-number non-stencil-vectors
+(define-constant type-box               #b00011110) ; bit 8 set for immutable
+;(define-constant forward-marker        #b00111110) ; must not be used
+(define-constant type-code              #b10111110)
+(define-constant type-port              #b11011110)
+(define-constant type-thread            #b01011110)
+(define-constant type-tlc               #b11111110)
+(define-constant type-rtd-counts        #b10011110)
+(define-constant type-phantom           #b01111110)
+(define-constant type-record                 #b111)
 
 ;; ---------------------------------------------------------------------
 ;; Bit and byte offsets for different types of objects:
@@ -930,7 +940,7 @@
 
 (define-constant fixnum-offset (- (constant ptr-bits) (constant fixnum-bits)))
 
-; string length field (high bits) + immutabilty is stored with type
+; string length field (high bits) + immutability is stored with type
 (define-constant string-length-offset      4)
 (define-constant string-immutable-flag
   (expt 2 (- (constant string-length-offset) 1)))
@@ -946,7 +956,7 @@
 (define-constant bigit-bits                32)
 (define-constant bigit-bytes               (/ (constant bigit-bits) 8))
 
-; vector length field (high bits) + immutabilty is stored with type
+; vector length field (high bits) + immutability is stored with type
 (define-constant vector-length-offset (fx+ 1 (constant fixnum-offset)))
 (define-constant vector-immutable-flag
   (expt 2 (- (constant vector-length-offset) 1)))
@@ -968,7 +978,7 @@
 
 (define-constant never-immutable-flag 0)
 
-; bytevector length field (high bits) + immutabilty is stored with type
+; bytevector length field (high bits) + immutability is stored with type
 (define-constant bytevector-length-offset 3)
 (define-constant bytevector-immutable-flag
   (expt 2 (- (constant bytevector-length-offset) 1)))
@@ -1079,6 +1089,8 @@
 (define-constant mask-record            #b111)
 (define-constant mask-port               #xFF)
 (define-constant mask-stencil-vector     #x3F)
+(define-constant mask-sys-stencil-vector #x3F)
+(define-constant mask-any-stencil-vector #x1F)
 (define-constant mask-binary-port
   (fxlogor (fxsll (constant port-flag-binary) (constant port-flags-offset))
            (constant mask-port)))
@@ -1097,7 +1109,7 @@
   (fxlogor (fxsll (constant port-flag-binary) (constant port-flags-offset))
            (constant mask-output-port)))
 (define-constant mask-textual-output-port (constant mask-binary-output-port))
-(define-constant mask-box                #x7F)
+(define-constant mask-box                #xFF)
 (define-constant mask-code               #xFF)
 (define-constant mask-system-code
   (fxlogor (fxsll (constant code-flag-system) (constant code-flags-offset))
@@ -1140,7 +1152,11 @@
   (fxlogor (constant mask-bytevector) (constant bytevector-immutable-flag)))
 
 (define-constant type-mutable-box (constant type-box))
-(define-constant mask-mutable-box (constant byte-constant-mask))
+(define-constant type-immutable-box (fxior (constant type-box) (fxsll 1 (integer-length (constant mask-box)))))
+(define-constant mask-mutable-box (fxior (constant mask-box) (constant type-immutable-box)))
+
+(define-constant type-any-stencil-vector (fxand (constant type-stencil-vector)
+                                                (constant type-sys-stencil-vector)))
 
 (define-constant fixnum-factor        (expt 2 (constant fixnum-offset)))
 (define-constant vector-length-factor (expt 2 (constant vector-length-offset)))
@@ -1213,7 +1229,7 @@
 (eval-when (compile load eval)
 (define-syntax filter-foreign-type
  ; for $object-ref, foreign-ref, etc.
- ; foreign-procedure and foriegn-callable have their own
+ ; foreign-procedure and foreign-callable have their own
  ; filter-type in syntax.ss
   (with-syntax ([alist (datum->syntax #'*
                          `((ptr . scheme-object)
@@ -1869,7 +1885,7 @@
   (discard                  #b00000000000000001000000)
   (single-valued            #b00000000000000010000000)
   (true                 (or #b00000000000000100000000 single-valued))
-  (mifoldable           (or #b00000000000001000000000 single-valued))
+  (mifoldable+              #b00000000000001000000000)
   (cp02                     #b00000000000010000000000)
   (cp03                     #b00000000000100000000000)
   (system-keyword           #b00000000001000000000000)
@@ -1888,6 +1904,7 @@
   (cptypes3x                cptypes2)
   (arith-op                 (or proc pure true))
   (alloc                    (or proc discard true))
+  (mifoldable               (or mifoldable+ single-valued))
   ; would be nice to check that these and only these actually have cp0 partial folders
   (partial-folder           (or cp02 cp03))
   )
@@ -2077,7 +2094,7 @@
     ((_ x) (let ((t x)) (and (pair? t) (symbol? (car t)))))))
 
 ;; ---------------------------------------------------------------------
-;; Heap/stack mangement constants:
+;; Heap/stack management constants:
 
 (define-constant collect-interrupt-index 1)
 (define-constant timer-interrupt-index 2)
@@ -2799,6 +2816,8 @@
      (fl> #f 2 #t #t)
      (fl<= #f 2 #t #t)
      (fl>= #f 2 #t #t)
+     (flmin #f 2 #t #t)
+     (flmax #f 2 #t #t)
      (callcc #f 1 #f #f)
      (display-string #f 2 #f #t)
      (cfl* #f 2 #f #t)
@@ -3050,7 +3069,7 @@
      (safe-put-char #f 2 #f #t)
      (safe-unread-char #f 2 #f #t)
      (stencil-vector-mask #f 1 #t #t)
-     (stencil-vector-tag #f 1 #t #t)
+     ($stencil-vector-mask #f 1 #t #t)
      (dorest0 #f 0 #f #t)
      (dorest1 #f 0 #f #t)
      (dorest2 #f 0 #f #t)

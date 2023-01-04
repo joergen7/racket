@@ -193,6 +193,8 @@
           [(fasl-type-gensym)
            (let* ([pname (read-string p)] [uname (read-string p)])
              (fasl-gensym pname uname))]
+          [(fasl-type-uninterned-symbol)
+           (fasl-string ty (read-string p))]
           [(fasl-type-ratnum fasl-type-exactnum fasl-type-inexactnum
                              fasl-type-weak-pair fasl-type-ephemeron)
            (let ([first (read-fasl p g)])
@@ -210,7 +212,10 @@
            (fasl-bytevector ty (read-bytevector p (read-uptr p)))]
           [(fasl-type-stencil-vector)
            (let ([mask (read-uptr p)])
-             (fasl-stencil-vector mask (read-vfasl p g (bitwise-bit-count mask))))]
+             (fasl-stencil-vector mask (read-vfasl p g (bitwise-bit-count mask)) #f))]
+          [(fasl-type-system-stencil-vector)
+           (let ([mask (read-uptr p)])
+             (fasl-stencil-vector mask (read-vfasl p g (bitwise-bit-count mask)) #t))]
           [(fasl-type-base-rtd) (fasl-tuple ty '#())]
           [(fasl-type-rtd) (let* ([uid (read-fasl p g)]
                                   [size (read-uptr p)])
@@ -277,6 +282,8 @@
           [(fasl-type-immediate fasl-type-entry fasl-type-library fasl-type-library-code)
            (fasl-atom ty (read-uptr p))]
           [(fasl-type-graph) (read-fasl p (let ([new-g (make-vector (read-uptr p) #f)])
+                                            (unless (zero? (read-uptr p))
+                                              (bogus "fasl content needs an external vector in ~a"  (port-name p)))
                                             (when g
                                               (let ([delta (fx- (vector-length new-g) (vector-length g))])
                                                 (let loop ([i 0])
@@ -423,7 +430,7 @@
           [vector (ty vfasl) (build-graph! x t (build-vfasl! vfasl))]
           [fxvector (viptr) (build-graph! x t void)]
           [bytevector (ty viptr) (build-graph! x t void)]
-          [stencil-vector (mask vfasl) (build-graph! x t (build-vfasl! vfasl))]
+          [stencil-vector (mask vfasl sys?) (build-graph! x t (build-vfasl! vfasl))]
           [record (maybe-uid size nflds rtd pad-ty* fld*)
            (if (and strip-source-annotations? (fasl-annotation? x))
                (build! (fasl-annotation-stripped x) t)
@@ -439,7 +446,7 @@
           [rtd-ref (uid) (build-graph! x t (lambda () (build! uid #t)))]
           [closure (offset c) (build-graph! x t (lambda () (build! c t)))]
           [flonum (high low) (build-graph! x t void)]
-          [small-integer (iptr) (void)]
+          [small-integer (iptr) (build-graph! x t void)]
           [large-integer (sign vuptr) (build-graph! x t void)]
           [eq-hashtable (mutable? subtype minlen veclen vpfasl)
            (build-graph! x t
@@ -489,7 +496,8 @@
                         (let ([n (table-count t)])
                           (unless (fx= n 0)
                             (put-u8 p (constant fasl-type-graph))
-                            (put-uptr p n)))
+                            (put-uptr p n)
+                            (put-uptr p 0)))
                         (write-fasl p t fasl)
                         (extractor))])
           ($write-fasl-bytevectors p bv* size situation (constant fasl-type-fasl)))))
@@ -560,10 +568,12 @@
                (put-u8 p ty)
                (put-uptr p (bytevector-length bv))
                (put-bytevector p bv)))]
-          [stencil-vector (mask vfasl)
+          [stencil-vector (mask vfasl sys?)
            (write-graph p t x
              (lambda ()
-               (put-u8 p (constant fasl-type-stencil-vector))
+               (put-u8 p (if sys?
+                             (constant fasl-type-system-stencil-vector)
+                             (constant fasl-type-stencil-vector)))
                (put-uptr p mask)
                (vector-for-each (lambda (fasl) (write-fasl p t fasl)) vfasl)))]
           [record (maybe-uid size nflds rtd pad-ty* fld*)
@@ -780,7 +790,7 @@
               [vector (ty vfasl) (vector-map describe vfasl)]
               [fxvector (viptr) viptr]
               [bytevector (ty bv) bv]
-              [stencil-vector (ty vfasl) (vector-map describe vfasl)]
+              [stencil-vector (ty vfasl sys?) (vector-map describe vfasl)]
               [record (maybe-uid size nflds rtd pad-ty* fld*)
                (vector 'RECORD
                        (and maybe-uid (describe maybe-uid))
@@ -1078,7 +1088,9 @@
                        [vector (ty vfasl) (and (eqv? ty1 ty2) (vandmap fasl=? vfasl1 vfasl2))]
                        [fxvector (viptr) (vandmap = viptr1 viptr2)]
                        [bytevector (ty bv) (and (eqv? ty1 ty2) (bytevector=? bv1 bv2))]
-                       [stencil-vector (mask vfasl) (and (eqv? mask1 mask2) (vandmap fasl=? vfasl1 vfasl2))]
+                       [stencil-vector (mask vfasl sys?) (and (eqv? mask1 mask2)
+                                                              (eqv? sys?1 sys?2)
+                                                              (vandmap fasl=? vfasl1 vfasl2))]
                        [record (maybe-uid size nflds rtd pad-ty* fld*)
                         (and (if maybe-uid1
                                  (and maybe-uid2 (fasl=? maybe-uid1 maybe-uid2))

@@ -1027,19 +1027,18 @@
                       #f
                       v v v2 v2))))
 
-(test-comp #:except 'chez-scheme ; unsafe car does not assume immutable
-           '(lambda (w z)
+(test-comp '(lambda (w z)
               (if (list w z (random 7))
                   (let ([l (list (random))])
                     (if l
-                        (list (car l) (cdr l))
+                        (if z (car l) (cdr l))
                         'oops))
                   "bad"))
            '(lambda (w z)
               (begin
                 (list w z (random 7))
                 (let ([l (list (random))])
-                  (list (unsafe-car l) (unsafe-cdr l))))))
+                  (if z (unsafe-car l) (unsafe-cdr l))))))
 
 (test-comp '(lambda (w z)
               (let ([l (if w
@@ -1070,36 +1069,31 @@
                     (unsafe-cdr w)))
            #f)
 
-(test-comp #:except 'chez-scheme
-           '(lambda (w z)
+(test-comp '(lambda (w z)
               (list (if (pair? w) (car z) (car w))
                     (cdr w)))
            '(lambda (w z)
               (list (if (pair? w) (car z) (car w))
                     (unsafe-cdr w))))
 
-(test-comp #:except 'chez-scheme
-           '(lambda (w z)
+(test-comp '(lambda (w z)
               (list (if z (car w) (cdr w))
                     (cdr w)))
            '(lambda (w z)
               (list (if z (car w) (cdr w))
                     (unsafe-cdr w))))
 
-(test-comp #:except 'chez-scheme
-           '(lambda (w z x)
+(test-comp '(lambda (w z x)
               (list (car x) (if z (car w) (cdr w)) (car x)))
            '(lambda (w z x)
               (list (car x) (if z (car w) (cdr w)) (unsafe-car x))))
 
-(test-comp #:except 'chez-scheme
-           '(lambda (w z x)
+(test-comp '(lambda (w z x)
               (list (car x) (if z (car w) 2) (car x)))
            '(lambda (w z x)
               (list (car x) (if z (car w) 2) (unsafe-car x))))
 
-(test-comp #:except 'chez-scheme
-           '(lambda (w z x)
+(test-comp '(lambda (w z x)
               (list (car x) (if z 1 (cdr w)) (car x)))
            '(lambda (w z x)
               (list (car x) (if z 1 (cdr w)) (unsafe-car x))))
@@ -1108,6 +1102,11 @@
               (list (car x) (if z 1 2) (car x)))
            '(lambda (w z x)
               (list (car x) (if z 1 2) (unsafe-car x))))
+
+(test-comp '(lambda (w z x)
+              (list (car x) z (car x)))
+           '(lambda (w z x)
+              (list (car x) z (unsafe-car x))))
 
 (test-comp #:except 'chez-scheme
            '(lambda (w)
@@ -3659,19 +3658,26 @@
                '(lambda (x) 5)
                #f))
   (check-empty-allocation 'hash)
+  (check-empty-allocation 'hashalw)
   (check-empty-allocation 'hasheqv)
   (check-empty-allocation 'hasheq)
   (check-empty-allocation 'make-hash)
+  (check-empty-allocation 'make-hashalw)
   (check-empty-allocation 'make-hasheqv)
   (check-empty-allocation 'make-hasheq)
   (check-empty-allocation 'make-weak-hash)
+  (check-empty-allocation 'make-weak-hashalw)
   (check-empty-allocation 'make-weak-hasheqv)
   (check-empty-allocation 'make-weak-hasheq)
   (check-empty-allocation 'make-immutable-hash)
+  (check-empty-allocation 'make-immutable-hashalw)
   (check-empty-allocation 'make-immutable-hasheqv)
   (check-empty-allocation 'make-immutable-hasheq)
 
   (test-comp `(lambda (x y) (hash x y) 5) ; can trigger equal callbacks
+             '(lambda () 5)
+             #f)
+  (test-comp `(lambda (x y) (hashalw x y) 5) ; can trigger equal-always callbacks
              '(lambda () 5)
              #f)
   (test-comp `(lambda (x y) (hasheqv x y) 5)
@@ -3681,6 +3687,9 @@
 
   ;; Wrong arity
   (test-comp `(lambda (x y) (hash x) 5)
+             '(lambda (x) 5)
+             #f)
+  (test-comp `(lambda (x y) (hashalw x) 5)
              '(lambda (x) 5)
              #f)
   (test-comp `(lambda (x) (hasheqv x) 5)
@@ -6602,6 +6611,52 @@
            '(lambda (x)
               (list (eq? x 7) (box 5))))
 
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Try to check that struct optimizations are ok
+;; with various forms of `struct` declaration
+
+(when (run-unreliable-tests? 'timing)
+  (let ([pies (list
+               '(struct pie (type))
+               '(begin
+                  (require racket/serialize)
+                  (serializable-struct pie (type)))
+               '(struct pie (type)
+                  #:property prop:equal+hash (list (lambda (a b eql?) pie-type #t)
+                                                   (lambda (a hc) 0)
+                                                   (lambda (a hc) 0)))
+               '(struct pie (type)
+                  #:methods gen:equal+hash
+                  [(define (equal-proc x y recursive-equal?) pie-type #t)
+                   (define (hash-code x hc) 1)
+                   (define hash-proc  hash-code)
+                   (define hash2-proc hash-code)]))])
+    (test #t
+          list?
+          (let loop ([tries 3])
+            (define msecs
+              (for/list ([pie (in-list pies)])
+                (define go
+                  (parameterize ([current-namespace (make-base-namespace)])
+                    (eval `(module pie racket/base
+                             (provide go)
+                             ,pie
+                             (define p (pie 'a))
+                             (define (go)
+                               (for ([i 10000000])
+                                 (pie-type p)))))
+                    (dynamic-require ''pie 'go)))
+                (define-values (r cpu-msec real-msec gc-msec) (time-apply go '()))
+                cpu-msec))
+            (or
+             (and (for*/and ([msec (in-list msecs)]
+                             [other-msec (in-list msecs)])
+                    (<= (/ other-msec 1.2) msec (* other-msec 1.2)))
+                  (cons 'pie-timing-test msecs))
+             (if (> tries 0)
+                 (loop (sub1 tries))
+                 (vector 'pie-timing-test-failed msecs)))))))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Regression test to check that the optimizer doesn't

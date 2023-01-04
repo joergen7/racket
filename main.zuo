@@ -25,7 +25,7 @@
   (define config (config-file->hash (at-source "Makefile") vars))
   (define (lookup key [default ""]) (hash-ref config key default))
   (define (lookup! key) (or (hash-ref config key #f)
-                            (error "required configuraiton entry is missing" key)))
+                            (error "required configuration entry is missing" key)))
 
   (define build-config.rktd (at-source "build/config/config.rktd"))
   (define build/site.rkt (at-source "build/site.rkt"))
@@ -133,8 +133,14 @@
        (shell/wait "git checkout -q" branch
                    (hash 'dir pb-dir))]
       [(eq? step 'build)
-       (shell/wait "racket rktboot/main.rkt --machine pb"
-                   (hash 'dir (at-source "racket/src/ChezScheme")))]
+       (define scheme (find-executable-path "scheme"))
+       (cond
+         [scheme
+          (define reboot (dynamic-require "racket/src/ChezScheme/s/reboot.zuo" 'reboot))
+          (reboot 'infer "pb" scheme (hash 'work-dir "build" 'out-dir "racket/src/ChezScheme"))]
+         [else
+          (shell/wait "racket ../rktboot/main.rkt --machine pb"
+                      (hash 'dir (at-source "racket/src/ChezScheme")))])]
       [(eq? step 'stage)
        (define options (hash 'dir pb-dir))
        (shell/wait "git branch" branch options)
@@ -159,8 +165,8 @@
                               'configure (if (eq? 'windows (system-type))
                                              (at-source "racket/src" subdir "winfig.bat")
                                              (at-source "racket/src" subdir "configure"))
-                              'inputs (list (at-source "racket/src" subdir "Mf-config.in"))
-                              'outputs (list (at-source "racket/src/build" subdir "Mf-config"))
+                              'inputs (list (at-source "racket/src" subdir "Makefile.in"))
+                              'outputs (list (at-source "racket/src/build" subdir "Makefile"))
                               'configure-args (append
                                                (shell->strings (shell-subst-pwd (lookup 'CONFIGURE_ARGS_qq)
                                                                                 (at-source "racket/src/build" subdir)))
@@ -248,8 +254,8 @@
                               'configure-args (if (equal? subdir "cs/c")
                                                   (list "--enable-csdefault")
                                                   (list "--enable-bcdefault"))
-                              'inputs (list (at-source "racket/src" subdir "Mf-config.in"))
-                              'outputs (list (at-source "racket/src/build/cross" subdir "Mf-config"))
+                              'inputs (list (at-source "racket/src" subdir "Makefile.in"))
+                              'outputs (list (at-source "racket/src/build/cross" subdir "Makefile"))
                               'vars (hash))))
     (build (find-target "build" targets)
            #f
@@ -337,7 +343,7 @@
                   (shell->strings (lookup 'PKGS)))
     ;; destdir fixups
     (define at-vm-dir (make-at-dir (at-source "racket/src/build" (if (eq? vm 'cs) "cs/c" "bc"))))
-    (define config (config-file->hash (at-vm-dir "Mf-config") vars))
+    (define config (config-file->hash (at-vm-dir "Makefile") vars))
     (maybe-libzo-move config racket #f at-vm-dir)
     (maybe-destdir-fix config racket #f at-vm-dir))
 
@@ -355,22 +361,7 @@
     (define jobs (get-jobs))
 
     (unless also?
-      (racket vars
-              (list "-U" "-G" (path-only build-config.rktd)
-                    "-l-" "pkg/dirs-catalog"
-                    "--link" "--check-metadata" "--immediate"
-                    (at-source "racket/share/pkgs-catalog")
-                    (at-source "pkgs")
-                    (at-source "racket/src/expander")
-                    (at-source "racket/src/zuo/zuo-doc")))
-      (racket vars
-              (list "-U" "-G" (path-only build-config.rktd)
-                    (at-source "racket/src/pkgs-config.rkt")
-                    default-src-catalog
-                    (lookup 'SRC_CATALOG)))
-      (racket vars
-              (at-source "racket/src/pkgs-check.rkt")
-              (at-source "racket/share/pkgs-catalog"))
+      (pkgs-catalog token vars)
 
       (raco vars "pkg" "update"
             "--all" "--auto" "--no-setup" "--scope" "installation"
@@ -385,6 +376,24 @@
 
     (setup vm (shell->strings setup-extra-args)
            (if also? "-D" '())))
+
+  (define (pkgs-catalog token vars)
+    (racket vars
+            (list "-U" "-G" (path-only build-config.rktd)
+                  "-l-" "pkg/dirs-catalog"
+                  "--link" "--check-metadata" "--immediate"
+                  (at-source "racket/share/pkgs-catalog")
+                  (at-source "pkgs")
+                  (at-source "racket/src/expander")
+                  (at-source "racket/src/zuo/zuo-doc")))
+    (racket vars
+            (list "-U" "-G" (path-only build-config.rktd)
+                  (at-source "racket/src/pkgs-config.rkt")
+                  default-src-catalog
+                  (lookup 'SRC_CATALOG)))
+    (racket vars
+            (at-source "racket/src/pkgs-check.rkt")
+            (at-source "racket/share/pkgs-catalog")))
 
   ;; ------------------------------------------------------------
   ;; Distribution builds: server
@@ -452,7 +461,7 @@
     (rm* "build/catalog-copy")
     (built-raco options "pkg" "catalog-copy" (lookup 'SRC_CATALOG) "build/catalog-copy")
     (server-cache-config options)
-    (built-raco options "pkg" "install" "--all-platforms" user-auto-options
+    (built-raco options "pkg" "install" "--all-platforms" source-user-auto
                 required-pkgs
                 (shell->strings (lookup 'DISTRO_BUILD_PKGS)))
     (server-set-config options)
@@ -728,6 +737,8 @@
        [:target pb-build () ,(lambda (token) (pb-manage 'build))]
        [:target pb-stage () ,(lambda (token) (pb-manage 'stage))]
        [:target pb-push () ,(lambda (token) (pb-manage 'push))]
+
+       [:target pkgs-catalog () ,(lambda (token) (pkgs-catalog token (find-racket vars vm)))]
 
        [:target native-cs-for-cross () ,(lambda (token) (maybe-fetch 'cs) (native-for-cross "cs/c" token))]
        [:target native-bc-for-cross () ,(lambda (token) (native-for-cross "bc" token))]

@@ -311,7 +311,7 @@
 ;;;   - copy-environment creates new top-level labels/locations for and only
 ;;;     for variables whose locations are the default ones for the old
 ;;;     environment.  All other mappings from symbol to label should be
-;;;     transfered from the old to the new environment.
+;;;     transferred from the old to the new environment.
 
 ;;; Bootstrapping:
 
@@ -1509,14 +1509,14 @@
   ;; environment.  top-id-bound-label directly extends the specified
   ;; top-level environment.
   ;;
-  ;; For top-id-bound-label, we extend the environment with a substition
+  ;; For top-id-bound-label, we extend the environment with a substitution
   ;; keyed by the given marks, so that top-level definitions introduced by
   ;; a macro are distinct from other top-level definitions for the same
   ;; name.  For example, if macros a and b both introduce definitions and
   ;; bound references to identifier x, the two x's should be different,
   ;; i.e., keyed by their own marks.
   ;;
-  ;; For top-id-free-label, we extend the environment with a substition
+  ;; For top-id-free-label, we extend the environment with a substitution
   ;; keyed by the top marks, since top-level free identifier references
   ;; should refer to the existing implicit (top-marked) substitution.  For
   ;; example, if macros a and b both introduce free references to identifier
@@ -4620,11 +4620,11 @@
     (module (make-root insert-path delete-path search-path list-paths)
       (define-record-type dir
         (fields (immutable name) (immutable dir*) (immutable file*))
-        (nongenerative)
+        (nongenerative #{dir htcavk0jv3uhhtakfluarlapg-0})
         (sealed #t))
       (define-record-type file
         (fields (immutable name) (immutable lib))
-        (nongenerative)
+        (nongenerative #{file htcavk0jv3uhhtakfluarlapg-1})
         (sealed #t))
       (define make-root (lambda () (make-dir "root" '() '())))
       (define insert-path
@@ -4710,7 +4710,12 @@
         [() (list-paths root)]
         [(root) (list-paths root)]))
     (define loaded-libraries-root
-      (lambda () root)))
+      (lambda () root))
+    ;; for bootstrapping via "reboot.ss":
+    (set! $loaded-libraries
+      (case-lambda
+        [() root]
+        [(r) (set! root r)])))
 
   (define install-library/ct-desc
     (lambda (path version uid outfn importer visible? ctdesc)
@@ -6401,7 +6406,7 @@
          (unless (source-object? src) (syntax-error src "profile subform is not a source object"))
          (build-input-profile src))])))
 
-(global-extend 'core 'begin-unsafe
+(global-extend 'core '$begin-unsafe
   (lambda (e r w ae)
     (syntax-case e ()
       ((_ e1 e2 ...)
@@ -7249,7 +7254,7 @@
   (define d->s
     (lambda (id datum who)
       (unless (nonsymbol-id? id) ($oops who "~s is not an identifier" id))
-     ; no longer transfering annotation, since this can produce
+     ; no longer transferring annotation, since this can produce
      ; misleading profile output
       (make-syntax-object datum (syntax-object-wrap id))))
   (set-who! datum->syntax
@@ -7258,6 +7263,13 @@
   (set-who! datum->syntax-object
     (lambda (id datum)
       (d->s id datum who))))
+
+;; for bootstrapping via "reboot.ss":
+(set! $datum->environment-syntax
+  (lambda (sym env)
+    (make-syntax-object sym (make-wrap (wrap-marks top-wrap)
+                                       (cons (env-top-ribcage env)
+                                             (wrap-subst top-wrap))))))
 
 (set! syntax->list
   (lambda (orig-ls)
@@ -7644,7 +7656,7 @@
 ;; ========================================================================
 ;; The exclusive cond macro -- restricted cond, and clauses must be mutually exclusive.
 ;;
-;; Uses profiling information to rearrange clauses in most likley to succeed order.
+;; Uses profiling information to rearrange clauses in most likely to succeed order.
 ;; ========================================================================
 
 (define-syntax exclusive-cond
@@ -8332,6 +8344,19 @@
                              (p y) ...
                              (set! y t) ...))])
                (dynamic-wind #t swap (lambda () e1 e2 ...) swap))))])))
+
+
+(define-syntax with-continuation-mark
+  (lambda (x)
+    (syntax-case x ()
+      [(_ key val body)
+       #'($call-consuming-continuation-attachment
+          '()
+          (lambda (marks)
+            ($call-setting-continuation-attachment
+             ($update-mark marks key val)
+             (lambda ()
+               body))))])))
 
 (define-syntax rec
   (lambda (x)

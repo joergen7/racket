@@ -35,6 +35,8 @@ and how to contribute to Racket development.
 >> [3.4 More Resources](#34-more-resources)  
   
 > [4 Zuo and the Racket Build System](#4-zuo-and-the-racket-build-system)  
+  
+> [5 Bootstrapping Racket](#5-bootstrapping-racket)  
 
 ## 1. Building Racket from Source
 
@@ -168,10 +170,10 @@ Racket](#15-more-instructions-building-racket) for more information.
 The `"racket"` directory contains minimal Racket, which is just enough
 to run `raco pkg` to install everything else. A first step of `make
 in-place` or `make unix-style` is to build minimal Racket, and you can
-read `"racket/src/README.txt"` for more information. (The very first
-step of a build is to compile Zuo, which is a tiny variant of Racket
-that [drives the rest of the build
-system](#4-zuo-and-the-racket-build-system).)
+read `"racket/src/README.txt"` for more information, including
+information about dependencies. (The very first step of a build is to
+compile Zuo, which is a tiny variant of Racket that [drives the rest of
+the build system](#4-zuo-and-the-racket-build-system).)
 
 If you would like to provide arguments to `configure` for the minimal
 Racket build, then you can supply them with by adding
@@ -244,7 +246,7 @@ downloaded from a separate Git repository by `make`. If you have Racket
 v7.1 or later, then you can choose instead to bootstrap using that
 Racket implementation with
 
-  `make cs RACKET_FOR_BOOTFILES=racket`
+  `make cs BOOTFILE_RACKET=racket`
 
 The `make bc` target (or `make bc-as-is` for a rebuild) builds an older
 variant of Racket, called Racket BC, which does not use Chez Scheme. By
@@ -878,10 +880,12 @@ inspired by `make` and [Shake](https://shakebuild.com/). When you build
 Racket with `make`, the makefile target ensures that `zuo` is built, and
 then it bounces the build request to a `"main.zuo"` script.
 
-Racket makefiles build `zuo` using the `CC` makefile variable, which
-normally defaults to `cc`. If you need to specify a C compiler or
-options for building Zuo, supply `CC=<compiler>` and/or `CFLAGS=<flags>`
-to `make`.
+Racket makefiles build `zuo` using the `CC_FOR_BUILD` makefile variable
+plus `CFLAGS_FOR_BUILD`. The `CC_FOR_BUILD` variable defaults to using
+the `CC` makefile variable plus `-O2`, while `CC` normally defaults to
+`cc`. If you need to specify a C compiler or options for building Zuo,
+supply `CC=<compiler>`, `CC_FOR_BUILD=<compiler>`, and/or
+`CFLAGS_FOR_BUILD=<flags>` to `make`.
 
 In you have `zuo` installed, you can generally substitute `zuo .` in
 place of `make` when building Racket components. You can even use just
@@ -908,3 +912,45 @@ instantiated as a small module, possibly by copying a `"buildmain.zuo"`
 file to `"main.zuo"`. That `"main.zuo"` reaches `"build.zuo"` using a
 source directory that is recorded in an accompanying `"Makefile"` or
 `"Mf-config"`.
+
+## 5. Bootstrapping Racket
+
+Although Racket is implemented in Racket, you do not normally need an
+existing Racket installation to build Racket. Distribution archives
+include the needed bootstrapping artifacts in a portable form. The
+Racket Git repository similarly includes some of those artifacts checked
+in directly, and some are in a separate repository that is downloaded by
+`make`. Specifically:
+
+* `"racket/src/cs/schemified"` includes macro-expanded, schemified
+  versions of layers that are implemented in Racket for Racket CS, and
+  these are checked into the Git repository;
+
+* `"racket/src/bc/srcstartup.inc"` is the macro-expanded expander (as
+  implemented in Racket) for Racket BC, and it is checked into the Git
+  repository; and
+
+* `"racket/src/ChezScheme/boot/pb"` contains Chez Scheme pb (portable
+  bytecode) boot files, normally downloaded from a separate Git
+  repository in a branch that has a single commit \(i.e., no history of
+  old versions within the branch\).
+
+If you modify certain pieces of Racket, you will need an existing build
+of Racket to bootstrap. That includes the Chez Scheme implementation (at
+least for some kinds of modifications), the Racket macro expander, and
+in the case of Racket CS, the "thread", "io", "regexp", and "schemify"
+layers.
+
+For more information about modifying Chez Scheme, see
+`"racket/src/cs/README.txt"`. As explained there, you can create new
+boot files in `"racket/src/ChezScheme/boot/pb"` or platform-specific
+boot files using even a relatively old version of Chez Scheme or Racket.
+
+For information about modifying the macro expander for Racket CS and/or
+BC, see `"racket/src/expander/README.txt"`. Building the expander may
+require a relatively new version of Racket, perhaps even the very latest
+version before the change.
+
+Finally, for information about modifying the other layers for Racket CS,
+see `"racket/src/cs/README.txt"`. Rebuilding these layers requires a
+relatively new version of Racket, too.

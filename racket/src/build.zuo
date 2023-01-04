@@ -7,7 +7,16 @@
 
   (define default-vm (hash-ref config 'default_vm "cs"))
 
+  (define (msvc-prep-makefile dir)
+    (when (eq? 'windows (hash-ref (runtime-env) 'toolchain-type))
+      (unless (file-exists? (at-dir dir "Makefile"))
+        (mkdir-p dir)
+        (shell/wait (find-relative-path (at-dir dir)
+                                        (at-source dir "winfig.bat"))
+                    (hash 'dir (at-dir dir))))))
+
   (define (get-cs-targets)
+    (msvc-prep-makefile "cs/c")
     (and (equal? (hash-ref config 'use_cs "yes") "yes")
          ((dynamic-require (at-source "cs/c/build.zuo")
                            'targets-at)
@@ -15,6 +24,7 @@
           vars)))
         
   (define (get-bc-targets)
+    (msvc-prep-makefile "bc")
     (and (equal? (hash-ref config 'use_bc "no") "yes")
          ((dynamic-require (at-source "bc/build.zuo")
                            'targets-at)
@@ -55,21 +65,36 @@
               ,(lambda (token)
                  (build (find-target "plain-install" (get-targets)) token))]
                  
-     [:target cs-install ()
+     [:target install-cs ()
               ,(lambda (token)
                  (build (find-target "install" (get-cs-targets)) token))]
 
-     [:target plain-cs-install ()
+     [:target plain-install-cs ()
               ,(lambda (token)
                  (build (find-target "plain-install" (get-cs-targets)) token))]
                  
-     [:target bc-install ()
+     [:target install-bc ()
               ,(lambda (token)
                  (build (find-target "install" (get-bc-targets)) token))]
 
-     [:target plain-bc-install ()
+     [:target plain-install-bc ()
               ,(lambda (token)
                  (build (find-target "plain-install" (get-bc-targets)) token))]
 
+     [:target install-3m ()
+              ,(lambda (token)
+                 (build (find-target "install-3m" (get-bc-targets)) token))]
+
+     [:target plain-install-3m ()
+              ,(lambda (token)
+                 (build (find-target "plain-install-3m" (get-bc-targets)) token))]
+
+     [:target install-cgc ()
+              ,(lambda (token)
+                 (build (find-target "install-cgc" (get-bc-targets)) token))]
+
+     [:target plain-install-cgc ()
+              ,(lambda (token)
+                 (build (find-target "plain-install-cgc" (get-bc-targets)) token))]
 
      #;(end-of-targets))))

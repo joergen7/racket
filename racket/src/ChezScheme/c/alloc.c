@@ -105,7 +105,7 @@ void S_protect(ptr *p) {
 void S_reset_scheme_stack(ptr tc, iptr n) {
     ptr *x; iptr m;
 
-  /* we allow less than one_shot_headroom here for no truly justifyable
+  /* we allow less than one_shot_headroom here for no truly justifiable
      reason */
     n = ptr_align(n + (one_shot_headroom >> 1));
 
@@ -429,7 +429,7 @@ void S_mark_card_dirty(uptr card, IGEN to_g) {
   }
 }
 
-/* scan remembered set from P to ENDP, transfering to dirty vector;
+/* scan remembered set from P to ENDP, transferring to dirty vector;
    allocation mutex must be held */
 void S_scan_dirty(ptr *p, ptr *endp) {
   uptr this, last;
@@ -491,7 +491,7 @@ void S_scan_remembered_set(void) {
   S_maybe_fire_collector(THREAD_GC(tc));
 }
 
-/* S_get_more_room is called from genereated machine code when there is
+/* S_get_more_room is called from generated machine code when there is
  * insufficient room for an allocation.  ap has already been incremented
  * by the size of the object and xp is a (typed) pointer to the value of
  * ap before the allocation attempt.  xp must be set to a new object of
@@ -558,7 +558,7 @@ ptr S_get_more_room_help(ptr tc, uptr ap, uptr type, uptr size) {
   return x;
 }
 
-ptr S_list_bits_ref(p) ptr p; {
+ptr S_list_bits_ref(ptr p) {
   seginfo *si = SegInfo(ptr_get_segment(p));
 
   if (si->list_bits) {
@@ -568,7 +568,7 @@ ptr S_list_bits_ref(p) ptr p; {
     return FIX(0);
 }
 
-void S_list_bits_set(p, bits) ptr p; iptr bits; {
+void S_list_bits_set(ptr p, iptr bits) {
   seginfo *si = SegInfo(ptr_get_segment(p));
 
   /* This function includes potential races when writing list bits.
@@ -598,7 +598,7 @@ void S_list_bits_set(p, bits) ptr p; iptr bits; {
   si->list_bits[segment_bitmap_byte(p)] |= segment_bitmap_bits(p, bits);
 }
 
-ptr S_cons_in(tc, s, g, car, cdr) ptr tc; ISPC s; IGEN g; ptr car, cdr; {
+ptr S_cons_in(ptr tc, ISPC s, IGEN g, ptr car, ptr cdr) {
     ptr p;
 
     find_room(tc, s, g, type_pair, size_pair, p);
@@ -617,7 +617,7 @@ ptr Scons(ptr car, ptr cdr) {
     return p;
 }
 
-ptr S_ephemeron_cons_in(gen, car, cdr) IGEN gen; ptr car, cdr; {
+ptr S_ephemeron_cons_in(IGEN gen, ptr car, ptr cdr) {
   ptr p;
   ptr tc = get_thread_context();
 
@@ -630,7 +630,7 @@ ptr S_ephemeron_cons_in(gen, car, cdr) IGEN gen; ptr car, cdr; {
   return p;
 }
 
-ptr S_box2(ref, immobile) ptr ref; IBOOL immobile; {
+ptr S_box2(ptr ref, IBOOL immobile) {
     ptr tc = get_thread_context();
     ptr p;
 
@@ -736,7 +736,7 @@ ptr S_fxvector(iptr n) {
     return p;
 }
 
-ptr S_flvector(n) iptr n; {
+ptr S_flvector(iptr n) {
     ptr tc;
     ptr p; iptr d;
 
@@ -798,7 +798,7 @@ ptr S_null_immutable_string(void) {
   return v;
 }
 
-ptr S_stencil_vector(mask) uptr mask; {
+static ptr stencil_vector(uptr type, uptr mask) {
     ptr tc;
     ptr p; iptr d;
     iptr n = Spopcount(mask);
@@ -807,11 +807,19 @@ ptr S_stencil_vector(mask) uptr mask; {
 
     d = size_stencil_vector(n);
     newspace_find_room(tc, type_typed_object, d, p);
-    VECTTYPE(p) = (mask << stencil_vector_mask_offset) | type_stencil_vector;
+    VECTTYPE(p) = (mask << stencil_vector_mask_offset) | type;
     return p;
 }
 
-ptr S_record(n) iptr n; {
+ptr S_stencil_vector(uptr mask) {
+  return stencil_vector(type_stencil_vector, mask);
+}
+
+ptr S_system_stencil_vector(uptr mask) {
+  return stencil_vector(type_sys_stencil_vector, mask);
+}
+
+ptr S_record(iptr n) {
     ptr tc = get_thread_context();
     ptr p;
 
@@ -1106,7 +1114,7 @@ ptr S_weak_cons(ptr car, ptr cdr) {
   return S_cons_in(tc, space_weakpair, 0, car, cdr);
 }
 
-ptr S_phantom_bytevector(sz) uptr sz; {
+ptr S_phantom_bytevector(uptr sz) {
     ptr tc = get_thread_context();
     ptr p;
 
@@ -1120,7 +1128,7 @@ ptr S_phantom_bytevector(sz) uptr sz; {
     return p;
 }
 
-void S_phantom_bytevector_adjust(ph, new_sz) ptr ph; uptr new_sz; {
+void S_phantom_bytevector_adjust(ptr ph, uptr new_sz) {
   ptr tc = get_thread_context();
   uptr old_sz = PHANTOMLEN(ph);
   seginfo *si;

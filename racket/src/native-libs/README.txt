@@ -13,31 +13,33 @@ for 64-bit Linux.
 This directory contains scripts and patches to build Windows, Mac OS,
 and Linux libraries in a consistent and portable way. Naturally, the
 script and patches are fragile, so we upgrade libraries infrequently.
-Currently, we use the following external packages and versions:
+Currently, we use the following external packages and versions for
+actively supported platforms (i.e., 32-bit PPC and x86 Mac OS may use
+older versions):
 
  pkg-config-0.28
  sed-4.2 (Windows only, to avoid non-GNU `sed`)
- sqlite[-autoconf]-3360000 (Windows and Linux, PPC Mac OS: 3220000)
+ sqlite[-autoconf]-3360000 (Windows and Linux)
  libedit-20191231-3.1 (Mac OS only)
- openssl-1.1.1g (Windows AArch64: openssl-3.0.2)
+ openssl-1.1.1o (Windows AArch64: openssl-3.0.2)
  libiconv-1.15 (Windows only)
- zlib-1.2.11 (Windows and Linux only)
- libffi-3.2.1 (AArch64 Mac OS: libffi-3.3)
- expat-2.2.5
+ zlib-1.2.12 (Windows and Linux only)
+ libffi-3.2.1 (AArch64 Mac OS and Windows: libffi-3.3)
+ expat-2.4.8
  gettext-0.19.8
- glib-2.56.0
- libpng-1.6.34
- pixman-0.34.0
- cairo-1.14.12
- jpegsrc.v9c
+ glib-2.72.2
+ libpng-1.6.37
+ pixman-0.38.4
+ cairo-1.16.0
+ jpegsrc.v9e
  harfbuzz-1.7.6
  fribidi-1.0.2
  fontconfig-2.13.0
- freetype-2.9
+ freetype-2.12.1
  pango-1.42.0
  poppler-0.24.5
  mpfr-3.1.6
- gmp-6.1.2 (AArch64 Mac OS: gmp-6.2.1)
+ gmp-6.2.1
  atk-2.28.1
 
 (Linux only:)

@@ -73,7 +73,7 @@ same structure type, no fields are opaque, and the results of applying
 @racket[equal?]. (Consequently, @racket[equal?]  testing for
 structures may depend on the current inspector.) A structure type can
 override the default @racket[equal?] definition through the
-@racket[gen:equal+hash] @tech{generic interface}.
+@racket[gen:equal+hash] or @racket[gen:equal-mode+hash] @tech{generic interface}.
 
 @local-table-of-contents[]
 
@@ -348,7 +348,7 @@ A @deftech{structure type property} allows per-type information to be
                                     [contract-str (or/c string? symbol? #f) #f]
                                     [realm symbol? 'racket])
          (values struct-type-property?
-                 procedure?
+                 (any/c . -> . boolean?)
                  procedure?)]{
 
 Creates a new structure type property and returns three values:
@@ -676,6 +676,16 @@ supplied @racket[v]s, the @exnraise[exn:fail:contract].
 (make-prefab-struct '(clown 1 (1 #f) #()) "Binky" "pie")
 (make-prefab-struct '(clown 1 (1 #f) #(0)) "Binky" "pie")
 ]}
+
+
+@defproc[(prefab-struct-type-key+field-count [type struct-type?])
+         (or/c #f (cons/c prefab-key? (integer-in 0 32768)))]{
+
+Returns a pair containing the @tech{prefab} key and field count for
+the @tech{structure type descriptor} @racket[type] if it represents a
+prefab structure type, @racket[#f] otherwise.
+
+@history[#:added "8.5.0.8"]}
 
 
 @defproc[(prefab-key->struct-type [key prefab-key?]

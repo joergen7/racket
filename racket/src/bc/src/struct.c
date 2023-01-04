@@ -121,6 +121,7 @@ static Scheme_Object *struct_type_authentic_p(int argc, Scheme_Object *argv[]);
 static Scheme_Object *struct_to_vector(int argc, Scheme_Object *argv[]);
 static Scheme_Object *prefab_struct_key(int argc, Scheme_Object *argv[]);
 static Scheme_Object *make_prefab_struct(int argc, Scheme_Object *argv[]);
+static Scheme_Object *prefab_struct_type_key(int argc, Scheme_Object *argv[]);
 static Scheme_Object *prefab_key_struct_type(int argc, Scheme_Object *argv[]);
 static Scheme_Object *is_prefab_key(int argc, Scheme_Object *argv[]);
 
@@ -611,7 +612,13 @@ scheme_init_struct (Scheme_Startup_Env *env)
                              1, 1);
   SCHEME_PRIM_PROC_FLAGS(p) |= scheme_intern_prim_opt_flags(SCHEME_PRIM_IS_UNARY_INLINED);
   scheme_addto_prim_instance("prefab-struct-key", p, env);
-  
+
+  scheme_addto_prim_instance("prefab-struct-type-key+field-count",
+                             scheme_make_immed_prim(prefab_struct_type_key,
+                                                    "prefab-struct-type-key+field-count",
+                                                    1, 1),
+                             env);
+
   scheme_addto_prim_instance("make-prefab-struct",
 			     scheme_make_prim_w_arity(make_prefab_struct,
 						      "make-prefab-struct",
@@ -1003,7 +1010,7 @@ static Scheme_Object *prop_pred(int argc, Scheme_Object **args, Scheme_Object *p
       Scheme_Object *procs;
       procs = scheme_struct_type_property_ref(scheme_impersonator_of_property, v);
       if (procs) {
-        v = scheme_apply_impersonator_of(0, procs, v);
+        v = scheme_apply_impersonator_of(0, procs, v); /* mode 0: 'equal? */
         if (!v)
           return scheme_false;
       } else
@@ -1157,7 +1164,7 @@ static Scheme_Object *do_chaperone_prop_accessor(const char *who, Scheme_Object 
         Scheme_Object *procs;
         procs = scheme_struct_type_property_ref(scheme_impersonator_of_property, arg);
         if (procs) {
-          arg = scheme_apply_impersonator_of(0, procs, arg);
+          arg = scheme_apply_impersonator_of(0, procs, arg); /* mode 0: 'equal? */
           if (!arg)
             return NULL;
           /* loop to try again */
@@ -1851,12 +1858,26 @@ static Scheme_Object *check_equal_property_value_ok(int argc, Scheme_Object *arg
 /* This is the guard for prop:equal+hash */
 {
   Scheme_Object *v, *p;
+  intptr_t len;
 
   v = argv[0];
+  len = scheme_proper_list_length(v);
 
-  if (scheme_proper_list_length(v) != 3) {
-    v = NULL;
-  } else {
+  if (len == 2) {
+    /* new protocol */
+    v = scheme_make_pair(scheme_make_symbol("tag"), v);
+    v = scheme_list_to_vector(v);
+    p = SCHEME_VEC_ELS(v)[1];
+    if (!scheme_check_proc_arity(NULL, 4, 0, 1, &p)) {
+      v = NULL;
+    } else {
+      p = SCHEME_VEC_ELS(v)[2];
+      if (!scheme_check_proc_arity(NULL, 3, 0, 1, &p)) {
+        v = NULL;
+      }
+    }
+  } else if (len == 3) {
+    /* old protocol */
     v = scheme_make_pair(scheme_make_symbol("tag"), v);
     v = scheme_list_to_vector(v);
     p = SCHEME_VEC_ELS(v)[1];
@@ -1873,13 +1894,16 @@ static Scheme_Object *check_equal_property_value_ok(int argc, Scheme_Object *arg
         }
       }
     }
-  }
+  } else
+    v = NULL;
 
   if (!v) {
     wrong_property_contract("guard-for-prop:equal+hash",
-                            "(list/c (any/c any/c any/c . -> . any)\n"
-                            "        (any/c any/c . -> . any)\n"
-                            "        (any/c any/c . -> . any))",
+                            "(or/c (list/c (any/c any/c any/c any/c . -> . any)\n"
+                            "              (any/c any/c any/c . -> . any))\n"
+                            "      (list/c (any/c any/c any/c . -> . any)\n"
+                            "              (any/c any/c . -> . any)\n"
+                            "              (any/c any/c . -> . any)))",
                             argv[0]);
   }
 
@@ -3272,6 +3296,25 @@ Scheme_Object *scheme_prefab_struct_key(Scheme_Object *so)
   }
   
   return scheme_false;
+}
+
+static Scheme_Object *prefab_struct_type_key(int argc, Scheme_Object *argv[]) {
+  Scheme_Object *o;
+  Scheme_Struct_Type *stype;
+
+  o = argv[0];
+  if (SCHEME_NP_CHAPERONEP(o))
+    o = SCHEME_CHAPERONE_VAL(o);
+  
+  if (!SCHEME_STRUCT_TYPEP(o))
+    scheme_wrong_contract("prefab-struct-type-key+field-count", "struct-type?", 0, argc, argv);
+
+  stype = (Scheme_Struct_Type *)o;
+  if (stype->prefab_key)
+    return scheme_make_pair(SCHEME_CDR(stype->prefab_key),
+                            scheme_make_integer(stype->num_slots));
+  else
+    return scheme_false;
 }
 
 static Scheme_Object *make_prefab_struct(int argc, Scheme_Object *argv[])
@@ -4718,6 +4761,28 @@ Scheme_Object *scheme_rename_struct_proc(Scheme_Object *p, Scheme_Object *sym, S
   return NULL;
 }
 
+static void format_name(char *name, int lp, int lp1, int lp2,
+                        const char *pre, const char *tn, int ltn, int xltn,
+                        const char *post1, const char *fn, int lfn, int xlfn,
+                        const char *post2) {
+  int total;
+
+  memcpy(name, pre, lp);
+  total = lp;
+  if (xltn)
+    memcpy(name + total, (ltn < 0) ? SCHEME_SYM_VAL((Scheme_Object *)tn) : tn, xltn);
+  total += xltn;
+  memcpy(name + total, post1, lp1);
+  total += lp1;
+  if (xlfn)
+    memcpy(name + total, (lfn < 0) ? SCHEME_SYM_VAL((Scheme_Object *)fn) : fn, xlfn);
+  total += xlfn;
+  memcpy(name + total, post2, lp2);
+  total += lp2;
+
+  name[total] = 0;
+}
+
 static Scheme_Object *make_name(const char *pre, const char *tn, int ltn,
 				const char *post1, const char *fn, int lfn,
 				const char *post2, int sym)
@@ -4741,30 +4806,21 @@ static Scheme_Object *make_name(const char *pre, const char *tn, int ltn,
   total += xlfn;
   total += (lp2 = strlen(post2));
 
-  if (sym && (total < 256))
+  if (sym && (total < 256)) {
     name = buffer;
-  else
-    name = (char *)scheme_malloc_atomic(sizeof(char)*(total + 1));
-  
-  memcpy(name, pre, lp);
-  total = lp;
-  if (xltn)
-    memcpy(name + total, (ltn < 0) ? SCHEME_SYM_VAL((Scheme_Object *)tn) : tn, xltn);
-  total += xltn;
-  memcpy(name + total, post1, lp1);
-  total += lp1;
-  if (xlfn)
-    memcpy(name + total, (lfn < 0) ? SCHEME_SYM_VAL((Scheme_Object *)fn) : fn, xlfn);
-  total += xlfn;
-  memcpy(name + total, post2, lp2);
-  total += lp2;
-
-  name[total] = 0;
-
-  if (sym)
+    format_name(name, lp, lp1, lp2,
+                pre, tn, ltn, xltn,
+                post1, fn, lfn, xlfn,
+                post2);
     return scheme_intern_exact_symbol(name, total);
-  else
+  } else {
+    name = (char *)scheme_malloc_atomic(sizeof(char)*(total + 1));
+    format_name(name, lp, lp1, lp2,
+                pre, tn, ltn, xltn,
+                post1, fn, lfn, xlfn,
+                post2);
     return (Scheme_Object *)name;
+  }
 }
 
 /*========================================================================*/

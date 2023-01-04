@@ -8,6 +8,7 @@
         (#%$app/no-return do-raise v))]))
 
 (define (do-raise/barrier v)
+  (assert-not-in-uninterrupted 'raise)
   (call-with-continuation-barrier
    (lambda ()
      (do-raise v))))
@@ -155,6 +156,7 @@
   (#%$app/no-return do-raise-arguments-error who who-in realm what exn:fail:contract more))
   
 (define (do-raise-arguments-error e-who who realm what exn:fail:contract more)
+  (assert-not-in-uninterrupted 'do-raise-arguments-error)
   (check e-who symbol? who)
   (check e-who symbol? realm)
   (check e-who string? what)
@@ -228,6 +230,7 @@
      (#%$app/no-return do-raise-argument-error who "result" who-in realm what pos arg args)]))
 
 (define (do-raise-argument-error e-who tag who realm what pos arg args)
+  (assert-not-in-uninterrupted 'do-raise-argument-error)
   (check e-who symbol? who)
   (check e-who symbol? realm)
   (check e-who string? what)
@@ -751,9 +754,9 @@
             (finish-continuation-trace slow-k l accum accums))]
       [else
        (let* ([name (or (and (not offset)
-                             (let ([attachments (continuation-next-attachments k)])
+                             (let ([attachments (#%$continuation-attachments k)])
                                (and (pair? attachments)
-                                    (not (eq? attachments (continuation-next-attachments (#%$continuation-link k))))
+                                    (not (eq? attachments (#%$continuation-attachments (#%$continuation-link k))))
                                     (let ([n (extract-mark-from-frame (car attachments) linklet-instantiate-key #f)])
                                       (and n
                                            (string->symbol (format "body of ~a" n)))))))
@@ -915,19 +918,27 @@
         (unless (and (list? locs)
                      (andmap srcloc? locs))
           (raise-result-error '|prop:exn:srclocs procedure| "(listof srcloc?)" locs))
-        (let ([locs
-               ;; Some exns are expected to include srcloc in the msg,
-               ;; so skip the first srcloc of those
-               (if (and (or (exn:fail:read? v)
-                            (exn:fail:contract:variable? v))
-                        (error-print-source-location))
-                   (cdr locs)
-                   locs)])
-          (unless (null? locs)
+        (let* ([locs
+                ;; Some exns are expected to include srcloc in the msg,
+                ;; so skip the first srcloc of those
+                (if (and (or (exn:fail:read? v)
+                             (exn:fail:contract:variable? v))
+                         (error-print-source-location))
+                    (cdr locs)
+                    locs)]
+               [loc-strs (let loop ([locs locs])
+                           (cond
+                             [(null? locs) '()]
+                             [else
+                              (let ([str (srcloc->string (car locs))])
+                                (if str
+                                    (cons str (loop (cdr locs)))
+                                    (loop (cdr locs))))]))])
+          (unless (null? loc-strs)
             (eprintf "\n  location...:")
-            (#%for-each (lambda (sl)
-                          (eprintf (string-append "\n   " (srcloc->string sl))))
-                        locs))))
+            (#%for-each (lambda (str)
+                          (eprintf (string-append "\n   " str)))
+                        loc-strs))))
       (unless (null? l)
         (eprintf "\n  context...:")
         (let loop ([l l]

@@ -564,6 +564,12 @@ static int s_ee_write_char(wchar_t c) {
 
   GetConsoleScreenBufferInfo(hStdout, &post_info);
 
+  if (post_info.dwCursorPosition.X == post_info.dwSize.X-1) {
+    /* We don't know whether the cursor advanced as much as it would
+       earlier in the line, so return -128 to mean "unknown". */
+    return -128;
+  }
+
   return post_info.dwCursorPosition.X - pre_info.dwCursorPosition.X;
 }
 
@@ -667,7 +673,11 @@ static void s_ee_set_color(int color_id, IBOOL background) {
 #include <sys/ioctl.h>
 #include <wchar.h>
 #include <locale.h>
-#if !defined(__GLIBC__) && !defined(__OpenBSD__) && !defined(__NetBSD__) && !defined(__linux__) && !defined(NO_USELOCALE)
+#if defined(__linux__)
+# include <unistd.h>
+# include <time.h>
+#endif
+#if !defined(__GLIBC__) && !defined(__OpenBSD__) && !defined(__NetBSD__) && !defined(__linux__) && !defined(__EMSCRIPTEN__) && !defined(NO_USELOCALE)
 # include <xlocale.h>
 #endif
 

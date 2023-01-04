@@ -36,7 +36,7 @@
                               (flonum-result? e3 (fxsrl fuel 1)))]
        [else #f]))))
 
-(define rtd-ancestors (csv7:record-field-accessor #!base-rtd 'ancestors))
+(define rtd-ancestry (csv7:record-field-accessor #!base-rtd 'ancestry))
 
 ;; After the `np-expand-primitives` pass, some expression produce
 ;; double (i.e., floating-point) values instead of pointer values.
@@ -347,7 +347,8 @@
           [else #f])))
     (define binder
       (lambda (multiple-ref? type e)
-        (if (no-need-to-bind? multiple-ref? e)
+        (if (and (not (eq? multiple-ref? 'always))
+                 (no-need-to-bind? multiple-ref? e))
             (values e values)
             (let ([t (make-tmp 't type)])
               (values t (lift-fp-unboxed
@@ -625,7 +626,7 @@
     (define need-store-fence?
       (if-feature pthreads
 	(constant-case architecture
-          [(arm32 arm64 pb) #t]
+          [(arm32 arm64 riscv64 pb) #t]
           [else #f])
         #f))
     (define add-store-fence
@@ -647,11 +648,17 @@
             (guard (eq? (primref-name pr) '$fixmediate))
             (build-assign base index offset e)]
            [else
-            (if (nanopass-case (L7 Expr) e
-                  [(quote ,d) (ptr->imm d)]
-                  [(call ,info ,mdcl ,pr ,e* ...)
-                   (eq? 'fixnum ($sgetprop (primref-name pr) '*result-type* #f))]
-                  [else #f])
+            (if (let loop ([e e] [fuel 5])
+                  (nanopass-case (L7 Expr) e
+                    [(quote ,d) (ptr->imm d)]
+                    [(call ,info ,mdcl ,pr ,e* ...)
+                     (memq ($sgetprop (primref-name pr) '*result-type* #f)
+                           '(fixnum boolean))]
+                    [(if ,e1 ,e2 ,e3)
+                     (and (fx> fuel 0) (loop e2 (fx- fuel 1)) (loop e3 (fx- fuel 1)))]
+                    [(seq ,e1 ,e2)
+                     (and (fx> fuel 0) (loop e2 (fx- fuel 1)))]
+                    [else #f]))
                 (build-assign base index offset e)
                 (let ([a (if (eq? index %zero)
                              (%lea ,base offset)
@@ -2605,6 +2612,8 @@
       (typed-object-pred mutable-vector? mask-mutable-vector type-mutable-vector)
       (typed-object-pred immutable-vector? mask-mutable-vector type-immutable-vector)
       (typed-object-pred stencil-vector? mask-stencil-vector type-stencil-vector)
+      (typed-object-pred $stencil-vector? mask-any-stencil-vector type-any-stencil-vector)
+      (typed-object-pred $system-stencil-vector? mask-sys-stencil-vector type-sys-stencil-vector)
       (typed-object-pred thread? mask-thread type-thread))
     (define-inline 3 $bigpositive?
       [(e) (%type-check mask-signed-bignum type-positive-bignum
@@ -3045,7 +3054,8 @@
       (def-len string-length string-type-disp string-length-offset)
       (def-len bytevector-length bytevector-type-disp bytevector-length-offset)
       (def-len $bignum-length bignum-type-disp bignum-length-offset)
-      (def-len stencil-vector-mask stencil-vector-type-disp stencil-vector-mask-offset))
+      (def-len stencil-vector-mask stencil-vector-type-disp stencil-vector-mask-offset)
+      (def-len $stencil-vector-mask stencil-vector-type-disp stencil-vector-mask-offset))
     (let ()
       (define-syntax def-len
         (syntax-rules ()
@@ -3064,7 +3074,8 @@
       (def-len flvector-length mask-flvector type-flvector flvector-type-disp flvector-length-offset)
       (def-len string-length mask-string type-string string-type-disp string-length-offset)
       (def-len bytevector-length mask-bytevector type-bytevector bytevector-type-disp bytevector-length-offset)
-      (def-len stencil-vector-mask mask-stencil-vector type-stencil-vector stencil-vector-type-disp stencil-vector-mask-offset))
+      (def-len stencil-vector-mask mask-stencil-vector type-stencil-vector stencil-vector-type-disp stencil-vector-mask-offset)
+      (def-len $stencil-vector-mask mask-any-stencil-vector type-any-stencil-vector stencil-vector-type-disp stencil-vector-mask-offset))
     ; TODO: consider adding integer-valued?, rational?, rational-valued?,
     ; real?, and real-valued?
     (define-inline 2 integer?
@@ -3146,13 +3157,13 @@
     (define-inline 2 memory-order-acquire
       [() (if-feature pthreads
             (constant-case architecture
-	          [(arm32 arm64 pb) (%seq ,(%inline acquire-fence) (quote ,(void)))]
+	          [(arm32 arm64 riscv64 pb) (%seq ,(%inline acquire-fence) (quote ,(void)))]
               [else `(quote ,(void))])
             `(quote ,(void)))])
     (define-inline 2 memory-order-release
       [() (if-feature pthreads
             (constant-case architecture
-	          [(arm32 arm64 pb) (%seq ,(%inline release-fence) (quote ,(void)))]
+	          [(arm32 arm64 riscv64 pb) (%seq ,(%inline release-fence) (quote ,(void)))]
               [else `(quote ,(void))])
             `(quote ,(void)))])
     (let ()
@@ -3569,8 +3580,11 @@
       [else
        (define-inline 2 native-endianness
          [() `(quote ,(constant native-endianness))])])
-    (define-inline 2 directory-separator
-      [() `(quote ,(if-feature windows #\\ #\/))])
+    (constant-case architecture
+      [(pb) (void)]
+      [else
+       (define-inline 2 directory-separator
+         [() `(quote ,(if-feature windows #\\ #\/))])])
     (let () ; level 2 char=?, r6rs:char=?, etc.
       (define-syntax char-pred
         (syntax-rules ()
@@ -3631,6 +3645,23 @@
       (char-pred char=? r6rs:char=? eq?)
       (char-pred char>=? r6rs:char>=? >=)
       (char-pred char>? r6rs:char>? >))
+    (define-inline 3 char-grapheme-step
+      [(e-ch e-state)
+       (bind #t (e-ch e-state)
+         ;; Handle ASCII non-control charaters inline when the state is simple enough:
+         `(if ,(build-and
+                (%inline > ,e-ch (immediate ,(+ (constant type-char)
+                                                ;; last low-ASCII control character:
+                                                (fxsll #x1f (constant char-data-offset)))))
+                (%inline < ,e-ch (immediate ,(+ (constant type-char)
+                                                ;; first high-ASCII control character:
+                                                (fxsll #x7f (constant char-data-offset))))))
+              (if ,(%inline eq? ,e-state (immediate ,(fix ($char-grapheme-other-state))))
+                  ,(%primcall src sexpr values ,(%constant strue) (immediate ,(fix ($char-grapheme-other-state))))
+                  (if ,(%inline eq? ,e-state (immediate ,(fix 0)))
+                      ,(%primcall src sexpr values ,(%constant sfalse) (immediate ,(fix ($char-grapheme-other-state))))
+                      ,(%primcall src sexpr $char-grapheme-step ,e-ch ,e-state)))
+              ,(%primcall src sexpr $char-grapheme-step ,e-ch ,e-state)))])
     (define-inline 3 map
       [(e-proc e-ls)
        (or (nanopass-case (L7 Expr) e-proc
@@ -4683,7 +4714,17 @@
                             (make-info-foreign '(atomic) (map (lambda (e) `(fp-double-float)) e*) `(fp-double-float) #t))
                          (literal ,(make-info-literal #f 'entry entry 0))
                          ,e* ...)))
-      
+      (define build-flminmax
+        (lambda (min?)
+          (lambda (e1 e2)
+            (bind 'always fp (e1 e2)
+                  `(if (inline ,(make-info-unboxed-args '(#t #t)) ,%fp< ,e1 ,e2)
+                       (unboxed-fp ,(if min? e1 e2))
+                       (if (inline ,(make-info-unboxed-args '(#t #t)) ,%fp<= ,e2 ,e1)
+                           (unboxed-fp ,(if min? e2 e1))
+                           ;; one of them must be +nan.0, so ensure +nan.0 result
+                           (unboxed-fp (inline ,(make-info-unboxed-args '(#t #t)) ,%fp+ ,e1 ,e2))))))))
+
       (define-inline 3 fl+
         [() `(quote 0.0)]
         [(e) (ensure-single-valued e)]
@@ -4706,10 +4747,20 @@
         [(e1 e2) (build-fp-op-2 %fp/ e1 e2)]
         [(e1 . e*) (reduce-fp src sexpr 3 'fl/ e1 e*)])
 
+      (define-inline 3 flmin
+        [(e) (ensure-single-valued e)]
+        [(e1 e2) ((build-flminmax #t) e1 e2)]
+        [(e1 . e*) (reduce-fp src sexpr 3 'flmin e1 e*)])
+
+      (define-inline 3 flmax
+        [(e) (ensure-single-valued e)]
+        [(e1 e2) ((build-flminmax #f) e1 e2)]
+        [(e1 . e*) (reduce-fp src sexpr 3 'flmax e1 e*)])
+
       (define-inline 3 flsqrt
         [(e)
          (constant-case architecture
-           [(x86 x86_64 arm32 arm64 pb) (build-fp-op-1 %fpsqrt e)]
+           [(x86 x86_64 arm32 arm64 riscv64 pb) (build-fp-op-1 %fpsqrt e)]
            [(ppc32) (build-fl-call (lookup-c-entry flsqrt) e)])])
 
       (define-inline 3 flsingle
@@ -5046,6 +5097,24 @@
                        (build-libcall #t src sexpr fl/ e1 e2)))]
           [(e1 . e*) (reduce-fp src sexpr 2 'fl/ e1 e*)])
 
+        (define-inline 2 flmin
+          [(e) (build-checked-fp-op e
+                 (lambda (e)
+                   (build-libcall #t src sexpr flmin e `(quote 0.0))))]
+          [(e1 e2) (build-checked-fp-op e1 e2 (build-flminmax #t)
+                     (lambda (e1 e2)
+                       (build-libcall #t src sexpr flmin e1 e2)))]
+          [(e1 . e*) (reduce-fp src sexpr 2 'flmin e1 e*)])
+
+        (define-inline 2 flmax
+          [(e) (build-checked-fp-op e
+                 (lambda (e)
+                   (build-libcall #t src sexpr flmax e `(quote 0.0))))]
+          [(e1 e2) (build-checked-fp-op e1 e2 (build-flminmax #f)
+                     (lambda (e1 e2)
+                       (build-libcall #t src sexpr flmax e1 e2)))]
+          [(e1 . e*) (reduce-fp src sexpr 2 'flmax e1 e*)])
+
       (define-inline 2 flabs
         [(e) (build-checked-fp-op e build-flabs
                (lambda (e)
@@ -5056,7 +5125,7 @@
          (build-checked-fp-op e
            (lambda (e)
              (constant-case architecture
-               [(x86 x86_64 arm32 arm64 pb) (build-fp-op-1 %fpsqrt e)]
+               [(x86 x86_64 arm32 arm64 riscv64 pb) (build-fp-op-1 %fpsqrt e)]
                [(ppc32) (build-fl-call (lookup-c-entry flsqrt) e)]))
            (lambda (e)
              (build-libcall #t src sexpr flsqrt e)))])
@@ -6373,6 +6442,8 @@
              (guard (target-fixnum? d))
              (%mref ,e-v ,(+ (fix d) (constant stencil-vector-data-disp)))]
             [else (%mref ,e-v ,e-i ,(constant stencil-vector-data-disp))]))
+        (define-inline 3 $stencil-vector-ref
+          [(e-v e-i) (go e-v e-i)])
         (define-inline 3 stencil-vector-ref
           [(e-v e-i) (go e-v e-i)]))
       (let ()
@@ -6382,6 +6453,8 @@
              (guard (target-fixnum? d))
              (build-dirty-store e-v (+ (fix d) (constant stencil-vector-data-disp)) e-new)]
             [else (build-dirty-store e-v e-i (constant stencil-vector-data-disp) e-new)]))
+        (define-inline 3 $stencil-vector-set!
+          [(e-v e-i e-new) (go e-v e-i e-new)])
         (define-inline 3 stencil-vector-set!
           [(e-v e-i e-new) (go e-v e-i e-new)]))
       (let ()
@@ -6422,7 +6495,7 @@
                  (%mref ,e-v ,(+ (fix d) (constant stencil-vector-data-disp)))]
                 [else (%mref ,e-v ,e-i ,(constant stencil-vector-data-disp))])
              ,e-new))
-        (define-inline 3 $stencil-vector-set!
+        (define-inline 3 $stencil-vector-fill-set!
           [(e-v e-i e-new) (go e-v e-i e-new)]))
       (let ()
         (define (go e-v e-i)
@@ -6831,6 +6904,7 @@
                     (and (or (constant unaligned-integers)
                              (and #,(p2? (fx+ (datum mask) 1)) (bv-offset-okay? e-offset mask)))
                          (constant? (lambda (x) (memq x '(big little))) e-eness)
+                         (not (eq? (constant native-endianness) 'unknown))
                          (let-values ([(e-index imm-offset) (bv-index-offset e-offset)])
                            (build-object-ref (not (eq? (constant-value e-eness) (constant native-endianness)))
                              'type e-bv e-index imm-offset)))])])))
@@ -7323,13 +7397,13 @@
       (meta-assert (= (constant log2-ptr-bytes) (constant fixnum-offset)))
       (let ()
         (define build-stencil-vector-type
-          (lambda (e-mask) ; e-mask is used only once
+          (lambda (e-mask type) ; e-mask is used only once
             (%inline logor
-                     (immediate ,(constant type-stencil-vector))
+                     (immediate ,type)
                      ,(%inline sll ,e-mask (immediate ,(fx- (constant stencil-vector-mask-offset)
                                                             (constant fixnum-offset)))))))
         (define do-stencil-vector
-          (lambda (e-mask e-val*)
+          (lambda (e-mask e-val* type)
             (list-bind #f (e-val*)
               (bind #f (e-mask)
                   (let ([t-vec (make-tmp 'tvec)])
@@ -7340,13 +7414,13 @@
                           (if (null? e-val*)
                               `(seq
                                  (set! ,(%mref ,t-vec ,(constant stencil-vector-type-disp))
-                                       ,(build-stencil-vector-type e-mask))
+                                       ,(build-stencil-vector-type e-mask type))
                                  ,t-vec)
                               `(seq
                                 (set! ,(%mref ,t-vec ,(fx+ i (constant stencil-vector-data-disp))) ,(car e-val*))
                                 ,(loop (cdr e-val*) (fx+ i (constant ptr-bytes))))))))))))
         (define do-make-stencil-vector
-          (lambda (e-length e-mask)
+          (lambda (e-length e-mask type)
             (bind #t (e-length)
                   (bind #f (e-mask)
                         (let ([t-vec (make-tmp 'tvec)])
@@ -7358,29 +7432,48 @@
                                                      (immediate ,(- (constant byte-alignment)))))])
                            ,(%seq
                              (set! ,(%mref ,t-vec ,(constant stencil-vector-type-disp))
-                                   ,(build-stencil-vector-type e-mask))
+                                   ,(build-stencil-vector-type e-mask type))
                              ;; Content not filled! This function is meant to be called by
-                             ;; `$stencil-vector-update`, which has GC disabled between
+                             ;; `[$]$stencil-vector-do-update`, which has GC disabled between
                              ;; allocation and filling in the data
                              ,t-vec)))))))
         (define-inline 3 stencil-vector
           [(e-mask . e-val*)
-           (do-stencil-vector e-mask e-val*)])
+           (do-stencil-vector e-mask e-val* (constant type-stencil-vector))])
+        (define-inline 3 $system-stencil-vector
+          [(e-mask . e-val*)
+           (do-stencil-vector e-mask e-val* (constant type-sys-stencil-vector))])
         (define-inline 2 $make-stencil-vector
-          [(e-length e-mask) (do-make-stencil-vector e-length e-mask)])
+          [(e-length e-mask) (do-make-stencil-vector e-length e-mask (constant type-stencil-vector))])
+        (define-inline 2 $make-system-stencil-vector
+          [(e-length e-mask) (do-make-stencil-vector e-length e-mask (constant type-sys-stencil-vector))])
         (define-inline 3 $make-stencil-vector
-          [(e-length e-mask) (do-make-stencil-vector e-length e-mask)])
+          [(e-length e-mask) (do-make-stencil-vector e-length e-mask (constant type-stencil-vector))])
+        (define-inline 3 $make-system-stencil-vector
+          [(e-length e-mask) (do-make-stencil-vector e-length e-mask (constant type-sys-stencil-vector))])
         (define-inline 3 stencil-vector-update
           [(e-vec e-sub-mask e-add-mask . e-val*)
            `(call ,(make-info-call src sexpr #f #f #f) #f
-                  ,(lookup-primref 3 '$stencil-vector-update)
+                  ,(lookup-primref 3 '$stencil-vector-do-update)
+                  ,e-vec ,e-sub-mask ,e-add-mask ,e-val* ...)])
+        (define-inline 3 $system-stencil-vector-update
+          [(e-vec e-sub-mask e-add-mask . e-val*)
+           `(call ,(make-info-call src sexpr #f #f #f) #f
+                  ,(lookup-primref 3 '$system-stencil-vector-do-update)
                   ,e-vec ,e-sub-mask ,e-add-mask ,e-val* ...)])
         (define-inline 3 stencil-vector-truncate!
           [(e-vec e-mask)
            (bind #f (e-vec e-mask)
              `(seq
                (set! ,(%mref ,e-vec ,(constant stencil-vector-type-disp))
-                     ,(build-stencil-vector-type e-mask))
+                     ,(build-stencil-vector-type e-mask (constant type-stencil-vector)))
+               ,(%constant svoid)))])
+        (define-inline 3 $system-stencil-vector-truncate!
+          [(e-vec e-mask)
+           (bind #f (e-vec e-mask)
+             `(seq
+               (set! ,(%mref ,e-vec ,(constant stencil-vector-type-disp))
+                     ,(build-stencil-vector-type e-mask (constant type-sys-stencil-vector)))
                ,(%constant svoid)))])))
     (let ()
       (meta-assert (= (constant log2-ptr-bytes) (constant fixnum-offset)))
@@ -7673,7 +7766,7 @@
     (define-inline 3 char-
       ; assumes fixnum is zero
       [(e1 e2)
-       (%inline srl
+       (%inline sra
           ,(%inline - ,e1 ,e2)
           (immediate ,(fx- (constant char-data-offset) (constant fixnum-offset))))])
     (define-inline 3 integer->char
@@ -7724,7 +7817,7 @@
         (lambda (e e-rtd assume-record?)
           (let ([known-depth (nanopass-case (L7 Expr) e-rtd
                                [(quote ,d) (and (record-type-descriptor? d)
-                                                (vector-length (rtd-ancestors d)))]
+                                                (vector-length (rtd-ancestry d)))]
                                [else #f])])
             ;; `t` is rtd of `e`, and it's used once
             (define (compare-at-depth t known-depth)
@@ -7893,13 +7986,16 @@
                   ,t)))])
     (define-inline 3 $get-timer
       [() (build-fix (ref-reg %trap))])
-    (define-inline 3 directory-separator?
-      [(e) (if-feature windows
-             (bind #t (e)
-               (build-simple-or
-                 (%inline eq? ,e (immediate ,(ptr->imm #\/)))
-                 (%inline eq? ,e (immediate ,(ptr->imm #\\)))))
-             (%inline eq? ,e (immediate ,(ptr->imm #\/))))])
+    (constant-case architecture
+      [(pb) (void)]
+      [else
+       (define-inline 3 directory-separator?
+         [(e) (if-feature windows
+                (bind #t (e)
+                  (build-simple-or
+                   (%inline eq? ,e (immediate ,(ptr->imm #\/)))
+                   (%inline eq? ,e (immediate ,(ptr->imm #\\)))))
+                (%inline eq? ,e (immediate ,(ptr->imm #\/))))])])
     (let ()
       (define add-cdrs
         (lambda (n e)
@@ -7980,7 +8076,7 @@
                (%inline logor ,(%inline sll ,%rdx (immediate 32)) ,%rax)
                64))]
          [(arm32 pb) (unsigned->ptr (%inline read-time-stamp-counter) 32)]
-         [(arm64) (unsigned->ptr (%inline read-time-stamp-counter) 64)]
+         [(arm64 riscv64) (unsigned->ptr (%inline read-time-stamp-counter) 64)]
          [(ppc32)
           (let ([t-hi (make-tmp 't-hi)])
             `(let ([,t-hi (inline ,(make-info-kill* (reg-list %real-zero))
@@ -8001,7 +8097,7 @@
                (%inline logor ,(%inline sll ,%rdx (immediate 32)) ,%rax)
                64))]
          [(arm32 ppc32 pb) (unsigned->ptr (%inline read-performance-monitoring-counter ,(build-unfix e)) 32)]
-         [(arm64) (unsigned->ptr (%inline read-performance-monitoring-counter ,(build-unfix e)) 64)])])
+         [(arm64 riscv64) (unsigned->ptr (%inline read-performance-monitoring-counter ,(build-unfix e)) 64)])])
 
     (define-inline 3 assert-unreachable
       [() (%constant svoid)])

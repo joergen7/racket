@@ -470,32 +470,32 @@ each element in the sequence.
 
 @deftogether[(
 @defproc[(in-mutable-hash
-          [hash (and/c hash? (not/c immutable?) (not/c hash-weak?))])
+          [hash (and/c hash? (not/c immutable?) hash-strong?)])
 	  sequence?]
 @defproc[#:link-target? #f
          (in-mutable-hash
-          [hash (and/c hash? (not/c immutable?) (not/c hash-weak?))] [bad-index-v any/c])
+          [hash (and/c hash? (not/c immutable?) hash-strong?)] [bad-index-v any/c])
 	  sequence?]
 @defproc[(in-mutable-hash-keys
-          [hash (and/c hash? (not/c immutable?) (not/c hash-weak?))])
+          [hash (and/c hash? (not/c immutable?) hash-strong?)])
 	  sequence?]
 @defproc[#:link-target? #f
          (in-mutable-hash-keys
-          [hash (and/c hash? (not/c immutable?) (not/c hash-weak?))] [bad-index-v any/c])
+          [hash (and/c hash? (not/c immutable?) hash-strong?)] [bad-index-v any/c])
 	  sequence?]
 @defproc[(in-mutable-hash-values
-          [hash (and/c hash? (not/c immutable?) (not/c hash-weak?))])
+          [hash (and/c hash? (not/c immutable?) hash-strong?)])
 	  sequence?]
 @defproc[#:link-target? #f
          (in-mutable-hash-values
-          [hash (and/c hash? (not/c immutable?) (not/c hash-weak?))] [bad-index-v any/c])
+          [hash (and/c hash? (not/c immutable?) hash-strong?)] [bad-index-v any/c])
 	  sequence?]
 @defproc[(in-mutable-hash-pairs
-          [hash (and/c hash? (not/c immutable?) (not/c hash-weak?))])
+          [hash (and/c hash? (not/c immutable?) hash-strong?)])
 	  sequence?]
 @defproc[#:link-target? #f
          (in-mutable-hash-pairs
-          [hash (and/c hash? (not/c immutable?) (not/c hash-weak?))] [bad-index-v any/c])
+          [hash (and/c hash? (not/c immutable?) hash-strong?)] [bad-index-v any/c])
 	  sequence?]
 @defproc[(in-immutable-hash
           [hash (and/c hash? immutable?)])
@@ -1390,12 +1390,12 @@ stream, but plain lists can be used as streams, and functions such as
 
   To supply method implementations, the @racket[#:methods] keyword
   should be used in a structure type definition. The following three
-  methods should be implemented:
+  methods must be implemented:
 
   @itemize[
-    @item{@racket[stream-empty?] : accepts one argument}
-    @item{@racket[stream-first] : accepts one argument}
-    @item{@racket[stream-rest] : accepts one argument}
+    @item{@racket[_stream-empty?] : accepts one argument}
+    @item{@racket[_stream-first] : accepts one argument}
+    @item{@racket[_stream-rest] : accepts one argument}
   ]
 
   @examples[#:eval sequence-evaluator
@@ -1412,6 +1412,12 @@ stream, but plain lists can be used as streams, and functions such as
     (stream? l1)
     (stream-first l1)
   ]
+
+  @history[#:changed "8.7.0.5"
+           @elem{Added a check so that omitting any of
+                 @racket[_stream-empty?], @racket[_stream-first], and @racket[_stream-rest]
+                 is now a syntax error.}]
+
 }
 
 @defthing[prop:stream struct-type-property?]{

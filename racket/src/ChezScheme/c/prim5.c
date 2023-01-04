@@ -23,6 +23,10 @@
 #include <ctype.h>
 #include <math.h>
 
+#if defined(__GNU__) /* Hurd */
+#include <sys/resource.h>
+#endif
+
 /* locally defined functions */
 static INT s_errno(void);
 static IBOOL s_addr_in_heap(uptr x);
@@ -58,7 +62,7 @@ static void s_showalloc(IBOOL show_dump, const char *outfn);
 static ptr s_system(const char *s);
 static ptr s_process(char *s, IBOOL stderrp);
 static I32 s_chdir(const char *inpath);
-#ifdef GETWD
+#if defined(GETWD) || defined(__GNU__) /* Hurd */
 static char *s_getwd(void);
 #endif
 static ptr s_set_code_byte(ptr p, ptr n, ptr x);
@@ -881,7 +885,18 @@ static ptr s_process(char *s, IBOOL stderrp) {
         CLOSE(0); if (dup(tofds[0]) != 0) _exit(1);
         CLOSE(1); if (dup(fromfds[1]) != 1) _exit(1);
         CLOSE(2); if (dup(stderrp ? errfds[1] : 1) != 2) _exit(1);
+#ifndef __GNU__ /* Hurd */
         {INT i; for (i = 3; i < NOFILE; i++) (void)CLOSE(i);}
+#else /* __GNU__ Hurd: no NOFILE */
+        {
+          INT i;
+          struct rlimit rlim;
+          getrlimit(RLIMIT_NOFILE, &rlim);
+          for (i = 3; i < rlim.rlim_cur; i++) {
+            (void)CLOSE(i);
+          }
+        }
+#endif /* __GNU__ Hurd */
         execl("/bin/sh", "/bin/sh", "-c", s, NULL);
         _exit(1) /* only if execl fails */;
         /*NOTREACHED*/
@@ -926,6 +941,22 @@ static I32 s_chdir(const char *inpath) {
 #ifdef GETWD
 static char *s_getwd() {
   return GETWD(TO_VOIDP(&BVIT(S_bytevector(PATH_MAX), 0)));
+}
+#elif defined(__GNU__) /* Hurd: no PATH_MAX */
+static char *s_getwd() {
+  char *path;
+  size_t len;
+  ptr bv;
+  path = getcwd(NULL, 0);
+  if (NULL == path) {
+    return NULL;
+  } else {
+    len = strlen(path);
+    bv = S_bytevector(len);
+    memcpy(TO_VOIDP(&BVIT(bv, 0)), path, len);
+    free(path);
+    return TO_VOIDP(&BVIT(bv, 0));
+  }
 }
 #endif /* GETWD */
 
@@ -1426,11 +1457,26 @@ static double s_pow(double x, double y) { return powl(x, y); }
 static double s_pow(double x, double y) { return pow(x, y); }
 #endif /* i3fb/ti3fb */
 
+#ifdef __MINGW32__
+/* cos() and sin() do not handle large values nicely,
+   so use fmod() to get reasonably close */
+# define INTO_SINCOS_RANGE(x) (((x > 1e9) || (x < -1e9)) \
+			       ? fmod(x, 2*atan2(0.0, -1.0)) \
+			       : x)
+/* asinh() and atanh() sometimes get zero sign wrong */
+# define CHECK_ASINTAN_ZERO(x, e) ((x == 0.0) \
+                                   ? (signbit(x) ? -0.0 : 0.0)  \
+                                   : e)
+#else
+# define INTO_SINCOS_RANGE(x) x
+# define CHECK_ASINTAN_ZERO(x, e) e
+#endif
+
 static double s_sqrt(double x) { return sqrt(x); }
 
-static double s_sin(double x) { return sin(x); }
+static double s_sin(double x) { return sin(INTO_SINCOS_RANGE(x)); }
 
-static double s_cos(double x) { return cos(x); }
+static double s_cos(double x) { return cos(INTO_SINCOS_RANGE(x)); }
 
 static double s_tan(double x) { return tan(x); }
 
@@ -1459,11 +1505,11 @@ static double s_trunc(double x) { return trunc(x); }
 static double s_hypot(double x, double y) { return HYPOT(x, y); }
 
 #ifdef ARCHYPERBOLIC
-static double s_asinh(double x) { return asinh(x); }
+static double s_asinh(double x) { return CHECK_ASINTAN_ZERO(x, asinh(x)); }
 
 static double s_acosh(double x) { return acosh(x); }
 
-static double s_atanh(double x) { return atanh(x); }
+static double s_atanh(double x) { return CHECK_ASINTAN_ZERO(x, atanh(x)); }
 #endif /* ARCHHYPERBOLIC */
 
 #ifdef LOG1P
@@ -1513,19 +1559,20 @@ static void s_putenv(char *name, char *value) {
 
 #ifdef PTHREADS
 /* backdoor thread is for testing thread creation by Sactivate_thread */
-#define display(s) { const char *S = (s); if (WRITE(1, S, (unsigned int)strlen(S))) {} }
-static s_thread_rv_t s_backdoor_thread_start(void *p) {
-  display("backdoor thread started\n")
+#define display(s) do { const char *S = (s); if (WRITE(1, S, (unsigned int)strlen(S))) {} } while(0)
+static s_thread_rv_t s_backdoor_thread_start(void *p_in) {
+  ptr p = TO_PTR(p_in);
+  display("backdoor thread started\n");
   (void) Sactivate_thread();
-  display("thread activated\n")
-  Scall0((ptr)Sunbox(TO_PTR(p)));
+  display("thread activated\n");
+  Scall0(Sboxp(p) ? Sunbox(p) : p);
   (void) Sdeactivate_thread();
-  display("thread deactivated\n")
+  display("thread deactivated\n");
   (void) Sactivate_thread();
-  display("thread reeactivated\n")
-  Scall0((ptr)Sunbox(TO_PTR(p)));
+  display("thread reactivated\n");
+  Scall0(Sboxp(p) ? Sunbox(p) : p);
   Sdestroy_thread();
-  display("thread destroyed\n")
+  display("thread destroyed\n");
   s_thread_return;
 }
 
@@ -1569,6 +1616,10 @@ static ptr s_mutex_acquire_noblock(ptr m_p) {
 
 static void s_mutex_release(ptr m) {
   S_mutex_release(TO_VOIDP(m));
+}
+
+static IBOOL s_mutex_is_owner(ptr m) {
+  return S_mutex_is_owner(TO_VOIDP(m));
 }
 
 static void s_condition_broadcast(ptr c_p) {
@@ -1672,6 +1723,7 @@ void S_prim5_init(void) {
     Sforeign_symbol("(cs)mutex_acquire", (void *)s_mutex_acquire);
     Sforeign_symbol("(cs)mutex_release", (void *)s_mutex_release);
     Sforeign_symbol("(cs)mutex_acquire_noblock", (void *)s_mutex_acquire_noblock);
+    Sforeign_symbol("(cs)mutex_is_owner", (void *)s_mutex_is_owner);
     Sforeign_symbol("(cs)make_condition", (void *)S_make_condition);
     Sforeign_symbol("(cs)condition_free", (void *)s_condition_free);
     Sforeign_symbol("(cs)condition_broadcast", (void *)s_condition_broadcast);
@@ -1817,7 +1869,7 @@ void S_prim5_init(void) {
     Sforeign_symbol("(cs)s_rational", (void *)S_rational);
     Sforeign_symbol("(cs)sub", (void *)S_sub);
     Sforeign_symbol("(cs)rem", (void *)S_rem);
-#ifdef GETWD
+#if defined(GETWD) || defined(__GNU__) /* Hurd */
     Sforeign_symbol("(cs)s_getwd", (void *)s_getwd);
 #endif
     Sforeign_symbol("(cs)s_chdir", (void *)s_chdir);

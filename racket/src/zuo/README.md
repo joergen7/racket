@@ -38,7 +38,8 @@ will do the same thing as `make` and `make install` with a default
 configuration.
 
 The Zuo executable runs only modules. If you run Zuo with no
-command-line arguments, then it loads `main.zuo`. Otherwise, the first
+command-line arguments, then it loads `main.zuo`. Use the `-c`
+flag to provide module text as an argument. Otherwise, the first
 argument to Zuo is a file to run or a directory containing a
 `main.zuo` to run, and additional arguments are delivered to that Zuo
 program via the `runtime-env` procedure. Running the command
@@ -78,10 +79,22 @@ other libraries after `make install` or `./zuo build.zuo install`.
 
 You can use heap images without embedding. The `dump-heap-and-exit`
 Zuo kernel permitive creates a heap image, and a `-B` or `--boot`
-command-line flag for Zuo uses the given boot image on startup.
+command-line flag for Zuo uses the given boot image on startup. You
+can also embed an image created with `dump-image-and-exit` by using
+`local/image.zuo` with the `--image` flag.
 
 A boot image is machine-independent, whether in a stand-alone file or
 embedded in `.c` source.
+
+
+Cross Compiling
+---------------
+
+If you use `./configure --host=...` to cross compile, then you will
+also need to add something like `CC_FOR_BUILD=cc` as a `./configure`
+argument to specify the compiler for a `zuo` to use on the build
+machine. If necessary, you can also specify `CFLAGS_FOR_BUILD`,
+`LDFLAGS_FOR_BUILD`, and/or `LIBS_FOR_BUILD`.
 
 
 Embedding Zuo in Another Application

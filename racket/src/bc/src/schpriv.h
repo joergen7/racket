@@ -133,7 +133,7 @@
 #define SCHEME_PRIM_WANTS_EXTFLONUM_BOTH (SCHEME_PRIM_WANTS_EXTFLONUM_FIRST | SCHEME_PRIM_WANTS_EXTFLONUM_SECOND)
 
 extern int scheme_prim_opt_flags[]; /* uses an index from SCHEME_PRIM_OPT_INDEX_MASK */
-extern XFORM_NONGCING int scheme_intern_prim_opt_flags(int);
+XFORM_NONGCING int scheme_intern_prim_opt_flags(int);
 
 #define SCHEME_PRIM_PROC_OPT_FLAGS(proc) \
   scheme_prim_opt_flags[(SCHEME_PRIM_PROC_FLAGS(proc) >> SCHEME_PRIM_OPT_INDEX_SHIFT) \
@@ -581,6 +581,7 @@ extern Scheme_Object *scheme_unsafe_struct_star_set_proc;
 extern Scheme_Object *scheme_hash_proc;
 extern Scheme_Object *scheme_hasheq_proc;
 extern Scheme_Object *scheme_hasheqv_proc;
+extern Scheme_Object *scheme_hashalw_proc;
 extern Scheme_Object *scheme_hash_ref_proc;
 extern Scheme_Object *scheme_box_p_proc;
 extern Scheme_Object *scheme_box_proc;
@@ -697,6 +698,14 @@ extern Scheme_Object *scheme_input_port_property, *scheme_output_port_property;
 extern Scheme_Object *scheme_cpointer_property;
 
 extern Scheme_Object *scheme_equal_property;
+
+#define SCHEME_NEW_EQUAL_PROTOCOL_VECTOR_LENGTH 3
+
+#define EQUAL_MODE_EQUAL           0
+#define EQUAL_MODE_CHAPERONE_OF    1
+#define EQUAL_MODE_IMPERSONATOR_OF 3
+#define EQUAL_MODE_EQUAL_ALWAYS    5
+
 extern Scheme_Object *scheme_object_name_property;
 extern Scheme_Object *scheme_impersonator_of_property;
 
@@ -900,6 +909,14 @@ Scheme_Custodian *scheme_get_current_custodian(void);
 void scheme_run_atexit_closers_on_all(Scheme_Exit_Closer_Func alt);
 void scheme_run_atexit_closers(Scheme_Object *o, Scheme_Close_Custodian_Client *f, void *data);
 
+typedef struct Scheme_Thread_Custodian_Hop {
+  Scheme_Object so;
+  Scheme_Thread *p; /* really an indirection with precise gc */
+  Scheme_Custodian_Reference *mref;
+  Scheme_Object *extra_mrefs; /* More owning custodians */
+  Scheme_Object *dead_box;
+} Scheme_Thread_Custodian_Hop;
+
 typedef struct Scheme_Security_Guard {
   Scheme_Object so;
   struct Scheme_Security_Guard *parent;
@@ -919,13 +936,13 @@ typedef struct {
   Scheme_Object *replace_chain; /* turns non-tail replace_evt recursion into a loop */
 } Scheme_Schedule_Info;
 
-typedef Scheme_Object *(*Scheme_Accept_Sync)(Scheme_Object *wrap);
+typedef Scheme_Object *(*Scheme_Conclude_Sync)(Scheme_Object *wrap, int accept);
 
 void scheme_set_sync_target(Scheme_Schedule_Info *sinfo, Scheme_Object *target,
 			    Scheme_Object *wrap, Scheme_Object *nack,
-			    int repost, int retry, Scheme_Accept_Sync accept);
+			    int repost, int retry, Scheme_Conclude_Sync conclude);
 struct Syncing;
-void scheme_accept_sync(struct Syncing *syncing, int i);
+void scheme_conclude_sync(struct Syncing *syncing, int i);
 
 struct Syncing *scheme_make_syncing(int argc, Scheme_Object **argv);
 int scheme_syncing_ready(struct Syncing *s, Scheme_Schedule_Info *sinfo, int can_suspend);
@@ -1045,9 +1062,11 @@ Scheme_Object *scheme_intern_literal_number(Scheme_Object *num);
 Scheme_Object *scheme_make_immutable_hash(int argc, Scheme_Object *argv[]);
 Scheme_Object *scheme_make_immutable_hasheq(int argc, Scheme_Object *argv[]);
 Scheme_Object *scheme_make_immutable_hasheqv(int argc, Scheme_Object *argv[]);
+Scheme_Object *scheme_make_immutable_hashalw(int argc, Scheme_Object *argv[]);
 Scheme_Object *scheme_hash_eq_p(int argc, Scheme_Object *argv[]);
 Scheme_Object *scheme_hash_eqv_p(int argc, Scheme_Object *argv[]);
 Scheme_Object *scheme_hash_equal_p(int argc, Scheme_Object *argv[]);
+Scheme_Object *scheme_hash_equal_always_p(int argc, Scheme_Object *argv[]);
 Scheme_Object *scheme_hash_table_put(int argc, Scheme_Object *argv[]);
 Scheme_Object *scheme_hash_table_iterate_start(int argc, Scheme_Object *argv[]);
 Scheme_Object *scheme_hash_table_iterate_next(int argc, Scheme_Object *argv[]);
@@ -1081,6 +1100,7 @@ Scheme_Object *scheme_unsafe_hash_tree_next(Scheme_Hash_Tree *ht, Scheme_Object 
 Scheme_Object *scheme_hash_tree_next_pos(Scheme_Hash_Tree *tree, mzlonglong pos);
 int scheme_hash_tree_equal(Scheme_Hash_Tree *t1, Scheme_Hash_Tree *t2);
 int scheme_is_hash_tree_equal(Scheme_Object *o);
+int scheme_is_hash_tree_equal_always(Scheme_Object *o);
 int scheme_is_hash_tree_eqv(Scheme_Object *o);
 
 Scheme_Object *scheme_chaperone_hash_key(const char *name, Scheme_Object *table, Scheme_Object *key);
@@ -1320,7 +1340,12 @@ Scheme_Object *scheme_chaperone_not_undefined(Scheme_Object *orig_val);
 
 int scheme_is_noninterposing_chaperone(Scheme_Object *obj);
 
-Scheme_Object *scheme_apply_impersonator_of(int for_chaperone, Scheme_Object *procs, Scheme_Object *obj);
+/* mode
+   0: 'equal?
+   1: 'chaperone-of?
+   3: 'impersonator-of?
+   5: 'equal-always? */
+Scheme_Object *scheme_apply_impersonator_of(int mode, Scheme_Object *procs, Scheme_Object *obj);
 
 /*========================================================================*/
 /*                         syntax objects                                 */
@@ -1875,6 +1900,7 @@ typedef struct Scheme_Stack_State {
 typedef struct Scheme_Dynamic_Wind {
   MZTAG_IF_REQUIRED
   int depth;
+  int actual_len; /* not counting fake D-W records for prompts */
   void *id; /* generated as needed */
   void *data;
   Scheme_Object *prompt_tag; /* If not NULL, indicates a fake D-W record for prompt boundary */
@@ -1936,6 +1962,7 @@ typedef struct Scheme_Cont {
   char empty_to_next_mc;
   struct Scheme_Cont *use_next_cont; /* more meta-continuation return */
   int common_dw_depth; /* id for common dw record */
+  int skip_winds; /* number of non-common dw records to skip exit and re-entry */
   Scheme_Dynamic_Wind *common_dw; /* shared part with source cont */
   int common_next_meta; /* for common_dw */
   Scheme_Object *extra_marks; /* vector of extra keys and marks to add to meta-cont */
@@ -2131,7 +2158,7 @@ typedef struct Syncing {
   Scheme_Object **wrapss;
   Scheme_Object **nackss;
   char *reposts;
-  Scheme_Accept_Sync *accepts;
+  Scheme_Conclude_Sync *concludes;
 
   Scheme_Thread *disable_break; /* when result is set */
   Scheme_Thread *thread; /* set when syncing to allow in flight place message cleanup */
@@ -3889,6 +3916,8 @@ Scheme_Object *scheme_symbol_append(Scheme_Object *s1, Scheme_Object *s2);
 Scheme_Object *scheme_copy_list(Scheme_Object *l);
 
 Scheme_Object *scheme_append_strings(Scheme_Object *s1, Scheme_Object *s2);
+XFORM_NONGCING int scheme_grapheme_cluster_step(mzchar c, int *_state);
+intptr_t scheme_grapheme_cluster_span(const mzchar *str, intptr_t start, intptr_t finish);
 
 Scheme_Object *scheme_unsafe_make_location(void);
 Scheme_Object *scheme_unsafe_make_srcloc(int argc, Scheme_Object **argv);
@@ -3948,6 +3977,7 @@ Scheme_Object *scheme_make_environment_variables(Scheme_Hash_Tree *ht);
 void *scheme_environment_variables_to_block(Scheme_Object *env, int *_need_free);
 
 int scheme_compare_equal(void *v1, void *v2);
+int scheme_compare_equal_always(void *v1, void *v2);
 
 typedef struct Scheme_Performance_State {
   intptr_t start, gc_start;
@@ -3956,6 +3986,9 @@ typedef struct Scheme_Performance_State {
 
 void scheme_performance_record_start(Scheme_Performance_State *perf_state);
 void scheme_performance_record_end(const char *who, Scheme_Performance_State *perf_state);
+
+XFORM_NONGCING int scheme_hamt_popcount(hash_tree_bitmap_t x);
+XFORM_NONGCING int scheme_stencil_vector_popcount(intptr_t x);
 
 /*========================================================================*/
 /*                           places                                       */

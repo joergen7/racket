@@ -298,7 +298,7 @@ are not supported and @racket[read-single-flonum] is set to
 would otherwise be produced. Special infinity and not-a-number flonums
 and single-flonums are distinct; specials with the @litchar{.0}
 suffix, like @racket[+nan.0], are double-precision flonums, while
-specials with the @litchar{.f} suffix, like @racketvalfont{+nan.0}, 
+specials with the @litchar{.f} suffix, like @racketvalfont{+nan.f}, 
 are single-flonums if enabled though @racket[read-single-flonum].
 
 A @litchar{#} in an @nunterm{inexact} number is the same as
@@ -746,6 +746,10 @@ it must appear between the elements of each pair in the list and
 nowhere in the sequence of list elements. The first element of each
 pair is used as the key for a table entry, and the second element of
 each pair is the associated value.
+
+A @as-index{@litchar{#hashalw}} starts a hash table like
+@litchar{#hash}, except that it constructs a hash table based on
+@racket[equal-always?] instead of @racket[equal?].
 
 A @as-index{@litchar{#hasheq}} starts a hash table like
 @litchar{#hash}, except that it constructs a hash table based on

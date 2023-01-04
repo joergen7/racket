@@ -418,6 +418,60 @@ allocated string).}
 }
 
 @; ----------------------------------------
+@section{String Grapheme Clusters}
+
+@defproc[(string-grapheme-span [str string?] 
+                               [start exact-nonnegative-integer?]
+                               [end exact-nonnegative-integer? (string-length str)])
+         exact-nonnegative-integer?]{
+
+Returns the number of characters (i.e., code points) in the string
+that form a Unicode grapheme cluster starting at @racket[start], assuming
+that @racket[start] is the start of a grapheme cluster and extending no
+further than the character before @racket[end]. The result is @racket[0]
+if @racket[start] equals @racket[end].
+
+The @racket[start] and @racket[end] arguments must be valid indices as
+for @racket[substring], otherwise the @exnraise[exn:fail:contract].
+
+See also @racket[char-grapheme-cluster-step].
+
+@mz-examples[
+(string-grapheme-span "" 0)
+(string-grapheme-span "a" 0)
+(string-grapheme-span "ab" 0)
+(string-grapheme-span "\r\n" 0)
+(string-grapheme-span "\r\nx" 0)
+(string-grapheme-span "\r\nx" 2)
+(string-grapheme-span "\r\nx" 0 1)
+]
+
+@history[#:added "8.6.0.2"]}
+
+@defproc[(string-grapheme-count [str string?] 
+                                [start exact-nonnegative-integer?]
+                                [end exact-nonnegative-integer? (string-length str)])
+         exact-nonnegative-integer?]{
+
+Returns the number of grapheme clusters in @racket[(substring start
+end)].
+
+The @racket[start] and @racket[end] arguments must be valid indices as
+for @racket[substring], otherwise the @exnraise[exn:fail:contract].
+
+@mz-examples[
+(string-grapheme-count "")
+(string-grapheme-count "a")
+(string-grapheme-count "ab")
+(string-grapheme-count "ab" 0 2)
+(string-grapheme-count "ab" 0 1)
+(string-grapheme-count "\r\n")
+(string-grapheme-count "a\r\nb")
+]
+
+@history[#:added "8.6.0.2"]}
+
+@; ----------------------------------------
 @section{Additional String Functions}
 
 @note-lib[racket/string]

@@ -15,7 +15,7 @@ AC_DISABLE_OPTION_CHECKING
 AC_ARG_ENABLE(shared,     [  --enable-shared         create shared libraries (not currently supported)])
 AC_ARG_ENABLE(standalone, [  --enable-standalone     create a standalone shared library])
 AC_ARG_ENABLE(pthread,    [  --enable-pthread        link with pthreads (usually auto-enabled if needed)])
-AC_ARG_ENABLE(iconv,      [  --enable-iconv          use iconv (usually auto-enabled)])
+m4_include(../ac/iconv_arg.m4)
 m4_include(../ac/curses_arg.m4)
 AC_ARG_ENABLE(wpo,        [  --enable-wpo            agressively optimize Racket core (enabled by default)])
 AC_ARG_ENABLE(compress,   [  --enable-compress       compress compiled code (enabled by default)])
@@ -23,15 +23,17 @@ AC_ARG_ENABLE(compressmore, [  --enable-compressmore   compress compiled code ev
 AC_ARG_ENABLE(compressboot, [  --enable-compressboot   compress boot files])
 m4_include(../ac/path_arg.m4)
 AC_ARG_ENABLE(racket,     [  --enable-racket=<path>  use <path> as Racket for build; or "auto" to create])
-AC_ARG_ENABLE(scheme,     [  --enable-scheme=<path>  use <path> as host build for cross])
+AC_ARG_ENABLE(scheme,     [  --enable-scheme=<path>  use <path> as Chez Scheme for build])
 AC_ARG_ENABLE(mach,       [  --enable-mach=<mach>    use Chez Scheme machine type <mach>])
 AC_ARG_ENABLE(target,     [  --enable-target=<mach>  cross-build for Chez Scheme machine type <mach>])
 AC_ARG_ENABLE(pb,         [  --enable-pb             build for platform without native-code backend])
 AC_ARG_ENABLE(pbchunk,    [  --enable-pbchunk        enable C chunks for pb boot (enabled by default)])
+AC_ARG_ENABLE(check,      [  --enable-check          enable extra safety checks for testing])
 m4_include(../ac/portable_arg.m4)
 m4_include(../ac/natipkg_arg.m4)
 m4_include(../ac/sdk_arg.m4)
 m4_include(../ac/instlib_arg.m4)
+m4_include(../ac/postlink_arg.m4)
 m4_include(../ac/strip_arg.m4)
 m4_include(../ac/ubsan_arg.m4)
 m4_include(../ac/asan_arg.m4)
@@ -91,11 +93,14 @@ show_explicitly_disabled "${enable_pbchunk}" "pbchunk"
 m4_include(../ac/portable_show.m4)
 m4_include(../ac/natipkg_show.m4)
 show_explicitly_enabled "${enable_libz}" "Installed libz"
+show_explicitly_disabled "${enable_libz}" "Installed libz"
 show_explicitly_enabled "${enable_liblz4}" "Installed liblz4"
+show_explicitly_disabled "${enable_liblz4}" "Installed liblz4"
 show_explicitly_enabled "${enable_iconv}" "iconv"
 show_explicitly_disabled "${enable_iconv}" "iconv"
 show_explicitly_enabled "${enable_curses}" "curses"
 show_explicitly_disabled "${enable_curses}" "curses"
+show_explicitly_enabled "${enable_check}" "Extra checks"
 
 m4_include(../ac/vm.m4)
 
@@ -145,11 +150,11 @@ use_flag_pthread=yes
 use_flag_posix_pthread=no
 
 OSX="f"
+SIGNED_EXE="f"
 MINGW="f"
 CONFIGURE_RACKET_SO_COMPILE=""
 COMPRESS_COMP=""
 BOOT_COMPRESS_COMP=""
-POST_LINKER=""
 
 FRAMEWORK_INSTALL_DIR='$(libpltdir)'
 FRAMEWORK_PREFIX='@executable_path/../lib/'
@@ -173,12 +178,20 @@ enable_pthread_by_default=yes
 
 compress_boot_files_by_default=no
 
+use_own_zlibs=no
+
 cs_auto_flags=--disable-auto-flags
 
 COPY_NEW_CFLAGS_TO_CPPFLAGS=no
 
 SCHEME_LIBFFI=no
 PBCHUNK_MODE=plain
+
+if test "${CC_FOR_BUILD}" = ""; then
+  CC_FOR_BUILD='$(CC) -O2'
+fi
+
+ENABLE_EXTRA_CHECKS=no
 
 ###### Autoconfigure #######
 
@@ -260,12 +273,19 @@ case "$host_os" in
     add_iconv_lib="/usr/lib/i18n/libiconv_std.a"
     skip_curses_check=yes
     add_curses_lib="/usr/pkg/lib/libncurses.a"
-    POST_LINKER="paxctl +m"
+    default_post_linker="paxctl +m"
     ;;
   irix*)
     ;;
-  linux*)
-    MACH_OS=le
+  linux*|gnu*)
+    case "$host_os" in
+      linux*)
+        MACH_OS=le
+        ;;
+      *)
+        MACH_OS=gnu # Hurd
+        ;;
+    esac
     case "$host_os" in
       *linux-android*)
         ;;
@@ -284,6 +304,7 @@ case "$host_os" in
     skip_iconv_check=yes
     skip_curses_check=yes
     use_flag_pthread=no
+    use_own_zlibs=yes
     MACH_OS=nt
     LIBS="${LIBS} -lshell32 -luser32 -lole32 -lrpcrt4 -luuid -lws2_32 -ladvapi32 -lwinmm"
     MINGW="t"
@@ -303,6 +324,7 @@ case "$host_os" in
     MACH_OS=osx
     LIBS="${LIBS} -framework CoreFoundation"
     LDFLAGS="${LDFLAGS} -Wl,-headerpad_max_install_names"
+    SIGNED_EXE="t"
     if test "${enable_xonx}" = "no" ; then
       OSX="t"
     else
@@ -339,6 +361,8 @@ case "$host_os" in
     if test "${enable_ios}" != "" ; then
       enable_curses=no
     fi
+
+    use_own_zlibs=yes
     ;;
   nto-qnx*)
     MACH_OS=qnx
@@ -402,8 +426,17 @@ case "$MACH_HOST_CPU" in
     MACH="${thread_prefix}ppc32${MACH_OS}"
     pb_machine_name="${thread_prefix}pb32b"
     ;;
+  riscv64*)
+    MACH="${thread_prefix}rv64${MACH_OS}"
+    pb_machine_name="${thread_prefix}pb64l"
+    ;;
 esac
 
+if test "${MACH}" = "" ; then
+  default_mach_was_empty=yes
+else
+  default_mach_was_empty=no
+fi
 
 if test "${enable_mach}" != "" ; then
   MACH="${enable_mach}"
@@ -426,13 +459,15 @@ elif test "$MACH" = "" -o "$MACH_OS" = "" ; then
    exit 1
 fi
 
-# For a pb build where Racket is supplied, force cross-build
-# mode on the assumption that the host is not a pb build
-# (because it should be created with default configure options)
+# For a pb build where Racket is supplied as "auto" and MACH was not originally
+# empty, force cross-build mode on the assumption that the host is not
+# a pb build (because it should be created with default configure options)
 if test "${enable_pb}" = "yes" ; then
-  if test "${enable_racket}" != "" ; then
+  if test "${enable_racket}" = "auto" ; then
     if test "${enable_target}" = "" ; then
-      enable_target="${MACH}"
+      if test "${default_mach_was_empty}" = "no" ; then
+        enable_target="${MACH}"
+      fi
     fi
   fi
 fi
@@ -454,6 +489,9 @@ if test "${build_os}_${build_cpu}" != "${host_os}_${host_cpu}" ; then
       ;;
     linux*)
       BUILD_OS=le
+      ;;
+    gnu*) # Hurd - must come after linux*
+      BUILD_OS=gnu
       ;;
     *mingw*)
       BUILD_OS=nt
@@ -487,6 +525,9 @@ if test "${build_os}_${build_cpu}" != "${host_os}_${host_cpu}" ; then
       ;;
     power*)
       BUILD_MACH="${BUILD_THREAD_PREFIX}ppc32${BUILD_OS}"
+      ;;
+    riscv64*)
+      BUILD_MACH="${BUILD_THREAD_PREFIX}rv64${BUILD_OS}"
       ;;
     *)
       echo "unknown build CPU"
@@ -534,7 +575,7 @@ if test "${enable_racket}" != "" ; then
   # Racket used only for generating Chez Scheme boot files
   if test "${CROSS_MODE}" = "cross" ; then
     RACKET="${enable_racket}"
-  else
+  elif test "${enable_racket}" != "auto" ; then
     BOOTFILE_RACKET="${enable_racket}"
   fi
 fi
@@ -557,6 +598,10 @@ fi
 ############## Strip tool ################
 
 m4_include(../ac/strip.m4)
+
+############## post-linker ################
+
+m4_include(../ac/postlink.m4)
 
 ############## natipkg ################
 
@@ -633,6 +678,15 @@ if test "${enable_liblz4}" != "no" ; then
   fi
 fi
 
+if test "${use_own_zlibs}" = "no" ; then
+  if test "${enable_libz}" = "" ; then
+    enable_libz=yes
+  fi
+  if test "${enable_liblz4}" = "" ; then
+    enable_liblz4=yes
+  fi
+fi
+
 if test "${enable_libz}" = "yes" ; then
   AC_MSG_CHECKING([for libz])
 
@@ -699,6 +753,12 @@ m4_include(../ac/libffi.m4)
 AC_CHECK_SIZEOF([void *])
 
 m4_include(../ac/valid_sizeof.m4)
+
+############## etxra checks ################
+
+if test "${enable_check}" = "yes" ; then
+  ENABLE_EXTRA_CHECKS=yes
+fi
 
 ############## subconfigure ################
 
@@ -795,6 +855,15 @@ fi
 
 ############## final output ################
 
+case "$srcdir" in
+    /*)
+        upsrcdir="$srcdir"
+        ;;
+    *)
+        upsrcdir="../$srcdir"
+        ;;
+esac
+
 m4_include(../ac/rktio_keep.m4)
 
 RKTIO_CONFIGURE_ARGS="${keep_configure_args} ${SUB_CONFIGURE_EXTRAS}"
@@ -829,6 +898,7 @@ AC_SUBST(KERNEL_TARGET_MACH)
 AC_SUBST(CROSS_MODE)
 AC_SUBST(SETUP_BOOT_MODE)
 AC_SUBST(OSX)
+AC_SUBST(SIGNED_EXE)
 AC_SUBST(MINGW)
 AC_SUBST(Z_LIB)
 AC_SUBST(LZ4_LIB)
@@ -843,6 +913,7 @@ AC_SUBST(CROSS_COMPILE_TARGET_KIND)
 AC_SUBST(CS_INSTALLED)
 AC_SUBST(CS_COMPILED_SUBDIR)
 AC_SUBST(DISABLE_WPO)
+AC_SUBST(ENABLE_EXTRA_CHECKS)
 AC_SUBST(SCHEME_LIBFFI)
 AC_SUBST(PBCHUNK_MODE)
 AC_SUBST(INSTALL_SETUP_FLAGS)
@@ -850,8 +921,11 @@ AC_SUBST(INSTALL_SETUP_RACKET_FLAGS)
 AC_SUBST(INSTALL_LIBS_ENABLE)
 AC_SUBST(PLT_CS_SLSP_SUFFIX)
 AC_SUBST(RKTIO_CONFIGURE_ARGS)
+AC_SUBST(CC_FOR_BUILD)
+AC_SUBST(CFLAGS_FOR_BUILD)
+AC_SUBST(upsrcdir)
 
-makefiles="Mf-config"
+makefiles="Makefile"
 
 AC_OUTPUT($makefiles)
 

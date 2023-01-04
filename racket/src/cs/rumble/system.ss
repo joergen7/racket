@@ -46,8 +46,11 @@
     [(a6nt ta6nt i3nt ti3nt arm64nt tarm64nt) 'windows]
     [(a6le ta6le i3le ti3le
            arm32le tarm32le arm64le tarm64le
-           ppc32le tppc32le)
+           ppc32le tppc32le
+           rv64le trv64le)
      'linux]
+    [(i3gnu ti3gnu)
+     'gnu-hurd]
     [(a6fb ta6fb i3fb ti3fb
            arm32fb tarm32fb arm64fb tarm64fb
            ppc32fb tppc32fb)
@@ -85,6 +88,7 @@
             i3nb ti3nb
             i3fb ti3fb
             i3s2 ti3s2
+            i3gnu ti3gnu
             i3qnx)
      'i386]
     [(arm32le tarm32le
@@ -105,6 +109,8 @@
               ppc32ob tppc32ob
               ppc32nb tppc32nb)
      'ppc]
+    [(rv64le trv64le)
+     'riscv64]
     [(pb tpb
          pb64l tpb64l pb64b tpb64b
          pb32l tpb32l pb32b tpb32b)
@@ -117,7 +123,7 @@
      (if unix-style-macos?
          'static
          'framework)]
-    [(a6nt ta6nt i3nt ti3nt arm64nt tarm64nt) 'windows]
+    [(a6nt ta6nt i3nt ti3nt arm64nt tarm64nt) 'dll]
     [else (if unix-link-shared?
               'shared
               'static)]))
@@ -130,7 +136,6 @@
 
 (define so-mode
   (case (reflect-machine-type)
-    [(arm64osx tarm64osx) 'global]
     [else 'local]))
 
 ;; Force inline of some common cases, so optimization can use

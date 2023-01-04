@@ -1874,6 +1874,7 @@
                                      [(fp-scheme-object) 'uptr]
                                      [(fp-fixnum) 'uptr]
                                      [(fp-u8*) 'void*]
+                                     [(fp-ftd ,ftd) 'void*]
                                      [(fp-void) 'void]
                                      [else (if (eq? (subset-mode) 'system)
                                                (sorry! who "unhandled type in prototype ~s" type)
@@ -1890,6 +1891,9 @@
             (let* ([arg-type* (info-foreign-arg-type* info)]
                    [result-type (info-foreign-result-type info)])
               (let ([prototype (and (not (adjust-active? info))
+                                    (not (ormap (lambda (conv)
+                                                  (and (pair? conv) (eq? (car conv) 'varargs) (cdr conv)))
+                                                (info-foreign-conv* info)))
                                     (get-prototype (cons result-type arg-type*)))])
                 (cond
                   [prototype

@@ -21,6 +21,15 @@
 #include "boot.h"
 #include "api.h"
 
+#define SELF_EXE_WINDOWS_AS_UTF8
+#define SELF_EXE_NO_EXTRAS
+#define XFORM_SKIP_PROC /* empty */
+#ifdef WIN32
+# define DOS_FILE_SYSTEM
+#endif
+#include "../../start/self_exe.inc"
+#include "path_replace.inc"
+
 #ifdef PBCHUNK_REGISTER
 static void register_pbchunks();
 #endif
@@ -106,7 +115,7 @@ static void run_cross_server(char **argv)
   (void)Scall1(c, a);
 }
 
-static void init_foreign()
+static void init_foreign(void)
 {
 # include "rktio.inc"
 }
@@ -419,4 +428,12 @@ iptr racket_cpointer_offset(ptr cptr) {
   }
 
   return 0;
+}
+
+char *racket_get_self_exe_path(const char *exec_file) {
+  return get_self_path(exec_file);
+}
+
+char *racket_path_replace_filename(const char *path, const char *new_filename) {
+  return path_replace_filename(path, new_filename);
 }

@@ -18,7 +18,7 @@
     (define (mat-id? x)
       (memq x
         '(equivalent-expansion? mat-run mat mat/cf
-           mat-file mat-output for-each-mat enable-cp0 windows? embedded? pb?
+           mat-file mat-output enable-cp0 windows? embedded? pb?
            *scheme* *mats-dir*
            *fuzz* ~= fl~= cfl~= == nan pi +pi +pi/2 +pi/4 -pi -pi/2 -pi/4 +e -e
            separate-eval-tools separate-compile separate-eval run-script patch-exec-path $record->vector
@@ -396,6 +396,7 @@
               [(compile-time-value) (make-compile-time-value 17) #f]
               [(condition) (make-who-condition 'me) 'the-who #f]
               [(continuation-condition) (call/cc make-continuation-condition) (make-who-condition 'who) #f]
+              [(continuation-marks) (current-continuation-marks) 8 #f]
               [(cost-center) *cost-center '(a) #f]
               [(source-table) (make-source-table) *time #f]
               [(date) *date *time #f]

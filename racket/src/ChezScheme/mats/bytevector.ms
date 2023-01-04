@@ -35,7 +35,7 @@
          [(i3le ti3le i3nt ti3nt a6nt ta6nt arm64nt tarm64nt i3ob ti3ob i3fb ti3fb i3nb ti3nb
                 i3osx ti3osx a6le ta6le a6nb ta6nb
                 a6osx ta6osx a6fb ta6fb a6ob ta6ob a6s2 ta6s2 i3s2 ti3s2 i3qnx ti3qnx
-                arm32le tarm32le arm64le tarm64le arm64osx tarm64osx)
+                arm32le tarm32le arm64le tarm64le arm64osx tarm64osx rv64le trv64le)
           'little]
          [(ppc32le tppc32le ppc32osx tppc32osx) 'big]
          [(pb tpb) (native-endianness)]
@@ -10435,7 +10435,7 @@
                                #x01 #x00 #x00 #x65
                                #x00 #x00 #x00 #x65)
                         'big
-                        ; rkd: added endianness-manditory? flag
+                        ; rkd: added endianness-mandatory? flag
                         #t))
                 => #t)
 
@@ -10481,7 +10481,7 @@
                                #x65 #x00 #x00 #x01
                                #x65 #x00 #x00 #x00)
                         'little
-                        ; rkd: added endianness-manditory? flag
+                        ; rkd: added endianness-mandatory? flag
                         #t))
                 => #t)
 
@@ -10947,7 +10947,7 @@
 
     #t)
 
- ; Currently the reference implementation is the only implemenation,
+ ; Currently the reference implementation is the only implementation,
  ; so go ahead and use it for the tests and the random tests below.
   (define bytevector-and $bytevector-and)
   (define bytevector-ior $bytevector-ior)

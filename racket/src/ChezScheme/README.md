@@ -4,15 +4,16 @@ This variant of Chez Scheme is extended to support the implementation
 of [Racket](https://racket-lang.org/), and the main additions are
 listed at the end of this README.
 
-Supported platforms:
+Supported platforms (bytecode interpreter may work for others):
 
  * Windows: x86, x86_64, AArch64
  * Mac OS: x86, x86_64, AArch64, PowerPC32
- * Linux: x86, x86_64, ARMv6, AArch64, PowerPC32
+ * Linux: x86, x86_64, ARMv6, AArch64, RV64G, PowerPC32
  * FreeBSD: x86, x86_64, ARMv6, AArch64, PowerPC32
  * OpenBSD: x86, x86_64, ARMv6, AArch64, PowerPC32
  * NetBSD: x86, x86_64, ARMv6, AArch64, PowerPC32
  * Solaris: x86, x86_64
+ * GNU/Hurd: x86
  * Android: ARMv7, AArch64
  * iOS: AArch64
  * WebAssembly via Emscripten (bytecode interpreter only)
@@ -78,14 +79,14 @@ For more information on Chez Scheme, see the [Chez Scheme Project Page](https://
 
 Main additions to Chez Scheme in the Racket variant:
 
- * AArch64 code generation
+ * AArch64 and RV64G (RISC-V) code generation
 
  * Unboxed floating-point arithmetic, flvectors, and faster
    multiplication and division for large exact numbers
 
  * Type reconstruction during optimization (especially for safe code)
 
- * Continuation attachments
+ * Continuation marks
 
  * Parallel garbage collection, in-place garbage collection for
    old-generation objects (instead of always copying), and
@@ -99,3 +100,5 @@ Main additions to Chez Scheme in the Racket variant:
    platforms without native-code generation; can be compiled via
    Emscripten, linked with libffi, and/or used with bytecode partially
    compiled to C
+
+ * Easier bootstrapping via old versions of Chez Scheme

@@ -38,7 +38,7 @@
 ; file for cross compilation, because the offsets may be incorrect
 (define rtd-size (csv7:record-field-accessor #!base-rtd 'size))
 (define rtd-flds (csv7:record-field-accessor #!base-rtd 'flds))
-(define rtd-ancestors (csv7:record-field-accessor #!base-rtd 'ancestors))
+(define rtd-ancestry (csv7:record-field-accessor #!base-rtd 'ancestry))
 (define rtd-name (csv7:record-field-accessor #!base-rtd 'name))
 (define rtd-uid (csv7:record-field-accessor #!base-rtd 'uid))
 (define rtd-flags (csv7:record-field-accessor #!base-rtd 'flags))
@@ -61,13 +61,22 @@
         rtd
         ($remake-rtd rtd (let () (include "layout.ss") compute-field-offsets)))))
 
-(define intern-bignum
-  (lambda (x t)
-    (when (not (table-bignums t))
-      (table-bignums-set! t (make-hashtable equal-hash equal?)))
-    (cdr (hashtable-cell (table-bignums t) x x))))
-
 (include "fasl-helpers.ss")
+(include "target-fixnum.ss")
+
+(define maybe-intern-bignum
+  ;; When we cross-compile on a 32-bit machine for a 64-bit machine or
+  ;; vice versa, constant folding or reading separate instances of an
+  ;; integer can produce different sharing. To avoid structural
+  ;; differences in fasled boot files, intern bignums in 'system mode.
+  (lambda (x t)
+    (cond
+      [(and (bignum? x)
+            (eq? (subset-mode) 'system))
+       (when (not (table-bignums t))
+         (table-bignums-set! t (make-hashtable equal-hash equal?)))
+       (cdr (hashtable-cell (table-bignums t) x x))]
+      [else x])))
 
 (define bld-pair
    (lambda (x t a? d)
@@ -84,10 +93,10 @@
 
 (define bld-stencil-vector
    (lambda (x t a? d)
-      (let ([len (stencil-vector-length x)])
+      (let ([len ($stencil-vector-length x)])
          (let bldvec ([i 0])
             (unless (fx= i len)
-               (bld (stencil-vector-ref x i) t a? d)
+               (bld ($stencil-vector-ref x i) t a? d)
                (bldvec (fx+ i 1)))))))
 
 (define bld-record
@@ -176,7 +185,8 @@
                    (printf "entries = ~s, ba = ~s, count = ~s\n" n (bytes-allocated) (table-count t))))
              (cond
                [(let ([pred (table-external?-pred t)])
-                  (and pred (pred x)))
+                  (and pred
+                       (pred x)))
                 ;; Don't traverse; just record as external. We'll
                 ;; assign positions to externals after the graph
                 ;; has been fully traversed.
@@ -213,9 +223,13 @@
 (define bld
    (lambda (x t a? d)
       (cond
+        [(fixnum? x) (if (target-bignum? x)
+                         (bld-graph x t a? d #t bld-simple)
+                         (bld-simple x t a? d))]
+        [($immediate? x) (bld-simple x t a? d)]
         [(pair? x) (bld-graph x t a? d #t bld-pair)]
         [(vector? x) (bld-graph x t a? d #t bld-vector)]
-        [(stencil-vector? x) (bld-graph x t a? d #t bld-stencil-vector)]
+        [($stencil-vector? x) (bld-graph x t a? d #t bld-stencil-vector)]
         [(or (symbol? x) (string? x)) (bld-graph x t a? d #t bld-simple)]
         ; this check must go before $record? check
         [(and (annotation? x) (not a?))
@@ -226,7 +240,9 @@
         [(symbol-hashtable? x) (bld-graph x t a? d #t bld-ht)]
         [($record? x) (bld-graph x t a? d #t bld-record)]
         [(box? x) (bld-graph x t a? d #t bld-box)]
-        [(bignum? x) (bld-graph (intern-bignum x t) t a? d #t bld-simple)]
+        [(bignum? x) (if (target-fixnum? x)
+                         (bld-simple x t a? d)
+                         (bld-graph (maybe-intern-bignum x t) t a? d #t bld-simple))]
         [else (bld-graph x t a? d #t bld-simple)])))
 
 (module (small-integer? large-integer?)
@@ -356,7 +372,7 @@
       (put-uptr p n)
       (let wrf-flvector-loop ([i 0])
         (unless (fx= i n)
-          (wrf-flonum (flvector-ref x i) p)
+          (wrf-flonum (flvector-ref x i) p t a?)
           (wrf-flvector-loop (fx+ i 1)))))))
 
 (define wrf-bytevector
@@ -374,12 +390,14 @@
 
 (define wrf-stencil-vector
    (lambda (x p t a?)
-      (put-u8 p (constant fasl-type-stencil-vector))
-      (put-uptr p (stencil-vector-mask x))
-      (let ([n (stencil-vector-length x)]) 
+      (put-u8 p (if ($system-stencil-vector? x)
+                    (constant fasl-type-system-stencil-vector)
+                    (constant fasl-type-stencil-vector)))
+      (put-uptr p ($stencil-vector-mask x))
+      (let ([n ($stencil-vector-length x)]) 
          (let wrf-stencil-vector-loop ([i 0])
             (unless (fx= i n)
-               (wrf (stencil-vector-ref x i) p t a?)
+               (wrf ($stencil-vector-ref x i) p t a?)
                (wrf-stencil-vector-loop (fx+ i 1)))))))
 
 ; Written as: fasl-tag rtd field ...
@@ -511,9 +529,10 @@
         [(record-type-descriptor? x)
          (put-u8 p (constant fasl-type-rtd))
          (wrf (record-type-uid x) p t a?)
-         (unless (eq? x (let ([a (rtd-ancestors x)])
-                          (vector-ref a (sub1 (vector-length a)))))
-           ($oops 'fasl "mismatch"))
+         (let ([self (let ([a (rtd-ancestry x)])
+                       (vector-ref a (sub1 (vector-length a))))])
+           (unless (eq? x self)
+             ($oops 'fasl "mismatch ~s ~s" x self)))
          (unless (eq-hashtable-ref (table-hash t) x #f)
            ($oops 'fasl "not in table!?"))
          (if (and a? (fxlogtest a? (constant fasl-omit-rtds)))
@@ -617,14 +636,14 @@
       (put-uptr p x)))
 
 (define wrf-flonum
-   (lambda (x p)
+   (lambda (x p t a?)
      (put-u8 p (constant fasl-type-flonum))
      (let ([n ($object-ref 'unsigned-64 x (constant flonum-data-disp))])
        (put-uptr p (ash n -32))
        (put-uptr p (logand n #xFFFFFFFF)))))
 
 (define wrf-phantom
-  (lambda (x p)
+  (lambda (x p t a?)
     (put-u8 p (constant fasl-type-phantom))
     (put-uptr p (phantom-bytevector-length x))))
 
@@ -653,7 +672,9 @@
       (cond
          [(symbol? x) (wrf-graph x p t a? wrf-symbol)]
          [(pair? x) (wrf-graph x p t a? wrf-pair)]
-         [(small-integer? x) (wrf-small-integer x p t a?)]
+         [(small-integer? x) (if (target-fixnum? x)
+                                 (wrf-small-integer x p t a?)
+                                 (wrf-graph (maybe-intern-bignum x t) p t a? wrf-small-integer))]
          [(null? x) (wrf-immediate (constant snil) p)]
          [(not x) (wrf-immediate (constant sfalse) p)]
          [(eq? x #t) (wrf-immediate (constant strue) p)]
@@ -674,12 +695,14 @@
          [(hashtable? x) (wrf-invalid  x p t a?)]
          [($record? x) (wrf-graph x p t a? wrf-record)]
          [(vector? x) (wrf-graph x p t a? wrf-vector)]
-         [(stencil-vector? x) (wrf-graph x p t a? wrf-stencil-vector)]
+         [($stencil-vector? x) (wrf-graph x p t a? wrf-stencil-vector)]
          [(char? x) (wrf-char x p)]
          [(box? x) (wrf-graph x p t a? wrf-box)]
-         [(large-integer? x) (wrf-graph (if (bignum? x) (intern-bignum x t) x) p t a? wrf-large-integer)]
+         [(large-integer? x) (if (target-fixnum? x)
+                                 (wrf-large-integer x p t a?)
+                                 (wrf-graph (maybe-intern-bignum x t) p t a? wrf-large-integer))]
          [(ratnum? x) (wrf-graph x p t a? wrf-ratnum)]
-         [(flonum? x) (wrf-flonum x p)]
+         [(flonum? x) (wrf-graph x p t a? wrf-flonum)]
          [($inexactnum? x) (wrf-graph x p t a? wrf-inexactnum)]
          [($exactnum? x) (wrf-graph x p t a? wrf-exactnum)]
          [(eof-object? x) (wrf-immediate (constant seof) p)]
@@ -688,7 +711,7 @@
          [(eq? x (void)) (wrf-immediate (constant svoid) p)]
          [(eq? x '#0=#0#) (wrf-immediate (constant black-hole) p)]
          [($rtd-counts? x) (wrf-immediate (constant sfalse) p)]
-         [(phantom-bytevector? x) (wrf-phantom x p)]
+         [(phantom-bytevector? x) (wrf-graph x p t a? wrf-phantom)]
          [else (wrf-invalid x p t a?)])))
 
 (module (start)
@@ -701,7 +724,8 @@
                       (let ([n (table-count t)])
                         (unless (fx= n 0)
                           (put-u8 p (constant fasl-type-graph))
-                          (put-uptr p n)))
+                          (put-uptr p n)
+                          (put-uptr p (table-external-count t))))
                       (let ([begins (extract-begins t)])
                         (unless (null? begins)
                           (put-u8 p (constant fasl-type-begin))

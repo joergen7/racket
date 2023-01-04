@@ -270,8 +270,12 @@
          (let* ([nz ($bignum-trailing-zero-bits n)]
                 [dz ($bignum-trailing-zero-bits d)]
                 [cz (fxmin nz dz)]
-                [n (abs (bitwise-arithmetic-shift-right n nz))]
-                [d (abs (bitwise-arithmetic-shift-right d dz))])
+                ;; The `$bignum-trailing-zero-bits` function is just counting trailing 0 bigits,
+                ;; so it returns an approximation to the number of trailing zero bits. We may need to
+                ;; keep one bigit of `n` or `d` to pair up with leftover trailing 0 bits in
+                ;; `d` or `n`.
+                [n (abs (bitwise-arithmetic-shift-right n (fxmax cz (fx- nz (constant bigit-bits)))))]
+                [d (abs (bitwise-arithmetic-shift-right d (fxmax cz (fx- dz (constant bigit-bits)))))])
            (define (gcd n d)
              (cond
                [(= n 0) d]
@@ -392,7 +396,7 @@
 (define flatanh
    (or (op-if-entry? cflop1 "(cs)atanh")
        ; |x| <= 1
-       ; principle expression:
+       ; principal expression:
        ; (log(1+x)-log(1-x))/2
        ; should use "log1p" but it doesn't exist on the 88k
        (let ([f (lambda (x)
@@ -413,7 +417,7 @@
 (define flasinh
    ; scheme-coded version needs "log2"
    (or (op-if-entry? cflop1 "(cs)asinh")
-       ; prinicple expression:
+       ; principal expression:
        ; log(x + sqrt(xx + 1))
        ; avoids spurious overflows
        ; avoids underflow problems from negative x by using identity
@@ -430,7 +434,7 @@
    ; scheme-coded version needs "log2"
    (or (op-if-entry? cflop1 "(cs)acosh")
        ; x >= 1
-       ; prinicple expression:
+       ; principal expression:
        ; log(x + sqrt(xx - 1))
        ; avoids spurious overflows
        (lambda (x)
@@ -1091,7 +1095,7 @@
           (let ([max-fx-shift (- (constant fixnum-bits) 1)])
             (if (fx> n max-fx-shift)
                 (integer-ash x n)
-                (let ([m (#3%fxsll x n)])
+                (let ([m (fxsll/wraparound x n)])
                   (if (fx= (fxsra m n) x)
                       m
                       (integer-ash x n)))))]
@@ -2434,7 +2438,7 @@
   (let ([$bignum-trailing-zero-bits (foreign-procedure "(cs)s_big_trailing_zero_bits" (ptr) ptr)])
    (lambda (who x y)
     (cond
-      [(and (fixnum? y) ($fxu< (#3%fx+ y 1) 3))
+      [(and (fixnum? y) ($fxu< (fx+/wraparound y 1) 3))
        (cond
          [(fx= y 0) (unless (number? x) (nonnumber-error who x)) 0]
          [(fx= y 1) (unless (number? x) (nonnumber-error who x)) x]
@@ -2446,7 +2450,7 @@
              [(fixnum?) (integer* x y)]
             [(bignum?) (if (fixnum? x)
                            (cond
-                            [($fxu< (#3%fx+ x 1) 3)
+                            [($fxu< (fx+/wraparound x 1) 3)
                              (cond
                               [(fx= x 0) (unless (number? y) (nonnumber-error who y)) 0]
                               [(fx= x 1) (unless (number? y) (nonnumber-error who y)) y]
@@ -2914,7 +2918,7 @@
                       (fxsra x (fx- n)))
                   (if (fx> n max-fx-shift)
                       (integer-ash x n)
-                      (let ([m (#3%fxsll x n)])
+                      (let ([m (fxsll/wraparound x n)])
                         (if (fx= (fxsra m n) x)
                             m
                             (integer-ash x n))))))]

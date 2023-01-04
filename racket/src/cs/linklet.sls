@@ -192,7 +192,8 @@
                              [(getenv "PLT_CS_MAKE_COMPRESSED_DATA") #t]
                              [else #f])]))
 
-  (define gensym-on? (getenv "PLT_LINKLET_SHOW_GENSYM"))
+  (define gensym-mode (cond [(getenv "PLT_LINKLET_SHOW_GENSYM") #t]
+			    [else 'pretty/suffix]))
   (define pre-jit-on? (getenv "PLT_LINKLET_SHOW_PRE_JIT"))
   (define lambda-on? (getenv "PLT_LINKLET_SHOW_LAMBDA"))
   (define post-lambda-on? (getenv "PLT_LINKLET_SHOW_POST_LAMBDA"))
@@ -200,9 +201,18 @@
   (define jit-demand-on? (getenv "PLT_LINKLET_SHOW_JIT_DEMAND"))
   (define literals-on? (getenv "PLT_LINKLET_SHOW_LITERALS"))
   (define known-on? (getenv "PLT_LINKLET_SHOW_KNOWN"))
+  (define passes-on (cond [(getenv "PLT_LINKLET_SHOW_PASSES")
+                           =>
+                           (lambda (e)
+                             (let lp ([p (open-string-input-port e)])
+                               (define pass (read p))
+                               (if (symbol? pass)
+                                   (cons pass (lp p))
+                                   '())))]
+                          [else '()]))
   (define cp0-on? (getenv "PLT_LINKLET_SHOW_CP0"))
   (define assembly-on? (getenv "PLT_LINKLET_SHOW_ASSEMBLY"))
-  (define show-on? (or gensym-on?
+  (define show-on? (or (eq? #t gensym-mode)
                        pre-jit-on?
                        post-lambda-on?
                        post-interp-on?
@@ -210,6 +220,7 @@
                        literals-on?
                        known-on?
                        cp0-on?
+                       (pair? passes-on)
                        assembly-on?
                        (getenv "PLT_LINKLET_SHOW")))
   (define show
@@ -220,7 +231,7 @@
         (printf ";; ~a ---------------------\n" what)
         (call-with-system-wind
          (lambda ()
-           (parameterize ([print-gensym gensym-on?]
+           (parameterize ([print-gensym gensym-mode]
                           [print-extended-identifiers #t])
              (pretty-print (strip-jit-wrapper
                             (strip-nested-annotations
@@ -245,11 +256,26 @@
                                                                   3
                                                                   (optimize-level))]
                                               [compile-procedure-realm realm])
-                                 (if assembly-on?
-                                     (parameterize ([#%$assembly-output (#%current-output-port)])
-                                       (printf ";; assembly ---------------------\n")
-                                       (compile e))
-                                     (compile e)))))]
+                                 (let* ([print-header (lambda ()
+                                                        (printf ";;")
+                                                        (for-each (lambda (p) (printf " ~a" p))
+                                                                  (if assembly-on?
+                                                                      (append passes-on '(assembly))
+                                                                      passes-on))
+                                                        (printf " ---------------------\n"))]
+                                        [-compile (lambda (e)
+                                                    (if (not (null? passes-on))
+                                                        (parameterize ([print-gensym gensym-mode]
+                                                                       [print-extended-identifiers #t]
+                                                                       [#%$np-tracer passes-on])
+                                                            (compile e))
+                                                        (compile e)))])
+                                   (when (or (not (null? passes-on)) assembly-on?)
+                                     (print-header))
+                                   (if assembly-on?
+                                       (parameterize ([#%$assembly-output (#%current-output-port)])
+                                        (-compile e))
+                                       (-compile e))))))]
      [(e) (compile* e #f #f)]))
   (define (interpret* e) ; result is not safe for space
     (call-with-system-wind (lambda () (interpret e))))
@@ -931,11 +957,14 @@
   (define (raise-linking-failure why target-inst inst sym)
     (raise-arguments-error 'instantiate-linklet
                            (string-append "mismatch;\n"
-                                          " reference to a variable that " why ";\n"
-                                          " possibly, bytecode file needs re-compile because dependencies changed")
+                                          " reference to a variable that " why "")
                            "name" (unquoted-printing-string (symbol->string sym))
                            "exporting instance" (unquoted-printing-string (format "~a" (instance-name inst)))
-                           "importing instance" (unquoted-printing-string (format "~a" (instance-name target-inst)))))
+                           "importing instance" (unquoted-printing-string (format "~a" (instance-name target-inst)))
+                           "possible reason" (unquoted-printing-string
+                                              "modules need to be recompiled because dependencies changed")
+                           "possible solution" (unquoted-printing-string
+                                                "running `racket -y`, `raco make`, or `raco setup`")))
 
   (define (identify-module var)
     (cond

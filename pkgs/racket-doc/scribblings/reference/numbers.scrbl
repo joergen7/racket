@@ -6,8 +6,7 @@
                      racket/unsafe/ops
                      racket/require
                      racket/random
-                     racket/list
-                     math/flonum))
+                     racket/list))
 
 @(define math-eval (make-base-eval))
 @examples[#:hidden #:eval math-eval (require racket/math)]
@@ -522,7 +521,7 @@ Among the real numbers within @racket[(abs tolerance)] of @racket[x],
 @history/arity[]}
 
 
-@defproc[(> [x real?] [y real?] ...+) boolean?]{ Returns @racket[#t] if
+@defproc[(> [x real?] [y real?] ...) boolean?]{ Returns @racket[#t] if
  the arguments in the given order are strictly decreasing,
  @racket[#f] otherwise.
 
@@ -680,8 +679,8 @@ Returns the natural logarithm of @racket[z].  The result is normally
  can potentially run faster. If @racket[b] is exact
  @racket[1], @exnraise[exn:fail:contract:divide-by-zero].
 
- Consider using @racket[fllogb] instead when accuracy is
- important.
+ Consider using @racketidfont{fllogb} from @racketmodname[math/flonum #:indirect]
+ instead when accuracy is important.
 
 @mz-examples[(log (exp 1)) (log 2+3i) (log 1) (log 100 10) (log 8 2) (log 5 5)]
 

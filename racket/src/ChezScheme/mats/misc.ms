@@ -35,6 +35,22 @@
              (with-syntax ((m (- nv 1)))
                (syntax (biglambda m (g . vars) (+ g e))))))))))
 
+(mat version
+  (string? (scheme-version))
+  (string? (scheme-version #f))
+  (string? (scheme-version #t))
+  (equal? (scheme-version) (scheme-version #f))
+  (= 3 (length (call-with-values scheme-version-number list)))
+  (let* ([alpha-s (format "-pre-release.~s" (scheme-pre-release))]
+         [ends? (lambda (s)
+                  (let ([len (string-length s)])
+                    (and (> len (string-length alpha-s))
+                         (equal? alpha-s (substring s (- len (string-length alpha-s)) len)))))])
+    (and (if (scheme-pre-release)
+             (ends? (scheme-version #t))
+             (not (ends? (scheme-version #t))))
+         (not (ends? (scheme-version))))))
+
 (mat cycle
   (let ((x '#1=(a b . #1#)))
     (eqv? x x))
@@ -1061,6 +1077,9 @@
     #t)
   (equal? (list pair-size pair-size)
           (compute-size-increments (list (cons 1 2) (cons 3 4))))
+  (equal? (list pair-size 0)
+          (compute-size-increments (let ([p (cons 1 2)])
+                                     (list p p))))
   (equal? (list (* 3 pair-size) pair-size)
           (let ([l (list 1 2)])
             (compute-size-increments (list (cons 3 l) (cons 4 l)))))
@@ -1135,14 +1154,13 @@
             (mutex-acquire m)
             (set-box! ready 'finish)
             ;; Wait for thread to become inactive again
+            (pause-until (lambda () (eq? 'done (unbox ready))))
             (pause-until (lambda () (= 1 (#%$top-level-value '$active-threads))))
             ;; Get thread's size, which shouldn't include bstr
             (let ([post-sizes (compute-size-increments (list th))])
               (mutex-release m)
               ;; Wait for thread to exit
-              (let ()
-                (define $threads (foreign-procedure "(cs)threads" () scheme-object))
-                (pause-until (lambda () (= 1 (length ($threads))))))
+              (thread-join th)
               ;; Make sure `compute-size-increments` doesn't crash on a
               ;; terminated thread:
               (compute-size-increments (list th))
@@ -1174,6 +1192,9 @@
     #t)
   (equal? (list pair-size pair-size)
           (collect 0 0 0 (list (cons 1 2) (cons 3 4))))
+  (equal? (list pair-size 0)
+          (collect 0 0 0 (let ([p (cons 1 1)])
+                           (list p p))))
   (equal? (list (* 3 pair-size) pair-size)
           (let ([l (list 1 2)])
             (collect 0 0 0 (list (cons 3 l) (cons 4 l)))))
@@ -2006,7 +2027,7 @@
       (fields x y)
       (nongenerative #{vfasl-demo pfwhk286n2j894o33awcq9er4-0}))
     (define vfasl-content (list 1 1/2 3.0 4+5i 6.0+7.0i
-                                "apple" 'banana
+                                "apple" 'banana (string->uninterned-symbol "coconut")
                                 (make-vfasl-demo 10 "11")
                                 (vector 1 'two "three")
                                 (stencil-vector 30 'one 2.0 0+3i "four")
@@ -2017,6 +2038,9 @@
     (define (same-vfasl-content? v)
       (andmap (lambda (a b)
                 (or (eqv? a b)
+                    (and (uninterned-symbol? a)
+                         (uninterned-symbol? b)
+                         (equal? (symbol->string a) (symbol->string b)))
                     (and (or (and (string? a)
                                   (positive? (string-length a)))
                              (and (vector? a)
@@ -2039,8 +2063,13 @@
                            `(define (get-vfasled) vfasled)
                            `(define (call-vfasled) (vfasled)))
                      "testfile-fasl.so")
-    (vfasl-convert-file "testfile-fasl.so" "testfile-vfasl.so" #f)
-    (load "testfile-vfasl.so")
+    (case (machine-type)
+      [(pb tpb)
+       ;; vfasl not supported with endianness not statically known
+       (load "testfile-fasl.so")]
+      [else
+       (vfasl-convert-file "testfile-fasl.so" "testfile-vfasl.so" #f)
+       (load "testfile-vfasl.so")])
     #t)
   
   (same-vfasl-content? (vfasled))
@@ -2483,7 +2512,7 @@
       (cost-center-allocation-count cc)))
 
   (let ([x (fx+ 3 (random 10))])
-    ((lambda (count) ; range for padding on 32-bit and to accomadate 64-bit words
+    ((lambda (count) ; range for padding on 32-bit and to accommodate 64-bit words
        (<= (fxsll (fx+ x 1) 2) count (fxsll (fx+ x 2) 3)))
      (let ([cc (make-cost-center)])
        (with-cost-center cc
@@ -4637,7 +4666,7 @@
 
 (unless (memq (machine-type) '(arm32le tarm32le arm64le tarm64le arm64osx tarm64osx ; timestamp counter tends to be priviledged on Arm
 				       arm64nt tarm64nt
-                                       pb)) ; doesn't increment for pb
+                                       pb pb32l pb32b pb64l pb64b tpb tpb32l tpb32b tpb64l tpb64b)) ; doesn't increment for pb
   (mat $read-time-stamp-counter
 
     (let ([t (#%$read-time-stamp-counter)])
@@ -4723,7 +4752,7 @@
     (define should-be-named-i (letrec ([f (let ([i (lambda (x) x)]) i)]) f))
     (define should-be-named-j (let ([f (letrec ([j (lambda (x) x)]) j)]) f))
     (define (result-should-be-named-mk-CP)
-      (let ([struct:CP (make-record-type-descriptor* 'CP #f #f #f #f 1 1)])
+      (let ([struct:CP (make-record-type-descriptor 'CP #f #f #f #f '(1 . 1))])
         (let ([mk-CP (record-constructor (make-record-constructor-descriptor
                                           struct:CP #f #f))])
           mk-CP)))
@@ -4815,17 +4844,17 @@
   (equal? (wrapper-procedure-data (make-arity-wrapper-procedure (lambda args args) 1 'data))
           'data)
 
-  (error? (set-wrapper-procedure!))
-  (error? (set-wrapper-procedure! (make-arity-wrapper-procedure (lambda args args) 1 #f)))
-  (error? (set-wrapper-procedure! 1 void))
-  (error? (set-wrapper-procedure! (lambda args args) void))
-  (error? (set-wrapper-procedure! (interpret '(lambda args args)) void))
+  (error? (set-wrapper-procedure-procedure!))
+  (error? (set-wrapper-procedure-procedure! (make-arity-wrapper-procedure (lambda args args) 1 #f)))
+  (error? (set-wrapper-procedure-procedure! 1 void))
+  (error? (set-wrapper-procedure-procedure! (lambda args args) void))
+  (error? (set-wrapper-procedure-procedure! (interpret '(lambda args args)) void))
   (let ([p (make-wrapper-procedure (lambda args args) 8 #f)])
-    (set-wrapper-procedure! p vector)
+    (set-wrapper-procedure-procedure! p vector)
     (equal? (p 1 2 3)
             '#(1 2 3)))
   (let ([p (make-arity-wrapper-procedure (lambda args args) 8 #f)])
-    (set-wrapper-procedure! p vector)
+    (set-wrapper-procedure-procedure! p vector)
     (equal? (p 1 2 3)
             '#(1 2 3)))
 
@@ -5455,4 +5484,15 @@
                (and (equal? (r-y ((car sels) rs))
                             "new-string-to-go")
                     (sel-loop (cdr sels))))]))))
+  )
+
+(mat $begin-unsafe
+  (equivalent-expansion?
+   (parameterize ([#%$suppress-primitive-inlining #f])
+     (expand/optimize '(lambda (x)
+                         (import (only $system $begin-unsafe))
+                         (let () (fx+ 2 ($begin-unsafe (fx+ 1 x)))))))
+   (if (fx= (optimize-level) 3)
+       '(lambda (x) (#3%fx+ 2 (#3%fx+ 1 x)))
+       '(lambda (x) (#2%fx+ 2 (#3%fx+ 1 x)))))
   )

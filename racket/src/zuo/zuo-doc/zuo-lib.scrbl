@@ -18,9 +18,10 @@ The @racketmodname[zuo] language includes libraries added to
 
 @defzuomodule[zuo/cmdline]
 
-@defform[#:literals(:program :usage :args-in :init :multi :once-each :once-any :args)
+@defform[#:literals(:program :preamble :usage :args-in :init :multi :once-each :once-any :args)
          (command-line flag-clause ... args-clause)
          #:grammar ([flag-clause (code:line :program expr)
+                                 (code:line :preamble expr)
                                  (code:line :usage expr)
                                  (code:line :args-in expr)
                                  (code:line :init expr)
@@ -46,8 +47,10 @@ One small difference is that @racket[:args-in] is used to specify a
 list of incoming arguments instead of @racket[#:argv] for an incoming
 vector of arguments. The default @racket[:args-in] uses
 @racket[(hash-ref (runtime-env) 'args '())]. Another difference is the
-addition of @racket[:usage], which supplies a usage-options string
-as an alternative to the one inferred from an @racket[:args] clause.
+addition of @racket[:preamble], which supplies a string to be
+shown before a ``usage'' line, and @racket[:usage], which supplies a
+usage-options string as an alternative to the one inferred from an
+@racket[:args] clause.
 
 A more significant difference is that @racketmodname[zuo] does not
 have mutable data structures, so an explicit accumulator must be
@@ -58,7 +61,9 @@ bound to the value accumulated so far, or its body produces a function
 to receive the accumulated value; either way, the result of the body
 or procedure is a new accumulated value. Finally, the body of an
 @racket[args-clause] must produce a function to receive the
-accumulated value.}
+accumulated value.
+
+@history[#:changed "1.3" @elem{Added @racket[:preamble].}]}
 
 @; ------------------------------------------------------------
 
@@ -111,7 +116,7 @@ Equivalent to @racket[((glob->matcher glob) str)].}
 @defzuomodule[zuo/thread]
 
 To use cooperative threads, create a @deftech{threading context} with
-@racket[call-in-main-thread], and perform a thread operations---such
+@racket[call-in-main-thread], and perform thread operations---such
 as creating a new thread with @racket[thread] or a channel with
 @racket[channel]---during the body of the thunk provided to
 @racket[call-in-main-thread]. Threads can block either on channels or
@@ -134,10 +139,11 @@ thread is blocked on a channel.}
 @defproc[(channel? [v any/c]) boolean?]
 @defproc[(channel-put [ch channel?] [v any/c]) channel?]
 @defproc[(channel-get [ch channel?]) any/c]
+@defproc[(channel-try-get [ch channel?]) any/c]
 )]{
 
 Analogous to @realracket*[thread thread? make-channel channel? channel-put
-channel-get] from @racketmodname[racket], but channels are
+channel-get channel-try-get] from @racketmodname[racket], but channels are
 asynchronous (with an unbounded queue) instead of synchronous.
 
 Except for @racket[thread?] and @racket[channel?], these procedures
@@ -147,7 +153,9 @@ only in the threading context where it was created.
 Beware that attempting to use these operations outside of a threading
 context will @emph{not} necessarily trigger an error, and may instead
 deliver an opaque threading request to the enclosing continuation
-prompt.}
+prompt.
+
+@history[#:changed "1.4" @elem{Added @racket[channel-try-get].}]}
 
 @defproc[(thread-process-wait [process handle?] ...) handle?]{
 
@@ -333,3 +341,49 @@ last mapping overrides earlier ones.
 After reading @racket[file], keys from @racket[overrides] are merged
 to the result hash table, where values in @racket[overrides] replace
 ones read from @racket[file].}
+
+@; ------------------------------------------------------------
+
+@section[#:tag "zuo-jobserver"]{Jobserver Client}
+
+@defzuomodule[zuo/jobserver]
+
+@history[#:added "1.1"]
+
+@defproc[(maybe-jobserver-client) (or/c procedure? #f)]{
+
+Returns a procedure if a jobserver configuration is found via the
+@envvar{MAKEFLAGS} environment variable, @racket[#f] otherwise. That
+environment variable is normally set by GNU Make when it runs a target
+command and when @Flag{j} was provided to @exec{make}. A jobserver
+configuration allows parallelism to span @exec{make} and other
+processes, such as a @exec{zuo} process, through a shared pool of
+jobserver tokens. In other words, a @Flag{j} flag to @exec{make} gets
+propagated to @exec{zuo}.
+
+When a procedure is returned, it accepts one argument: @racket['get]
+or @racket['put]. Apply the procedure with @racket['get] to acquire a
+jobserver token, and apply the procedure with @racket['put] to release
+a previously acquired token. The implicit jobserver token that belongs
+to the @exec{zuo} process should be taken explicitly with
+@racket['get] and released with @racket['put].
+
+The @racket[maybe-jobserver-client] procedure must be called in a
+@tech{threading context}. When it returns a procedure, that procedure
+must also be called (with @racket['get] or @racket['put]) in the same
+threading context.}
+
+@defproc[(maybe-jobserver-jobs) (or/c integer? #f)]{
+
+Similar to @racket[maybe-jobserver-client], but polls the jobserver
+(if any) to determine how many job tokens appear to be immediately
+available. The result is that number, or @racket[#f] if no jobserver
+configuration is found.
+
+Using @racket[maybe-jobserver-client] to cooperate interactively with
+the jobserver is normally better, but @racket[maybe-jobserver-jobs]
+can be useful to chaining to another tool that accepts job count as a
+number.
+
+Unlike @racket[maybe-jobserver-client], @racket[maybe-jobserver-jobs]
+does not need to be called in a @tech{threading context}.}

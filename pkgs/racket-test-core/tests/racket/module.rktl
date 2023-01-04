@@ -144,6 +144,12 @@
   (define car 5)
   (provide car))
 
+;; ... even in `#:require=define` mode
+(module _shadow_initial_always_ racket/base
+  (#%declare #:require=define)
+  (define car 5)
+  (provide car))
+
 (test 5 dynamic-require ''_shadow_ 'car)
 
 ;; Ok to redefine imported:
@@ -153,6 +159,13 @@
 (test 6 dynamic-require ''defines-car-that-overrides-import/stx 'car)
 ;; Can't redefine multiple times or import after definition:
 (syntax-test #'(module m racket/base (#%require racket/base) (define car 5) (define car 5)))
+
+;; Not in `#:require=define` mode
+(syntax-test #'(module m racket/base (#%require racket/base) (#%declare #:require=define) (define car 5)))
+(syntax-test #'(module m racket/base (#%require racket/base (for-syntax racket/base)) (#%declare #:require=define) (define-syntax car 5)))
+(syntax-test #'(module m racket/base (#%declare #:require=define) (define car 5) (#%require racket/base)))
+(syntax-test #'(module m racket/base (#%require (for-syntax racket/base)) (#%declare #:require=define) (define-syntax car 5) (require racket/base)))
+(syntax-test #'(module m racket/base (#%require (for-syntax racket/base)) (#%declare #:require=define) (define-syntax car 5) (require (only-in racket/base car))))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -747,6 +760,9 @@
 (test #t module-path? '(planet "foo.rkt" ("robby" "redex.plt" 7 (= 8))))
 (test #t module-path? '(planet "foo.rkt" ("robby" "redex.plt") "sub" "deeper"))
 (test #t module-path? '(planet "foo%2e.rkt" ("robby%2e" "redex%2e.plt") "sub%2e" "%2edeeper"))
+
+(err/rt-test (make-resolved-module-path "not good"))
+(err/rt-test (resolved-module-path-name "not good"))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; check `relative-in'
@@ -4019,6 +4035,55 @@ case of module-leve bindings; it doesn't cover local bindings.
                                (provide (all-from-out mod)))
                         ...))]))
         (bounce 'p2)))))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; check that write and reading a module preserves flonum `eq?`
+
+(let ([m '(module defines-a-and-b-infinity racket/base
+            (provide a b)
+            (define a +inf.0)
+            (define b +inf.0))])
+  (define o (open-output-bytes))
+  (write (compile m) o)
+  (parameterize ([read-accept-compiled #t])
+    (eval (read (open-input-bytes (get-output-bytes o)))))
+  (test #t eq?
+        (dynamic-require ''defines-a-and-b-infinity 'a)
+        (dynamic-require ''defines-a-and-b-infinity 'b)))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Regression test aimed at a compiler bug: the target of known-copy
+;; information from an imported module was confused with an import
+;; from another module where the target and import happen to have the
+;; same name
+
+(module check-no-crash-on-misapplication racket/base
+  (provide check)
+
+  (module one racket/base
+    (provide thing)
+    (define f (random))
+    (define thing f))
+
+  (module two racket/base
+    (provide f)
+    (define (f x) (let loop () (loop))))
+
+  (require 'one
+           'two)
+
+  (define (check)
+    (when (thing #f)
+      (f 10))))
+
+(err/rt-test ((dynamic-require ''check-no-crash-on-misapplication 'check)))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(test 'cwv-ok
+      (dynamic-require ''#%kernel 'call-with-values)
+      (lambda () 'cwv-ok)
+      (chaperone-procedure (lambda (v) v) (lambda (v) v)))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

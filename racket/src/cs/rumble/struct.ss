@@ -272,9 +272,6 @@
               [all-immutables (if (integer? proc-spec)
                                   (cons proc-spec immutables)
                                   immutables)])
-         (when (not parent-rtd*)
-           (record-type-equal-procedure rtd default-struct-equal?)
-           (record-type-hash-procedure rtd default-struct-hash))
          ;; Record properties implemented by this type:
          (let ([props (let ([props (append (map car props) parent-props)])
                         (if proc-spec
@@ -289,6 +286,9 @@
                                    (loop (car super)))
                                  (struct-type-prop-supers prop))))
                    parent-props)
+         ;; set default comparison
+         (unless (struct-property-ref prop:equal+hash rtd #f)
+           (struct-set-default-equal+hash! rtd))
 
          ;; Finish checking and install new property values:
          (let ([props-ht
@@ -412,16 +412,6 @@
       (raise-arguments-error who
                              "duplicate property binding"
                              "property" prop))
-    (when (eq? prop prop:equal+hash)
-      (record-type-equal-procedure rtd (let ([p (cadr guarded-val)])
-                                         (if (#%procedure? p)
-                                             p
-                                             (lambda (v1 v2 e?) (|#%app| p v1 v2 e?)))))
-      (record-type-hash-procedure rtd (let ([p (caddr guarded-val)])
-                                        (if (#%procedure? p)
-                                            p
-                                            (lambda (v h) (|#%app| p v h)))))
-      (struct-property-set! 'secondary-hash rtd (cadddr guarded-val)))
     (cond
       [(eq? prop prop:sealed)
        (#%$record-type-act-sealed! rtd)
@@ -438,6 +428,21 @@
                     ;; skip supers, because property is already added
                     null)
                 props))])))
+
+;; used to install equality and hashing on rumble records or as default implementation:
+(define (struct-set-equal+hash! rtd eql? hash-code)
+  (struct-property-set! prop:equal+hash rtd
+                        (list (or eql?
+                                  (lambda (a b eql?) (eq? a b)))
+                              hash-code
+                              hash-code)))
+(define (struct-set-equal-mode+hash! rtd eql? hash-code)
+  (struct-property-set! prop:equal+hash rtd
+                        (list (or eql?
+                                  (lambda (a b eql? mode) (eq? a b)))
+                              hash-code)))
+(define (inherit-equal+hash! rtd parent-rtd)
+  (struct-property-set! prop:equal+hash rtd (struct-property-ref prop:equal+hash parent-rtd #f)))
 
 ;; variant of `check-make-struct-type-arguments` called by schemified
 (define make-struct-type-install-properties
@@ -649,11 +654,12 @@
             [parent-fi (if parent-rtd*
                            (struct-type-field-info parent-rtd*)
                            empty-field-info)]
-            [rtd (make-record-type-descriptor* name
-                                               parent-rtd*
-                                               prefab-uid
-                                               (#%ormap (lambda (p) (eq? prop:sealed (car p))) props)
-                                               #f
+            [rtd (make-record-type-descriptor name
+                                              parent-rtd*
+                                              prefab-uid
+                                              (#%ormap (lambda (p) (eq? prop:sealed (car p))) props)
+                                              #f
+                                              (cons
                                                (+ init-count auto-count)
                                                (let ([mask (sub1 (general-arithmetic-shift 1 (+ init-count auto-count)))])
                                                  (if (eq? insp 'prefab)
@@ -663,10 +669,10 @@
                                                                           immutables)]
                                                                 [mask mask])
                                                        (cond
-                                                        [(null? imms) mask]
-                                                        [else
-                                                         (let ([m (bitwise-not (arithmetic-shift 1 (car imms)))])
-                                                           (loop (cdr imms) (bitwise-and mask m)))])))))]
+                                                         [(null? imms) mask]
+                                                         [else
+                                                          (let ([m (bitwise-not (arithmetic-shift 1 (car imms)))])
+                                                            (loop (cdr imms) (bitwise-and mask m)))]))))))]
             [parent-auto*-count (get-field-info-auto*-count parent-fi)]
             [parent-init*-count (get-field-info-init*-count parent-fi)]
             [parent-total*-count (get-field-info-total*-count parent-fi)]
@@ -763,13 +769,14 @@
                                  (cdr parent-prefab-key+count)
                                  0))]
              [uid (encode-prefab-key+count-as-symbol prefab-key+count)]
-             [rtd (make-record-type-descriptor* name
-                                                parent-rtd
-                                                uid #f #f
+             [rtd (make-record-type-descriptor name
+                                               parent-rtd
+                                               uid #f #f
+                                               (cons
                                                 total-count
                                                 ;; All fields must be reported as mutable, because
                                                 ;; we might need to mutate to create cyclic data:
-                                                (sub1 (bitwise-arithmetic-shift-left 1 total-count)))]
+                                                (sub1 (bitwise-arithmetic-shift-left 1 total-count))))]
              [mutables (prefab-key-mutables prefab-key total-count)])
         (with-global-lock
          (cond
@@ -782,9 +789,7 @@
              (putprop uid 'prefab-pr pr) ; retain
              (unless prefabs (set! prefabs (make-ephemeron-hashtable car equal?)))
              (hashtable-set! prefabs pr rtd)
-             (unless parent-rtd
-               (record-type-equal-procedure rtd default-struct-equal?)
-               (record-type-hash-procedure rtd default-struct-hash))
+             (struct-set-default-equal+hash! rtd)
              (register-mutables! mutables rtd parent-rtd)
              (inspector-set! rtd 'prefab)
              rtd)])))])))
@@ -1243,17 +1248,42 @@
                              (lambda (val info)
                                (check 'guard-for-prop:equal+hash
                                       :test (and (list? val)
-                                                 (= 3 (length val))
-                                                 (andmap procedure? val)
-                                                 (procedure-arity-includes? (car val) 3)
-                                                 (procedure-arity-includes? (cadr val) 2)
-                                                 (procedure-arity-includes? (caddr val) 2))
+                                                 (or (and (= 2 (length val))
+                                                          (procedure? (car val))
+                                                          (procedure? (cadr val))
+                                                          (procedure-arity-includes? (car val) 4)
+                                                          (procedure-arity-includes? (cadr val) 3))
+                                                     (and (= 3 (length val))
+                                                          (andmap procedure? val)
+                                                          (procedure-arity-includes? (car val) 3)
+                                                          (procedure-arity-includes? (cadr val) 2)
+                                                          (procedure-arity-includes? (caddr val) 2))))
                                       :contract (string-append
-                                                 "(list/c (procedure-arity-includes/c 3)\n"
-                                                 "        (procedure-arity-includes/c 2)\n"
-                                                 "        (procedure-arity-includes/c 2))")
+                                                 "(or/c (list/c (procedure-arity-includes/c 4)\n"
+                                                 "              (procedure-arity-includes/c 3)\n"
+                                                 "      (list/c (procedure-arity-includes/c 3)\n"
+                                                 "              (procedure-arity-includes/c 2)\n"
+                                                 "              (procedure-arity-includes/c 2))")
                                       val)
-                               (cons (box 'equal+hash) val))))
+                               ;; a `cons` here creates a unique identity for each time the
+                               ;; property is attached to a structure type
+                               (cons (car val) (cdr val)))))
+
+(define (equal+hash-equal-proc eq+hash)
+  (car eq+hash))
+
+(define (equal+hash-hash-code-proc eq+hash)
+  (cadr eq+hash))
+
+(define (equal+hash-hash2-code-proc eq+hash)
+  (let* ([p (cdr eq+hash)]
+         [p2 (cdr p)])
+    (if (pair? p2)
+        (car p2)
+        (car p))))
+
+(define (equal+hash-supports-mode? eq+hash)
+  (null? (cddr eq+hash)))
 
 (define-values (prop:authentic authentic? authentic-ref)
   (make-struct-type-property 'authentic (lambda (val info) #t)))
@@ -1269,6 +1299,15 @@
 ;; record type
 (define-values (prop:sealed sealed? sealed-ref)
   (make-struct-type-property 'sealed (lambda (val info) #t)))
+
+;; Whether the struct type is considered mutable for the purposes of:
+;;  - `chaperone-of?`
+;;  - `equal-always?` and associated hash codes
+(define (struct-type-mutable? rtd)
+  (and (not (eq? 0 (struct-type-mpm rtd)))
+       (if (struct-type-prefab? rtd)
+           (with-global-lock* (hashtable-contains? rtd-mutables rtd))
+           #t)))
 
 (define (struct-type-immediate-transparent? rtd)
   (let ([insp (inspector-ref rtd)])
@@ -1329,6 +1368,11 @@
                     (loop (fx+ j 1)
                           (hash-code-combine hc (hash-code (unsafe-struct-ref s j)))))))
             (eq-hash-code raw-s))))]))
+
+(define struct-set-default-equal+hash!
+  (let ([l (list default-struct-equal? default-struct-hash default-struct-hash)])
+    (lambda (rtd)
+      (struct-property-set! prop:equal+hash rtd l))))
 
 (define struct->vector
   (case-lambda
@@ -1423,7 +1467,7 @@
                                          #'mk))]
                          [uid (datum->syntax #'name ((current-generate-id) (syntax->datum #'name)))])
              #'(begin
-                 (define struct:name (make-record-type-descriptor* 'name  struct:parent 'uid #f #f field-count 0))
+                 (define struct:name (make-record-type-descriptor 'name struct:parent 'uid #f #f '(field-count . 0)))
                  (define unsafe-make-name (record-constructor (make-record-constructor-descriptor struct:name #f #f)))
                  (define name ctr-expr)
                  (define authentic-name? (record-predicate struct:name))
@@ -1448,8 +1492,7 @@
                  (define dummy
                    (begin
                      (register-struct-named! struct:name)
-                     (record-type-equal-procedure struct:name default-struct-equal?)
-                     (record-type-hash-procedure struct:name default-struct-hash)
+                     (struct-set-equal+hash! struct:name default-struct-equal? default-struct-hash)
                      (inspector-set! struct:name #f)))))))])))
 
 (define-syntax define-struct

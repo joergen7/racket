@@ -879,12 +879,12 @@
 (err/rt-test (read-char (make-input-port #f void void void)))
 (err/rt-test (peek-char (make-input-port #f void void void)))
 (arity-test make-input-port 4 10)
-(err/rt-test (make-custom-input-port #f 8 void void))
-(err/rt-test (make-custom-input-port #f void 8 void))
-(err/rt-test (make-custom-input-port #f void void 8))
-(err/rt-test (make-custom-input-port #f cons void void))
-(err/rt-test (make-custom-input-port #f void add1 void))
-(err/rt-test (make-custom-input-port #f void void add1))
+(err/rt-test (make-input-port #f 8 void void))
+(err/rt-test (make-input-port #f void 8 void))
+(err/rt-test (make-input-port #f void void 8))
+(err/rt-test (make-input-port #f cons void void))
+(err/rt-test (make-input-port #f void add1 void))
+(err/rt-test (make-input-port #f void void add1))
 
 (test #t output-port? (make-output-port #f always-evt void void))
 (test #t output-port? (make-output-port #f always-evt void void))
@@ -895,7 +895,7 @@
 (err/rt-test (make-output-port #f always-evt void 8))
 (err/rt-test (make-output-port #f always-evt add1 void))
 (err/rt-test (make-output-port #f always-evt void add1))
-(err/rt-test (write-special 'foo (make-custom-output-port void always-evt void void)) exn:application:mismatch?)
+(err/rt-test (write-special 'foo (make-output-port void always-evt void void)) exn:application:mismatch?)
 
 (let ([p (make-input-port 
 	  'name
@@ -1918,6 +1918,8 @@
        (lambda (evt? localhost [serve-localhost #f])
 	 (let* ([l (tcp-listen 0 5 #t serve-localhost)]
                 [pn (listen-port l)])
+           (test #f tcp-accept-ready? l)
+           (test #f sync/timeout 0 l)
 	   (let-values ([(r1 w1) (tcp-connect localhost pn)]
 			[(r2 w2) (if evt?
 				     (apply values (sync (tcp-accept-evt l)))
@@ -2669,37 +2671,48 @@
   (define file (build-path dir "f"))
 
   (define (check open)
-    (open file #o444)
-    (if (eq? 'windows (system-type))
-        (test #f memq 'write (file-or-directory-permissions file))
-        ;; umask might drop additional bits from mode #o444
-        (test 0 bitwise-and (bitwise-not #o444) (file-or-directory-permissions file 'bits)))
-    (delete-file file))
+    (for ([replace? (in-list '(#f #t))]
+          [mode (in-list '(#o444 #o666))])
+      (open file mode replace?)
+      (if (eq? 'windows (system-type))
+          (test (and (positive? (bitwise-and mode #x2)) '(write read))
+                memq 'write (file-or-directory-permissions file))
+          (if replace?
+              (test mode bitwise-and #o777 (file-or-directory-permissions file 'bits))
+              ;; umask might drop additional bits from mode #o444
+              (test 0 bitwise-and (bitwise-not mode) (file-or-directory-permissions file 'bits))))
+      (delete-file file)))
 
-  (check (lambda (file perms)
-           (close-output-port (open-output-file file #:exists 'truncate #:permissions perms))))
-  (check (lambda (file perms)
+  (check (lambda (file perms replace?)
+           (close-output-port (open-output-file file #:exists 'truncate #:permissions perms
+                                                #:replace-permissions? replace?))))
+  (check (lambda (file perms replace?)
            (close-output-port (open-output-file file #:exists 'truncate #:permissions perms))
-           (close-output-port (open-output-file file #:exists 'replace #:permissions perms))))
-  (check (lambda (file perms)
+           (close-output-port (open-output-file file #:exists 'replace #:permissions perms
+                                                #:replace-permissions? replace?))))
+  (check (lambda (file perms replace?)
            (define-values (i o)
-             (open-input-output-file file #:exists 'truncate #:permissions perms))
+             (open-input-output-file file #:exists 'truncate #:permissions perms
+                                     #:replace-permissions? replace?))
            (close-input-port i)
            (close-output-port o)))
-  (check (lambda (file perms)
+  (check (lambda (file perms replace?)
            (with-output-to-file file
              #:permissions perms
              #:exists 'truncate
+             #:replace-permissions? replace?
              void)))
-  (check (lambda (file perms)
+  (check (lambda (file perms replace?)
            (call-with-output-file file
              #:permissions perms
              #:exists 'truncate
+             #:replace-permissions? replace?
              void)))
-  (check (lambda (file perms)
+  (check (lambda (file perms replace?)
            (call-with-output-file* file
              #:permissions perms
              #:exists 'truncate
+             #:replace-permissions? replace?
              void)))
 
   (delete-directory dir))

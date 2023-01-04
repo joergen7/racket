@@ -622,6 +622,9 @@ ac_includes_default="\
 
 ac_subst_vars='LTLIBOBJS
 LIBOBJS
+upsrcdir
+CFLAGS_FOR_BUILD
+CC_FOR_BUILD
 RKTIO_CONFIGURE_ARGS
 PLT_CS_SLSP_SUFFIX
 INSTALL_LIBS_ENABLE
@@ -629,6 +632,7 @@ INSTALL_SETUP_RACKET_FLAGS
 INSTALL_SETUP_FLAGS
 PBCHUNK_MODE
 SCHEME_LIBFFI
+ENABLE_EXTRA_CHECKS
 DISABLE_WPO
 CS_COMPILED_SUBDIR
 CS_INSTALLED
@@ -643,6 +647,7 @@ DISABLE_ICONV
 LZ4_LIB
 Z_LIB
 MINGW
+SIGNED_EXE
 OSX
 SETUP_BOOT_MODE
 CROSS_MODE
@@ -786,6 +791,7 @@ enable_mach
 enable_target
 enable_pb
 enable_pbchunk
+enable_check
 enable_portable
 enable_natipkg
 enable_sdk
@@ -796,7 +802,8 @@ enable_userfw
 enable_embedfw
 enable_mac64
 enable_libs
-enable_noopt
+enable_postlink
+enable_strip
 enable_ubsan
 enable_asan
 enable_csdefault
@@ -1440,11 +1447,12 @@ Optional Features:
   --enable-docs           build docs on install (enabled by default)
   --enable-usersetup      setup user-specific files on install
   --enable-racket=<path>  use <path> as Racket for build; or "auto" to create
-  --enable-scheme=<path>  use <path> as host build for cross
+  --enable-scheme=<path>  use <path> as Chez Scheme for build
   --enable-mach=<mach>    use Chez Scheme machine type <mach>
   --enable-target=<mach>  cross-build for Chez Scheme machine type <mach>
   --enable-pb             build for platform without native-code backend
   --enable-pbchunk        enable C chunks for pb boot (enabled by default)
+  --enable-check          enable extra safety checks for testing
   --enable-portable       prefer portable to host-specific
   --enable-natipkg        add "-natipkg" to library subpath
   --enable-sdk=<path>     use Mac OS 10.4 SDK directory
@@ -1461,6 +1469,7 @@ Optional Features:
   --enable-embedfw        embed Mac OS framework content in executables
   --enable-mac64          allow 64-bit Mac OS build (enabled by default)
   --enable-libs           install static libraries (enabled by default for Unix)
+  --enable-postlink=<cmd> apply <cmd> to executable after linking
   --enable-strip          strip debug on install (usually enabled by default)
   --enable-ubsan          compile with -fsanitize=undefined
   --enable-asan           compile with -fsanitize=address
@@ -2548,6 +2557,7 @@ if test "${enable_iconv+set}" = set; then :
 fi
 
 
+
 # Check whether --enable-curses was given.
 if test "${enable_curses+set}" = set; then :
   enableval=$enable_curses;
@@ -2644,6 +2654,11 @@ if test "${enable_pbchunk+set}" = set; then :
   enableval=$enable_pbchunk;
 fi
 
+# Check whether --enable-check was given.
+if test "${enable_check+set}" = set; then :
+  enableval=$enable_check;
+fi
+
 
 # Check whether --enable-portable was given.
 if test "${enable_portable+set}" = set; then :
@@ -2731,9 +2746,15 @@ if test "${enable_libs+set}" = set; then :
 fi
 
 
-# Check whether --enable-noopt was given.
-if test "${enable_noopt+set}" = set; then :
-  enableval=$enable_noopt;
+# Check whether --enable-postlink was given.
+if test "${enable_postlink+set}" = set; then :
+  enableval=$enable_postlink;
+fi
+
+
+# Check whether --enable-strip was given.
+if test "${enable_strip+set}" = set; then :
+  enableval=$enable_strip;
 fi
 
 
@@ -2899,11 +2920,14 @@ show_explicitly_enabled "${enable_portable}" "portable"
 show_explicitly_enabled "${enable_natipkg}" "Adding \"-natipkg\" suffix to library subpath"
 
 show_explicitly_enabled "${enable_libz}" "Installed libz"
+show_explicitly_disabled "${enable_libz}" "Installed libz"
 show_explicitly_enabled "${enable_liblz4}" "Installed liblz4"
+show_explicitly_disabled "${enable_liblz4}" "Installed liblz4"
 show_explicitly_enabled "${enable_iconv}" "iconv"
 show_explicitly_disabled "${enable_iconv}" "iconv"
 show_explicitly_enabled "${enable_curses}" "curses"
 show_explicitly_disabled "${enable_curses}" "curses"
+show_explicitly_enabled "${enable_check}" "Extra checks"
 
 if test "${enable_bconly}" = "yes" ; then
    if test "${enable_csonly}" = "yes" ; then
@@ -3277,11 +3301,11 @@ use_flag_pthread=yes
 use_flag_posix_pthread=no
 
 OSX="f"
+SIGNED_EXE="f"
 MINGW="f"
 CONFIGURE_RACKET_SO_COMPILE=""
 COMPRESS_COMP=""
 BOOT_COMPRESS_COMP=""
-POST_LINKER=""
 
 FRAMEWORK_INSTALL_DIR='$(libpltdir)'
 FRAMEWORK_PREFIX='@executable_path/../lib/'
@@ -3305,12 +3329,20 @@ enable_pthread_by_default=yes
 
 compress_boot_files_by_default=no
 
+use_own_zlibs=no
+
 cs_auto_flags=--disable-auto-flags
 
 COPY_NEW_CFLAGS_TO_CPPFLAGS=no
 
 SCHEME_LIBFFI=no
 PBCHUNK_MODE=plain
+
+if test "${CC_FOR_BUILD}" = ""; then
+  CC_FOR_BUILD='$(CC) -O2'
+fi
+
+ENABLE_EXTRA_CHECKS=no
 
 ###### Autoconfigure #######
 
@@ -4428,12 +4460,19 @@ case "$host_os" in
     add_iconv_lib="/usr/lib/i18n/libiconv_std.a"
     skip_curses_check=yes
     add_curses_lib="/usr/pkg/lib/libncurses.a"
-    POST_LINKER="paxctl +m"
+    default_post_linker="paxctl +m"
     ;;
   irix*)
     ;;
-  linux*)
-    MACH_OS=le
+  linux*|gnu*)
+    case "$host_os" in
+      linux*)
+        MACH_OS=le
+        ;;
+      *)
+        MACH_OS=gnu # Hurd
+        ;;
+    esac
     case "$host_os" in
       *linux-android*)
         ;;
@@ -4452,6 +4491,7 @@ case "$host_os" in
     skip_iconv_check=yes
     skip_curses_check=yes
     use_flag_pthread=no
+    use_own_zlibs=yes
     MACH_OS=nt
     LIBS="${LIBS} -lshell32 -luser32 -lole32 -lrpcrt4 -luuid -lws2_32 -ladvapi32 -lwinmm"
     MINGW="t"
@@ -4471,6 +4511,7 @@ case "$host_os" in
     MACH_OS=osx
     LIBS="${LIBS} -framework CoreFoundation"
     LDFLAGS="${LDFLAGS} -Wl,-headerpad_max_install_names"
+    SIGNED_EXE="t"
     if test "${enable_xonx}" = "no" ; then
       OSX="t"
     else
@@ -4594,6 +4635,8 @@ case "$host_os" in
     if test "${enable_ios}" != "" ; then
       enable_curses=no
     fi
+
+    use_own_zlibs=yes
     ;;
   nto-qnx*)
     MACH_OS=qnx
@@ -4657,8 +4700,17 @@ case "$MACH_HOST_CPU" in
     MACH="${thread_prefix}ppc32${MACH_OS}"
     pb_machine_name="${thread_prefix}pb32b"
     ;;
+  riscv64*)
+    MACH="${thread_prefix}rv64${MACH_OS}"
+    pb_machine_name="${thread_prefix}pb64l"
+    ;;
 esac
 
+if test "${MACH}" = "" ; then
+  default_mach_was_empty=yes
+else
+  default_mach_was_empty=no
+fi
 
 if test "${enable_mach}" != "" ; then
   MACH="${enable_mach}"
@@ -4681,13 +4733,15 @@ elif test "$MACH" = "" -o "$MACH_OS" = "" ; then
    exit 1
 fi
 
-# For a pb build where Racket is supplied, force cross-build
-# mode on the assumption that the host is not a pb build
-# (because it should be created with default configure options)
+# For a pb build where Racket is supplied as "auto" and MACH was not originally
+# empty, force cross-build mode on the assumption that the host is not
+# a pb build (because it should be created with default configure options)
 if test "${enable_pb}" = "yes" ; then
-  if test "${enable_racket}" != "" ; then
+  if test "${enable_racket}" = "auto" ; then
     if test "${enable_target}" = "" ; then
-      enable_target="${MACH}"
+      if test "${default_mach_was_empty}" = "no" ; then
+        enable_target="${MACH}"
+      fi
     fi
   fi
 fi
@@ -4709,6 +4763,9 @@ if test "${build_os}_${build_cpu}" != "${host_os}_${host_cpu}" ; then
       ;;
     linux*)
       BUILD_OS=le
+      ;;
+    gnu*) # Hurd - must come after linux*
+      BUILD_OS=gnu
       ;;
     *mingw*)
       BUILD_OS=nt
@@ -4742,6 +4799,9 @@ if test "${build_os}_${build_cpu}" != "${host_os}_${host_cpu}" ; then
       ;;
     power*)
       BUILD_MACH="${BUILD_THREAD_PREFIX}ppc32${BUILD_OS}"
+      ;;
+    riscv64*)
+      BUILD_MACH="${BUILD_THREAD_PREFIX}rv64${BUILD_OS}"
       ;;
     *)
       echo "unknown build CPU"
@@ -4789,7 +4849,7 @@ if test "${enable_racket}" != "" ; then
   # Racket used only for generating Chez Scheme boot files
   if test "${CROSS_MODE}" = "cross" ; then
     RACKET="${enable_racket}"
-  else
+  elif test "${enable_racket}" != "auto" ; then
     BOOTFILE_RACKET="${enable_racket}"
   fi
 fi
@@ -4903,7 +4963,7 @@ $as_echo "no" >&6; }
 fi
 
   if test "x$ac_ct_STRIP" = x; then
-    STRIP=""
+    STRIP=":"
   else
     case $cross_compiling:$ac_tool_warned in
 yes:)
@@ -4924,6 +4984,9 @@ fi
   fi
   if test "${strip_needs_dash_s}" = "yes" ; then
     check_strip_dash_s=yes
+  fi
+  if test "${STRIP}" = ":"; then
+    check_strip_dash_s=no
   fi
   if test "${check_strip_dash_s}" = "yes" ; then
     # Can only support library stripping if something like "-S" is available:
@@ -4954,6 +5017,19 @@ $as_echo "$set_strip_lib" >&6; }
     fi
   fi
   ICP_STRIP_FLAG=" -s"
+fi
+
+
+############## post-linker ################
+
+if test "${enable_postlink}" != "" ; then
+  POST_LINKER="${enable_postlink}"
+else
+  POST_LINKER="${default_post_linker}"
+fi
+
+if test "${POST_LINKER}" != "" ; then
+  echo "post-linker command: ${POST_LINKER}"
 fi
 
 
@@ -5728,6 +5804,15 @@ if test "${enable_liblz4}" != "no" ; then
   fi
 fi
 
+if test "${use_own_zlibs}" = "no" ; then
+  if test "${enable_libz}" = "" ; then
+    enable_libz=yes
+  fi
+  if test "${enable_liblz4}" = "" ; then
+    enable_liblz4=yes
+  fi
+fi
+
 if test "${enable_libz}" = "yes" ; then
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for libz" >&5
 $as_echo_n "checking for libz... " >&6; }
@@ -5935,6 +6020,12 @@ if test "${ac_cv_sizeof_void_p}" != "4" ; then
 fi
 
 
+############## etxra checks ################
+
+if test "${enable_check}" = "yes" ; then
+  ENABLE_EXTRA_CHECKS=yes
+fi
+
 ############## subconfigure ################
 
 # Before libtool setup
@@ -6030,6 +6121,15 @@ fi
 
 ############## final output ################
 
+case "$srcdir" in
+    /*)
+        upsrcdir="$srcdir"
+        ;;
+    *)
+        upsrcdir="../$srcdir"
+        ;;
+esac
+
 # Pass certain configure args on to rktio
 keep_configure_args=
 fixup_prev=
@@ -6106,7 +6206,12 @@ RKTIO_CONFIGURE_ARGS="${keep_configure_args} ${SUB_CONFIGURE_EXTRAS}"
 
 
 
-makefiles="Mf-config"
+
+
+
+
+
+makefiles="Makefile"
 
 ac_config_files="$ac_config_files $makefiles"
 

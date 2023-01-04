@@ -8,9 +8,12 @@ on:
       - '.github/images/Dockerfile'
       - '.github/workflows/docker-racketci.yml'
 
+permissions:
+  contents: read
+
 jobs:
   build-image:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-22.04
 
     env:
       IMAGE_NAME: racket-ci

@@ -46,18 +46,17 @@
      (if (#%procedure? proc)
          (#2%apply proc args)
          (#2%apply (extract-procedure proc (and (#%list? args) (length args))) args))]
-    [(proc)
-     (raise-arity-error 'apply (|#%app| arity-at-least 2) proc)]
-    [(proc . argss)
-     (if (#%procedure? proc)
-         (#2%apply #2%apply proc argss)
-         (let ([len (let loop ([argss argss] [accum 0])
-                      (cond
-                       [(null? (cdr argss)) (let ([l (car argss)])
-                                              (and (#%list? l)
-                                                   (+ accum (length l))))]
-                       [else (loop (cdr argss) (fx+ 1 accum))]))])
-           (#2%apply #2%apply (extract-procedure proc len) argss)))]))
+    [(proc arg . argss)
+     (let ([argss (cons arg argss)])
+       (if (#%procedure? proc)
+           (#2%apply #2%apply proc argss)
+           (let ([len (let loop ([argss argss] [accum 0])
+                        (cond
+                          [(null? (cdr argss)) (let ([l (car argss)])
+                                                 (and (#%list? l)
+                                                      (+ accum (length l))))]
+                          [else (loop (cdr argss) (fx+ 1 accum))]))])
+             (#2%apply #2%apply (extract-procedure proc len) argss))))]))
 
 (define-syntax (|#%app| stx)
   (syntax-case stx ()
@@ -342,9 +341,10 @@
     #f]))
 
 (define (not-a-procedure f)
-  (raise-arguments-error 'application
-                         "not a procedure;\n expected a procedure that can be applied to arguments"
-                         "given" f))
+  (lambda args
+    (raise-arguments-error 'application
+                           "not a procedure;\n expected a procedure that can be applied to arguments"
+                           "given" f)))
 
 (define (wrong-arity-wrapper f)
   (lambda args
@@ -639,21 +639,24 @@
 ;; ----------------------------------------
 
 (define (make-jit-procedure force mask name realm)
-  (letrec ([p (make-wrapper-procedure
-               (lambda args
-                 (let ([f (force)])
-                   (with-interrupts-disabled
-                    ;; atomic with respect to Racket threads,
-                    (let ([name (wrapper-procedure-data p)])
-                      (unless (#%box? name)
-                        (set-wrapper-procedure! p f)
-                        (set-wrapper-procedure-data! p (box name)))))
-                   (apply p args)))
-               mask
-               (if realm
-                   (vector name realm)
-                   name))])
-    p))
+  (let ([data (if realm
+                  (vector name realm #f)
+                  name)])
+    (letrec ([p (make-wrapper-procedure
+                 (lambda args
+                   (let ([f (force)])
+                     (with-interrupts-disabled
+                      ;; atomic with respect to Racket threads
+                      (let ([name (wrapper-procedure-data p)])
+                        (unless (#%box? name)
+                          (set-wrapper-procedure-procedure! p f)
+                          (set-wrapper-procedure-data! p (box name)))))
+                     (apply p args)))
+                 mask
+                 data)])
+      (when realm
+        (vector-set! data 2 (wrapper-procedure-procedure p)))
+      p)))
 
 ;; A boxed `name` means a method
 (define (make-interp-procedure proc mask name+realm)
@@ -891,12 +894,14 @@
                        args)]))]))])))
 
 (define (set-procedure-impersonator-hash!)
-  (record-type-hash-procedure (record-type-descriptor procedure-chaperone)
-                              (lambda (c hash-code)
-                                (hash-code (impersonator-next c))))
-  (record-type-hash-procedure (record-type-descriptor procedure-impersonator)
-                              (lambda (i hash-code)
-                                (hash-code (impersonator-next i)))))
+  (struct-set-equal+hash! (record-type-descriptor procedure-chaperone)
+                          #f
+                          (lambda (c hash-code)
+                            (hash-code (impersonator-next c))))
+  (struct-set-equal+hash! (record-type-descriptor procedure-impersonator)
+                          #f
+                          (lambda (i hash-code)
+                            (hash-code (impersonator-next i)))))
 
 (define (raise-result-wrapper-result-arity-error)
   (raise

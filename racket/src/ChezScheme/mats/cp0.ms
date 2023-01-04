@@ -367,8 +367,21 @@
                 (begin (b) (c)))
             (x)
             (y))))
-  (error? (apply zero? 0))
-  (error? (if (apply eof-object 1 2) 3 4))
+   (error? (apply zero? 0))
+   (error? (if (apply eof-object 1 2) 3 4))
+  ; test for folding of multiple-value primitives
+   (equivalent-expansion?
+     (expand/optimize '(lambda () (div-and-mod 7 3)))
+     '(lambda () (#3%values 2 1)))
+   (equivalent-expansion?
+     (expand/optimize '(lambda () (exact-integer-sqrt 19)))
+     '(lambda () (#3%values 4 3)))
+   (equivalent-expansion?
+     (expand/optimize
+       '(call-with-values
+          (lambda () (div-and-mod 7 3))
+          (lambda (x y) (#2%cons (* x 10) (/ y 10)))))
+     '(#2%cons 20 1/10))
 
   (equivalent-expansion?
    (expand/optimize '(lambda (t) (#3%$value (if t 1 (values 3 3 3))) #t))
@@ -3191,6 +3204,7 @@
                                                    (abort 'oops)
                                                    (#3%$app/no-return f))])))
    (or (not (enable-cp0))
+       (#%$suppress-primitive-inlining)
        (eq? (current-eval) interpret)
        (let ([mk (make-wrapper-procedure
                   (lambda (x)
@@ -3392,4 +3406,28 @@
     (not (parameter-porentially-inlined)))
   (eq? (void) (parameter-porentially-inlined 'other))
   (eq? 'other (parameter-porentially-inlined))
+  )
+
+(cp0-mat cp0-continuation-marks
+    (equivalent-expansion?
+     (expand/optimize '(with-continuation-mark 'x 'y 10))
+     '10)
+    (equivalent-expansion?
+     (expand/optimize '(with-continuation-mark (go-get-x) 'y 10))
+     (if (eqv? (optimize-level) 3)
+         '(begin (go-get-x) 10)
+         '(begin (#3%$value (go-get-x)) 10)))
+    (equivalent-expansion?
+     (expand/optimize '(with-continuation-mark 'x (go-get-y) 10))
+     (if (eqv? (optimize-level) 3)
+         '(begin (go-get-y) 10)
+         '(begin (#3%$value (go-get-y)) 10)))
+    (equivalent-expansion?
+     (expand/optimize '(lambda (z) (with-continuation-mark 'x 'y z)))
+     '(lambda (z) z))
+    (equivalent-expansion?
+     (expand/optimize '(lambda (z) (with-continuation-mark 'x 'y (values z z z))))
+     (if (eqv? (optimize-level) 3)
+         '(lambda (z) (#3%values z z z))
+         '(lambda (z) (#2%values z z z))))
   )

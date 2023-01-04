@@ -47,6 +47,7 @@
                         [(#\*) (cons #\s rest)]
                         [(#\=) (cons* #\e #\q #\l rest)]
                         [(#\?) (cons #\p rest)]
+                        [(#\$) (cons* #\s #\y #\s #\_ rest)]
                         [else (cons x rest)]))
           '()
           (string->list (symbol->string x))))))
@@ -167,7 +168,7 @@
                 (ash n -24)
                 (logand (ash n -16) 255)
                 (logand (ash n -8) 255)))
-          (format "~d.~d.~d.~d"
+          (format "~d.~d.~d-pre-release.~d"
             (ash n -24)
             (logand (ash n -16) 255)
             (logand (ash n -8) 255)
@@ -279,6 +280,8 @@
         (deftotypep "Sbytevectorp" ($ mask-bytevector) ($ type-bytevector))
         (deftotypep "Sstringp" ($ mask-string) ($ type-string))
         (deftotypep "Sstencil_vectorp" ($ mask-stencil-vector) ($ type-stencil-vector))
+        (deftotypep "Ssystem_stencil_vectorp" ($ mask-sys-stencil-vector) ($ type-sys-stencil-vector))
+        (deftotypep "Sany_stencil_vectorp" ($ mask-any-stencil-vector) ($ type-any-stencil-vector))
         (deftotypep "Sbignump" ($ mask-bignum) ($ type-bignum))
         (deftotypep "Sboxp" ($ mask-box) ($ type-box))
         (deftotypep "Sinexactnump" ($ mask-inexactnum) ($ type-inexactnum))
@@ -696,7 +699,7 @@
             (pr "                        \"lwz ~ar0, 0(%0)\\n\\t\"\\~%" reg)   ;  try a non-reserved load to see if we are likely to succeed
             (pr "                        \"cmpwi ~ar0, 0\\n\\t\"\\~%" reg)     ;  if it is = 0, try to acquire at start
             (pr "                        \"beq 0b\\n\\t\"\\~%")                ;
-            (pr "                        \"b 1b\\n\\t\"\\~%")                  ;  othwerise loop through the try again
+            (pr "                        \"b 1b\\n\\t\"\\~%")                  ;  otherwise loop through the try again
             (pr "                        \"2:\\n\\t\"\\~%")                    ; done:
             (pr "                        :                \\~%")
             (pr "                        : \"b\" (addr)\\~%")
@@ -906,6 +909,78 @@
                (pr "                        : \"cc\", \"memory\", \"x12\", \"x7\");\\~%")
                (pr "  ret = _return_;\\~%")
                (pr "  } while (0)~%")))]
+          [(riscv64)
+           (pr "#define INITLOCK(addr) \\~%")
+           (pr "  __asm__ __volatile__ (\"li t0, 0\\n\\t\" \\~%")
+           (pr "                        \"sd t0, (%0)\\n\\t\" \\~%")
+           (pr "                        : \\~%")
+           (pr "                        : \"r\" (addr)  \\~%")
+           (pr "                        : \"memory\", \"t0\")~%")
+
+           (nl)
+           (pr "#define SPINLOCK(addr) \\~%")
+           (pr "  __asm__ __volatile__ (\"1:\\n\\t\" \\~%")
+           (pr "                        \"lr.d t0, (%[Addr])\\n\\t\" \\~%")
+           (pr "                        \"bne  t0, zero, 2f\\n\\t\" \\~%")
+           (pr "                        \"li   t0, 1\\n\\t\" \\~%")
+           (pr "                        \"sc.d t1, t0, (%[Addr])\\n\\t\" \\~%")
+           (pr "                        \"beq  t1, zero, 3f\\n\\t\" \\~%")
+           (pr "                        \"2:\\n\\t\" \\~%")
+           (pr "                        \"ld   t0, (%[Addr])\\n\\t\" \\~%")
+           (pr "                        \"beq  t0, zero, 1b\\n\\t\" \\~%")
+           (pr "                        \"j 2b\\n\\t\" \\~%")
+           (pr "                        \"3:\\n\\t\" \\~%")
+           (pr "                        : \\~%")
+           (pr "                        : [Addr] \"r\" (addr) \\~%")
+           (pr "                        : \"memory\", \"t0\", \"t1\")~%")
+
+           (nl)
+           (pr "#define UNLOCK(addr) \\~%")
+           (pr "  __asm__ __volatile__ (\"li t0, 0\\n\\t\" \\~%")
+           (pr "                        \"sd t0, (%0)\\n\\t\" \\~%")
+           (pr "                        : \\~%")
+           (pr "                        : \"r\" (addr) \\~%")
+           (pr "                        : \"memory\", \"t0\")~%")
+
+           (nl)
+           (pr "#define LOCKED_INCR(addr, ret) \\~%")
+           (pr "  do { \\~%")
+           (pr "    long _return_; \\~%")
+           (pr "    __asm__ __volatile__ (\"li %0, 0\\n\\t\" \\~%")
+           (pr "                          \"1:\\n\\t\" \\~%")
+           (pr "                          \"lr.d t0, (%1)\\n\\t\" \\~%")
+           (pr "                          \"addi t0, t0, 1\\n\\t\" \\~%")
+           (pr "                          \"sc.d t1, t0, (%1)\\n\\t\" \\~%")
+           (pr "                          \"bne  t1, zero, 1b\\n\\t\" \\~%")
+           (pr "                          \"bne  t0, zero, 2f\\n\\t\" \\~%")
+           (pr "                          \"li   %0, 1\\n\\t\" \\~%")
+           (pr "                          \"2:\\n\\t\" \\~%")
+           (pr "                          : \"=&r\" (_return_) \\~%")
+           (pr "                          : \"r\" (addr) \\~%")
+           (pr "                          : \"memory\", \"t0\", \"t1\" \\~%")
+           (pr "                          ); \\~%")
+           (pr "    ret = _return_; \\~%")
+           (pr "  } while (0)~%")
+
+           (nl)
+           (pr "#define LOCKED_DECR(addr, ret) \\~%")
+           (pr "  do { \\~%")
+           (pr "    long _return_; \\~%")
+           (pr "    __asm__ __volatile__ (\"li %0, 0\\n\\t\" \\~%")
+           (pr "                          \"1:\\n\\t\" \\~%")
+           (pr "                          \"lr.d t0, (%1)\\n\\t\" \\~%")
+           (pr "                          \"addi t0, t0, -1\\n\\t\" \\~%")
+           (pr "                          \"sc.d t1, t0, (%1)\\n\\t\" \\~%")
+           (pr "                          \"bne  t1, zero, 1b\\n\\t\" \\~%")
+           (pr "                          \"bne  t0, zero, 2f\\n\\t\" \\~%")
+           (pr "                          \"li   %0, 1\\n\\t\" \\~%")
+           (pr "                          \"2:\\n\\t\" \\~%")
+           (pr "                          : \"=&r\" (_return_) \\~%")
+           (pr "                          : \"r\" (addr) \\~%")
+           (pr "                          : \"memory\", \"t0\", \"t1\" \\~%")
+           (pr "                          ); \\~%")
+           (pr "    ret = _return_; \\~%")
+           (pr " } while (0)~%")]
           [(pb)
            (pr "#define INITLOCK(addr) (*((long *) addr) = 0)~%")
            (pr "#define UNLOCK(addr) (*((long *) addr) = 0)~%")

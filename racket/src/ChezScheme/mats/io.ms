@@ -535,7 +535,7 @@
  )
 
 (if (case (machine-type)
-     [(pb) #t]
+     [(pb tpb) #t]
      [else (embedded?)])
     (mat iconv-codec
       (error? (errorf 'iconv-codec "-73 is not a string"))
@@ -1049,7 +1049,7 @@
           (newline op)
           (close-port op)))
       ; NB: keep this last among the iconv-codec mats
-      ; close any files left open by failing iconv tests.  this is particulary
+      ; close any files left open by failing iconv tests.  this is particularly
       ; important on windows when the iconv dll isn't available and where keeping
       ; file open can prevent it from being reopened.
       (begin (collect (collect-maximum-generation)) #t)
@@ -5008,3 +5008,76 @@
   (error? ($readit #t "#!no-fold-case #\\newLine"))
   (error? ($readit #f "#!no-fold-case #\\newLine"))
 )
+
+(mat print-parameters
+  (error? (print-precision "off"))
+  (error? (print-select-flonum-exponential-format #f))
+  (error? (print-select-flonum-exponential-format 0))
+
+  (equal? (parameterize ([print-subnormal-precision 'anything])
+            (print-subnormal-precision))
+          #t)
+  (equal? (parameterize ([print-positive-exponent-sign 'anything])
+            (print-positive-exponent-sign))
+          #t)
+
+  (equal? (number->string 0.0)
+          "0.0")
+  (equal? (parameterize ([print-precision 32])
+            (number->string 0.0))
+          "0.0|32")
+  (equal? (number->string 3.14)
+          "3.14")
+  (equal? (parameterize ([print-precision 32])
+            (number->string 3.14))
+          "3.14|53")
+  (equal? (number->string 1e-310) "1e-310|45")
+  (equal? (parameterize ([print-subnormal-precision #f])
+            (number->string 1e-310))
+          "1e-310")
+
+  (equal? (number->string 3.2e20)
+          "3.2e20")
+  (equal? (parameterize ([print-positive-exponent-sign #t])
+            (number->string 3.2e20))
+          "3.2e+20")
+
+  (equal? (number->string 1e9)
+          "1000000000.0")
+  (equal? (number->string 1e10)
+          "1e10")
+  (equal? (parameterize ([print-select-flonum-exponential-format (lambda (radix exp n-digits) #f)])
+            (number->string 1e10))
+          "10000000000.0")
+  (equal? (parameterize ([print-select-flonum-exponential-format (lambda (radix exp n-digits) #t)])
+            (number->string 1e2))
+          "1e2")
+  (equal? (parameterize ([print-select-flonum-exponential-format (lambda (radix exp n-digits) #t)])
+            (number->string 0.0))
+          "0e0")
+  (equal? (parameterize ([print-select-flonum-exponential-format (lambda (radix exp n-digits) #t)])
+            (number->string -0.0))
+          "-0e0")
+  (equal? (parameterize ([print-select-flonum-exponential-format (lambda (radix exp n-digits)
+                                                                   (unless (= radix 10) (error 'choose "wrong radix"))
+                                                                   (unless (= exp 0) (error 'choose "wrong exponent"))
+                                                                   (unless (= n-digits 3) (error 'choose "wrong digits"))
+                                                                   #f)])
+            (number->string 3.14))
+          "3.14")
+  (equal? (parameterize ([print-select-flonum-exponential-format (lambda (radix exp n-digits)
+                                                                   (unless (= radix 10) (error 'choose "wrong radix"))
+                                                                   (unless (= exp -5) (error 'choose "wrong exponent"))
+                                                                   (unless (= n-digits 3) (error 'choose "wrong digits"))
+                                                                   #f)])
+            (number->string 314e-7))
+          "0.0000314")
+  (equal? (parameterize ([print-select-flonum-exponential-format (lambda (radix exp n-digits)
+                                                                   (unless (= radix 8) (error 'choose "wrong radix"))
+                                                                   (unless (= exp -5) (error 'choose "wrong exponent"))
+                                                                   (unless (= n-digits 19) (error 'choose "wrong digits ~s" n-digits))
+                                                                   #f)])
+            (number->string 314e-7 8))
+          "0.00001016633744345556774")
+  
+  )

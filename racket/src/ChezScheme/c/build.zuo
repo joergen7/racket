@@ -6,7 +6,7 @@
 (provide-targets targets-at)
 
 (define (targets-at at-dir [vars (hash)])
-  (define config (win-config (config-file->hash (at-dir "../Mf-config") vars)))
+  (define config (win-config (config-file->hash (at-dir "../Mf-config") vars) at-dir))
   (define lookup (make-lookup config))
 
   (define m (hash-ref config 'm))
@@ -32,7 +32,10 @@
     (if msvc? 
         (build-path ".." (if (as-scheme-dll? config) "bin" "boot") m 
                     (~a (or (lookup 'kernelLibName)
-                            (~a "csv" (get-dll-version) (if (as-runtime-dll? config) "md" "mt")))
+                            (~a "csv" (get-dll-version)
+                                (if (as-just-dll? config)
+                                    (if (as-runtime-dll? config) "md" "mt")
+                                    "")))
                         ".lib"))
         lib))
 
@@ -46,14 +49,17 @@
              (or-windows "i3le.c"))]
       [(string=? arch "arm32")
        (cons "ARMV6"
-             "arm32le.c")]
+             "clearcache.c")]
       [(string=? arch "arm64")
        (cons "AARCH64"
-             (or-windows "arm32le.c"))]
+             (or-windows "clearcache.c"))]
       [(string=? arch "ppc32")
        (cons "PPC32"
              "ppc32.c")]
-      [(glob-match? "pb*" "pb")
+      [(string=? arch "rv64")
+       (cons "RISCV64"
+             "clearcache.c")]
+      [(glob-match? "pb*" arch)
        (cons "PORTABLE_BYTECODE"
              "pb.c")]
       [else (error "unrecognized arch")]))
@@ -131,9 +137,12 @@
 
   (define gc-wrap (list (at-source "gc.c")))
 
-  (define exe (at-dir (build-path "../bin" m (if (for-windows? config)
-                                                 "scheme.exe"
-                                                 (config-.exe config "scheme")))))
+  (define (exe-path name)
+    (at-dir (build-path "../bin" m (if (for-windows? config)
+                                       (~a name ".exe")
+                                       (config-.exe config name)))))
+  (define exe (exe-path "scheme"))
+  (define petite-exe (exe-path "petite"))
   (define kernel-lib (at-dir (or-windows-lib (build-path "../boot" m (.a "kernel")))))
   (define kernel.o (at-dir (build-path "../boot" m "kernel.o")))
   (define kernel-dep (if (equal? (lookup 'Kernel) "KernelO")
@@ -200,7 +209,7 @@
                               env)
                      env)))
              (hash-ref (runtime-env) 'env)
-             '(CC CFLAGS AR ARFLAGS RANLIB LDFLAGS))))
+             '(CC CFLAGS AR ARFLAGS RANLIB STRIP LDFLAGS))))
 
   (define (add-to-env vars env)
     (foldl (lambda (var=val env)
@@ -209,8 +218,14 @@
            env
            (shell->strings vars)))
 
+  (define (lookup-make)
+    (let ([make (or (lookup 'MAKE) "")])
+      (if (equal? make "")
+          "make"
+          make)))
+
   (make-targets
-   `([:target build (,exe revision)
+   `([:target build (,exe ,petite-exe revision)
               ,void]
 
      [:target ,exe (,kernel-dep ,@main-objs ,@res-deps ,@preload-files)
@@ -226,6 +241,15 @@
                          (let* ([config (config-merge (add-preloads config preload-files)
                                                       'LDFLAGS
                                                       (or (lookup 'mdlinkflags) ""))]
+				[config (if (and (for-windows? config)
+						 (not (is-msvc? config)))
+					    (config-merge config
+							  'LDFLAGS
+							  ;; for tests, at least:
+							  (~a "-Wl,--out-implib="
+							      (string->shell
+							       (at-dir "../boot" m "schemeexe.lib"))))
+					    config)]
                                 [config (if zlib-system-lib
                                             (config-merge config 'LIBS zlib-system-lib)
                                             config)]
@@ -240,8 +264,17 @@
                                 (string->shell (~a "-outputresource:" path ";1")))]
                    [else
                     (define post (lookup 'exePostStep))
-                    (when post
+                    (when (and post
+                               (not (equal? "" post)))
                       (shell/wait post (string->shell exe)))]))]
+
+     [:target ,petite-exe (,exe)
+              ,(lambda (path token)
+                 (rm* path)
+                 (cp/ln exe path)
+                 (when msvc?
+                   (cp/ln (path-replace-extension exe ".pdb")
+                          (path-replace-extension path ".pdb"))))]
 
      ;; for Windows linking variants:
      [:target lib (,kernel-dep ,@main-objs)
@@ -259,6 +292,7 @@
                                (config-merge config 'LDFLAGS
                                              "/LD"))]
                    [else
+                    (rm* path) ; in case an object needs to be removed
                     (c-ar path
                           kernel-objs
                           config)]))]
@@ -294,7 +328,8 @@
                                         (string->shell (~a "CFLAGS=" (hash-ref config 'CFLAGS)))
                                         (string->shell (~a "AR=" (hash-ref config 'AR)))
                                         (string->shell (~a "RANLIB=" (hash-ref config 'RANLIB)))
-                                        (string->shell (~a "RC=" (hash-ref config 'WINDRES))))
+                                        (string->shell (~a "RC=" (hash-ref config 'WINDRES)))
+                                        (string->shell (~a "STRIP=" (hash-ref config 'STRIP))))
                            "\n")
                        (build-path zlib-dir "Makefile")
                        :truncate)]
@@ -305,8 +340,7 @@
                                               (hash-ref config 'zlibConfigureEnv "")
                                               (config-to-env))
                                         'desc "libz configure"))])
-                   (shell/wait (hash-ref config 'MAKE "make")
-                               "static"
+                   (shell/wait (lookup-make) "static"
                                (hash 'dir zlib-dir
                                      'desc "zlib make"))]))]
 
@@ -318,7 +352,7 @@
 		  [msvc?
 		   ((dynamic-require (at-source "winlib.zuo") 'build-lz4) lz4-lib-dir config)]
 		  [else
-                   (shell/wait (hash-ref config 'MAKE "make") "liblz4.a"
+                   (shell/wait (lookup-make) "liblz4.a"
                                (hash 'dir lz4-lib-dir
                                      'env (config-to-env)
                                      'desc "lz4 make"))]))]
@@ -354,14 +388,14 @@
                            (compile-one .c .o))])
             main-srcs main-objs)
 
-     [:depend ,(.c->.o "scheme.c") (,(at-source "itest.c"))]
-     [:depend ,(.c->.o "gc-011.c") (,@gc-wrap ,(at-mach "gc-ocd.inc"))]
-     [:depend ,(.c->.o "gc-ocd.c") (,@gc-wrap ,(at-mach "gc-ocd.inc"))]
-     [:depend ,(.c->.o "gc-oce.c") (,@gc-wrap ,(at-mach "gc-oce.inc"))]
-     [:depend ,(.c->.o "gc-par.c") (,@gc-wrap ,(at-mach "gc-par.inc"))]
-     [:depend ,(.c->.o "gcwrapper.c") (,(at-mach "heapcheck.inc"))]
+     [:depend ,(at-dir (.c->.o "scheme.c")) (,(at-source "itest.c"))]
+     [:depend ,(at-dir (.c->.o "gc-011.c")) (,@gc-wrap ,(at-mach "gc-ocd.inc"))]
+     [:depend ,(at-dir (.c->.o "gc-ocd.c")) (,@gc-wrap ,(at-mach "gc-ocd.inc"))]
+     [:depend ,(at-dir (.c->.o "gc-oce.c")) (,@gc-wrap ,(at-mach "gc-oce.inc"))]
+     [:depend ,(at-dir (.c->.o "gc-par.c")) (,@gc-wrap ,(at-mach "gc-par.inc"))]
+     [:depend ,(at-dir (.c->.o "gcwrapper.c")) (,(at-mach "heapcheck.inc"))]
 
-     [:depend ,(.c->.o "pb.c") (,(at-source "pb.h"))]
+     [:depend ,(at-dir (.c->.o "pb.c")) (,(at-source "pb.h"))]
 
      [:target ,res-file (,(at-source "scheme.rc"))
               ,(lambda (path token)
@@ -384,6 +418,10 @@
                                   "#define DISABLE_X11"))
                        (line (and (equal? (hash-ref config 'enablelibffi #f) "yes")
                                   "#define ENABLE_LIBFFI"))
+                       (line (and (not (for-windows? config))
+                                  (let ([s (hash-ref config 'InstallLib #f)])
+                                    (and s
+                                         (~a "#define DEFAULT_HEAP_PATH \"" s "/csv%v/%m\"")))))
                        (line (let ([alwaysUseBootFile
                                     (or (and (not (equal? (hash-ref config 'alwaysUseBootFile "") "")))
                                         (infer-always-use-boot-file preload-files))])
@@ -399,9 +437,10 @@
                    (make-run-scheme at-source at-dir lookup
                                     #f (at-dir "..") m))
                  (call-with-scheme
-                  (lambda (scheme.exe env)
-                    (process scheme.exe args (hash 'env env
-                                                   'exec? (eq? 'unix (system-type)))))))
+                  (lambda (scheme.exe scheme-args env)
+                    (process scheme.exe scheme-args args
+                             (hash 'env env
+                                   'exec? (eq? 'unix (system-type)))))))
               :command]
 
      [:target revision ()
@@ -433,7 +472,7 @@
 (define (is-msvc? config)
   (eq? 'windows (hash-ref (runtime-env) 'toolchain-type)))
 
-(define (win-config config)
+(define (win-config config at-dir)
   (cond
     [(is-msvc? config)
      (let* ([config (hash-set config 'CFLAGS
@@ -444,7 +483,8 @@
                                   (if (as-scheme-dll? config)
                                       ""
                                       " /DSCHEME_STATIC")
-                                  " /Ox /W3 /Zi /DWIN32 /D_CRT_SECURE_NO_WARNINGS"
+                                  " /Ox /W3 /DWIN32 /D_CRT_SECURE_NO_WARNINGS"
+                                  " /Zi /FS /Fd" (string->shell (at-dir "scheme.pdb"))
                                   (if (glob-match? "pb*" (hash-ref config 'm))
                                       " /DFEATURE_WINDOWS"
                                       "")))]
@@ -458,17 +498,23 @@
 
 (define (exe-config arch config)
   (cond
-    [(is-msvc? config)
+    [(for-windows? config)
      (cond
        [(string=? arch "arm64")
         (config-merge config 'LDFLAGS
-                      "/link /STACK:0x1000000")]
+                      (if (is-msvc? config)
+                          "/link /STACK:0x1000000"
+                          "-Wl,--stack,16777216"))]
        [(string=? arch "a6")
         (config-merge config 'LDFLAGS
-                      "/link /STACK:0x1000000")]
-       [(string=? arch "arm64")
+                      (if (is-msvc? config)
+                          "/link /STACK:0x1000000"
+                          "-Wl,--stack,16777216"))]
+       [(string=? arch "i3")
         (config-merge config 'LDFLAGS
-                      "/link /STACK:0x800000")]
+                      (if (is-msvc? config)
+                          "/link /STACK:0x800000"
+                          "-Wl,--stack,8388608"))]
        [else config])]
     [else config]))
 
@@ -481,6 +527,10 @@
 (define (as-scheme-dll? config)
   (not (equal? (hash-ref config 'linkAs #f)
                "exe")))
+
+(define (as-just-dll? config)
+  (equal? (hash-ref config 'productAs #f)
+          "dll"))
 
 (define (for-windows? config)
   (or (is-msvc? config)
@@ -516,7 +566,9 @@
 (define (get-preload-files config at-dir mboot)
   (define preload-files
     (map (lambda (path)
-           (at-dir "../.." path))
+           (if (relative-path? path)
+               (at-dir "../.." path)
+               path))
          (shell->strings (hash-ref config 'preloadBootFiles ""))))
   (cond
     [(null? preload-files) '()]

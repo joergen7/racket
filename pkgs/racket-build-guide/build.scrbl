@@ -142,9 +142,9 @@ The @filepath{racket} directory contains minimal Racket, which is just
 enough to run @exec{raco pkg} to install everything else. A first step
 of @exec{make in-place} or @exec{make unix-style} is to build minimal
 Racket, and you can read @filepath{racket/src/README.txt} for more
-information. (The very first step of a build is to compile Zuo, which
-is a tiny variant of Racket that @seclink["zuo"]{drives the rest of
-the build system}.)
+information, including information about dependencies. (The very first
+step of a build is to compile Zuo, which is a tiny variant of Racket
+that @seclink["zuo"]{drives the rest of the build system}.)
 
 If you would like to provide arguments to @exec{configure} for the
 minimal Racket build, then you can supply them with by adding
@@ -222,7 +222,7 @@ downloaded from a separate Git repository by @exec{make}. If you have
 Racket v7.1 or later, then you can choose instead to bootstrap using
 that Racket implementation with
 
-@commandline{make cs RACKET_FOR_BOOTFILES=racket}
+@commandline{make cs BOOTFILE_RACKET=racket}
 
 The @exec{make bc} target (or @exec{make bc-as-is} for a rebuild) builds an older
 variant of Racket, called Racket BC, which does not use Chez Scheme.

@@ -800,10 +800,10 @@
     (cptypes-equivalent-expansion?
      `(let ()
         (define-record I (a))
-        (define A (make-record-type-descriptor* 'a #f #f #f #f 1 0))
+        (define A (make-record-type-descriptor 'a #f #f #f #f '(1 . 0)))
         (lambda (x) (and ((record-predicate A) x) (I? x))))
      `(begin
-        (make-record-type-descriptor* 'a #f #f #f #f 1 0)
+        (make-record-type-descriptor 'a #f #f #f #f '(1 . 0))
         (lambda (x) #f))))
 )
 
@@ -1494,24 +1494,24 @@
    '(let ([x #f]) (case-lambda [() x] [(y) (error 'x "no")])))
 
   (cptypes-equivalent-expansion?
-   '(lambda (x) (+ (call-setting-continuation-attachment 'a (lambda () (error 'x "no"))) 1))
-   '(lambda (x) (#%$value (call-setting-continuation-attachment 'a (lambda () (error 'x "no"))))))
+   '(lambda (x) (+ (#%$call-setting-continuation-attachment 'a (lambda () (error 'x "no ~s" a))) 1))
+   '(lambda (x) (#%$value (#%$call-setting-continuation-attachment 'a (lambda () (error 'x "no ~s" a))))))
   (not
    (cptypes-equivalent-expansion?
-    '(lambda (x) (+ (call-setting-continuation-attachment 'a (lambda () (error 'x "no"))) 1))
-    '(lambda (x) (call-setting-continuation-attachment 'a (lambda () (error 'x "no"))))))
+    '(lambda (x) (+ (#%$call-setting-continuation-attachment 'a (lambda () (error 'x "no ~s" a))) 1))
+    '(lambda (x) (#%$call-setting-continuation-attachment 'a (lambda () (error 'x "no ~s" a))))))
   (cptypes-equivalent-expansion?
-   '(lambda (x) (+ (call-getting-continuation-attachment 'a (lambda (a) (error 'x "no"))) 1))
-   '(lambda (x) (#%$value (call-getting-continuation-attachment 'a (lambda (a) (error 'x "no"))))))
+   '(lambda (x) (+ (#%$call-getting-continuation-attachment 'a (lambda (a) (error 'x "no ~s" a))) 1))
+   '(lambda (x) (#%$value (#%$call-getting-continuation-attachment 'a (lambda (a) (error 'x "no ~s" a))))))
   (not
    (cptypes-equivalent-expansion?
-    '(lambda (x) (+ (call-getting-continuation-attachment 'a (lambda (a) (error 'x "no"))) 1))
-    '(lambda (x) (call-getting-continuation-attachment 'a (lambda (a) (error 'x "no"))))))
+    '(lambda (x) (+ (#%$call-getting-continuation-attachment 'a (lambda (a) (error 'x "no ~s" a))) 1))
+    '(lambda (x) (#%$call-getting-continuation-attachment 'a (lambda (a) (error 'x "no ~s" a))))))
   (cptypes-equivalent-expansion?
-   '(lambda (x) (+ (call-consuming-continuation-attachment 'a (lambda (a) (error 'x "no"))) 1))
-   '(lambda (x) (#%$value (call-consuming-continuation-attachment 'a (lambda (a) (error 'x "no"))))))
+   '(lambda (x) (+ (#%$call-consuming-continuation-attachment 'a (lambda (a) (error 'x "no ~s" a))) 1))
+   '(lambda (x) (#%$value (#%$call-consuming-continuation-attachment 'a (lambda (a) (error 'x "no ~s" a))))))
   (not
    (cptypes-equivalent-expansion?
-    '(lambda (x) (+ (call-consuming-continuation-attachment 'a (lambda (a) (error 'x "no"))) 1))
-    '(lambda (x) (call-consuming-continuation-attachment 'a (lambda (a) (error 'x "no"))))))
+    '(lambda (x) (+ (#%$call-consuming-continuation-attachment 'a (lambda (a) (error 'x "no ~s" a))) 1))
+    '(lambda (x) (#%$call-consuming-continuation-attachment 'a (lambda (a) (error 'x "no ~s" a))))))
 )

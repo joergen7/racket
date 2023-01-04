@@ -94,12 +94,16 @@ BOOTFILE_RACKET =
 # this path can be relative to the cross build directory
 CS_HOST_WORKAREA_PREFIX =
 
+# For building Zuo:
+CC_FOR_BUILD = $(CC) -O2
+CFLAGS_FOR_BUILD =
+
 # ------------------------------------------------------------
 # Racket CS boot files
 
 # This branch name must be changed each time the pb boot files are
 # updated:
-PB_BRANCH = circa-8.5.0.2-2
+PB_BRANCH = v9.9.9-pre-release.14
 PB_REPO = https://github.com/racket/pb
 
 # Set to empty for Git before v1.7.10:
@@ -162,6 +166,7 @@ RACKETCS_SUFFIX =
 # ------------------------------------------------------------
 # Build targets
 
+# Using `$(MAKE)` instead of `"$(MAKE)"` to work with Windows and NMAKE
 BUILD_VARS = MAKE=$(MAKE) \
              VM="$(VM)" \
              JOBS="$(JOBS)" \
@@ -171,7 +176,7 @@ BUILD_VARS = MAKE=$(MAKE) \
              CS_CROSS_SUFFIX="$(CS_CROSS_SUFFIX)" \
              RACKET="$(RACKET)" \
              PLAIN_RACKET="$(PLAIN_RACKET)" \
-             RACKET_FOR_BOOTFILES="$(RACKET_FOR_BOOTFILES)" \
+             BOOTFILE_RACKET="$(BOOTFILE_RACKET)" \
              CS_HOST_WORKAREA_PREFIX="$(CS_HOST_WORKAREA_PREFIX)" \
              PB_BRANCH="$(PB_BRANCH)" \
              PB_REPO="$(PB_REPO)" \
@@ -255,6 +260,12 @@ clean:
 	@echo "No makefile support for cleaning. Instead, try"
 	@echo "  git clean -d -x -f ."
 	@exit 1
+
+# ------------------------------------------------------------
+# Linking all packages (development mode; not an installer build)
+
+pkgs-catalog: $(ZUO)
+	$(RUN_ZUO) pkgs-catalog $(BUILD_VARS)
 
 # ------------------------------------------------------------
 # Configuration options for building installers
@@ -620,7 +631,7 @@ ping: $(ZUO)
 
 racket/src/build/bin/zuo: racket/src/zuo/zuo.c
 	mkdir -p racket/src/build/bin
-	$(CC) $(CFLAGS) -O2 -DZUO_LIB_PATH='"../../zuo/lib"' -o $(ZUO) racket/src/zuo/zuo.c
+	$(CC_FOR_BUILD) $(CFLAGS_FOR_BUILD) -DZUO_LIB_PATH='"../../zuo/lib"' -o $(ZUO) racket/src/zuo/zuo.c
 
 racket\src\build\zuo.exe: racket\src\zuo\zuo.c
 	IF NOT EXIST racket\src\build cmd /c mkdir racket\src\build

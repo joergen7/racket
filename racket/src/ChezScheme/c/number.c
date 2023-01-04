@@ -781,8 +781,7 @@ static void big_short_trunc(ptr tc, ptr x, bigit s, iptr xl, IBOOL qs, IBOOL rs,
   if (r != (ptr *)NULL) *r = copy_normalize(tc, &k,1,rs);
 }
 
-static void big_trunc(tc, x, y, xl, yl, qs, rs, q, r)
-              ptr tc, x, y; iptr xl, yl; IBOOL qs, rs; ptr *q, *r; {
+static void big_trunc(ptr tc, ptr x, ptr y, iptr xl, iptr yl, IBOOL qs, IBOOL rs, ptr *q, ptr *r) {
   iptr i;
   bigit *p, *xp, *yp;
   iptr m = xl-yl+1;
@@ -1042,15 +1041,15 @@ floating-point operations
 
 #ifdef IEEE_DOUBLE
 /* exponent stored + 1024, hidden bit to left of decimal point */
-#define bias 1023
-#define bitstoright 52
-#define m1mask 0xf
-#ifdef WIN32
-#define hidden_bit 0x10000000000000
-#else
-#define hidden_bit 0x10000000000000ULL
-#endif
-#ifdef LITTLE_ENDIAN_IEEE_DOUBLE
+# define bias 1023
+# define bitstoright 52
+# define m1mask 0xf
+# ifdef WIN32
+#  define hidden_bit 0x10000000000000
+# else
+#  define hidden_bit 0x10000000000000ULL
+# endif
+# ifdef LITTLE_ENDIAN_IEEE_DOUBLE
 struct dblflt {
     UINT m4: 16;
     UINT m3: 16;
@@ -1059,7 +1058,7 @@ struct dblflt {
     UINT e: 11;
     UINT sign: 1;
 };
-#else
+# else
 struct dblflt {
     UINT sign: 1;
     UINT e: 11;
@@ -1068,7 +1067,7 @@ struct dblflt {
     UINT m3: 16;
     UINT m4: 16;
 };
-#endif
+# endif
 #endif
 
 double S_random_double(U32 m1, U32 m2, U32 m3, U32 m4, double scale) {
@@ -1493,7 +1492,8 @@ ptr S_big_positive_bit_field(ptr x, ptr fxstart, ptr fxend) {
 }
 
 /* returns a lower bound on the number of trailing 0 bits in the
-   binary representation: */
+   binary representation; the result plus bigit_bits-1 is an
+   upper bound: */
 ptr S_big_trailing_zero_bits(ptr x) {
   bigit *xp = &BIGIT(x, 0);
   iptr xl = BIGLEN(x), i;

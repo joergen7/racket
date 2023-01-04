@@ -1,6 +1,6 @@
 # Process this file with autoconf to produce a configure script.
 AC_INIT([Zuo],
-        [1],
+        [1.0],
         [https://github.com/racket/racket/issues],
         [],
         [https://github.com/racket/zuo])
@@ -24,6 +24,19 @@ AS_IF([test "x$enable_embed" = xno],
 
 AC_PROG_MAKE_SET()
 AC_PROG_CC
+
+if test "${CC_FOR_BUILD}" = ""; then
+  CC_FOR_BUILD='$(CC) -O2'
+  CPPFLAGS_FOR_BUILD='$(CPPFLAGS)'
+  CFLAGS_FOR_BUILD='$(CFLAGS)'
+  LDFLAGS_FOR_BUILD='$(LDFLAGS)'
+  LIBS_FOR_BUILD='$(LIBS)'
+fi
+AC_ARG_VAR(CC_FOR_BUILD,[build system C compiler command])
+AC_ARG_VAR(CFLAGS_FOR_BUILD,[build system C compiler flags])
+AC_ARG_VAR(LDFLAGS_FOR_BUILD,[build system linker flags])
+AC_ARG_VAR(LIBS_FOR_BUILD,[build system libraries for linker])
+AC_ARG_VAR(CPPFLAGS_FOR_BUILD,[build system preprocessor flags])
 
 AC_SUBST(EMBED_LIBS)
 AC_MSG_NOTICE([zuo libraries to embed: "${EMBED_LIBS}"])

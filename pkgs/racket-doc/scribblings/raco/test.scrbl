@@ -131,7 +131,7 @@ The @exec{raco test} command accepts several flags:
       operating-system process.}
 
  @item{@Flag{j} @nonterm{n} or @DFlag{jobs} @nonterm{n}
-      --- Runs up to @nonterm{n} tests in parallel.}
+      --- Runs up to @nonterm{n} test files in parallel.}
 
  @item{@DFlag{timeout} @nonterm{seconds}
       --- Sets the default timeout (after which a test counts as failed)
@@ -168,6 +168,10 @@ The @exec{raco test} command accepts several flags:
        stderr output is treated as success as long as it matches any
        one @nonterm{pattern}.}
 
+ @item{@DFlag{errortrace}
+       --- Dynamically loads @racketmodname[errortrace #:indirect]
+       before running the tests. Note that already-compiled files will not
+       include the tracing information.}
  @item{@Flag{y} or @DFlag{make}
        --- Enable automatic
         generation and update of compiled @filepath{.zo} files.
@@ -218,7 +222,8 @@ The @exec{raco test} command accepts several flags:
          #:changed "1.5" @elem{Added @DPFlag{ignore-stderr}.}
          #:changed "1.6" @elem{Added @DPFlag{arg} and @DPFlag{args}.}
          #:changed "1.8" @elem{Added @DFlag{output} and @Flag{o}.}
-         #:changed "1.11" @elem{Added @DFlag{output} and @DFlag{make}/@Flag{y}.}]
+         #:changed "1.11" @elem{Added @DFlag{make}/@Flag{y}.}
+         #:changed "1.12" @elem{Added @DFlag{errortrace}.}]
 
 @section[#:tag "test-config"]{Test Configuration by Submodule}
 

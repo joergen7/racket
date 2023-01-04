@@ -75,7 +75,8 @@
                     (fprintf (mat-output) "Error reading mat input: ")
                     (display-condition c (mat-output))
                     (reset))))
-            (lambda () (load in))))))))
+            (lambda () (load in))))
+        (fprintf (mat-output) "Finished loading mat\n")))))
 
 (define mat-one-exp
   (lambda (expect th sanitize-all?)
@@ -221,18 +222,6 @@
         (lambda (ip) (get-source-table! ip ct +))))))
 
 (set! coverage-table (make-parameter #f))
-
-(set! for-each-mat
-  (lambda (proc mats)
-    ;; this imperative variant of `for-each` is meant to avoid running
-    ;; forever if a continuation somehow gets captured part-way
-    ;; through one mat and restored during a later mat
-    (let loop ()
-      (unless (null? mats)
-        (let ([mat (car mats)])
-          (set! mats (cdr mats))
-          (proc mat)
-          (loop))))))
 
 (set! mat-file
   (lambda (dir)
@@ -475,7 +464,7 @@
       (let* ([stdout-stuff (slurp from-stdout)]
              [stderr-stuff (slurp from-stderr)])
         (when (string=? stderr-stuff "")
-          (printf "$separate-eval command succeeeded with\nSTDERR:\n~a\nSTDOUT:\n~a\nEND\n" stderr-stuff stdout-stuff))
+          (printf "$separate-eval command succeeded with\nSTDERR:\n~a\nSTDOUT:\n~a\nEND\n" stderr-stuff stdout-stuff))
         (unless (string=? stderr-stuff "")
           (printf "$separate-eval command failed with\nSTDERR:\n~a\nSTDOUT:\n~a\nEND\n" stderr-stuff stdout-stuff)
           (errorf who "~a" stderr-stuff))
@@ -523,7 +512,7 @@
   (lambda () #f))
 
 (define pb?
-  (if (memq (machine-type) '(pb tpb pb32 tpb32))
+  (if (memq (machine-type) '(pb pb32l pb32b pb64l pb64b tpb tpb32l tpb32b tpb64l tpb64b))
       (lambda () #t)
       (lambda () #f)))
 

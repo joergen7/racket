@@ -206,7 +206,7 @@
           (annotation-expression x)
           x)))
 
-  (define rtd-ancestors (csv7:record-field-accessor #!base-rtd 'ancestors))
+  (define rtd-ancestry (csv7:record-field-accessor #!base-rtd 'ancestry))
 
   (let ()
     (import (nanopass) np-languages)
@@ -1200,7 +1200,7 @@
          `(letrec ([,x* ,le*] ...) ,body)]
         [(call ,info ,mdcl ,pr ,[e1 'non/none -> e1]
                (case-lambda ,info2 (clause () ,interface ,[body (->in-set mode) -> body])))
-         (guard (and (eq? (primref-name pr) 'call-setting-continuation-attachment)
+         (guard (and (eq? (primref-name pr) '$call-setting-continuation-attachment)
                      (= interface 0)))
          (case mode
            [(non/some tail/some)
@@ -1220,11 +1220,11 @@
             `(seq (attachment-set push ,e1) ,body)])]
         [(call ,info ,mdcl ,pr ,[e1 'non/none -> e1]
                (case-lambda ,info2 (clause (,x) ,interface ,[body])))
-         (guard (and (eq? (primref-name pr) 'call-getting-continuation-attachment)
+         (guard (and (eq? (primref-name pr) '$call-getting-continuation-attachment)
                      (= interface 1)))
          (case mode
            [(non/none tail/none)
-            ;; No surrounding `call-setting-continuation-attachment`
+            ;; No surrounding `$call-setting-continuation-attachment`
             `(let ([,x ,e1]) ,body)]
            [(non/some tail/some)
             ;; Definitely an attachment in place
@@ -1234,15 +1234,15 @@
             `(let ([,x (attachment-get ,(eq? mode 'tail/reified) ,e1)]) ,body)])]
         [(call ,info ,mdcl ,pr ,[e1 'non/none -> e1]
                (case-lambda ,info2 (clause (,x) ,interface ,[body (->in-consume mode) -> body])))
-         (guard (and (eq? (primref-name pr) 'call-consuming-continuation-attachment)
+         (guard (and (eq? (primref-name pr) '$call-consuming-continuation-attachment)
                      (= interface 1)))
-         ;; Currently, `call-consuming-continuation-attachment` in tail position
+         ;; Currently, `$call-consuming-continuation-attachment` in tail position
          ;; reifies the continuation, because we expect it to be combined with
-         ;; `call-setting-continuation-attachment` in `body`. Since the continuation
-         ;; is reified here, `call-setting-continuation-attachment` can simply push.
+         ;; `$call-setting-continuation-attachment` in `body`. Since the continuation
+         ;; is reified here, `$call-setting-continuation-attachment` can simply push.
          (case mode
            [(non/none tail/none)
-            ;; No surrounding `call-setting-continuation-attachment`, but reified if tail
+            ;; No surrounding `$call-setting-continuation-attachment`, but reified if tail
             `(let ([,x ,e1]) ,body)]
            [(non/some tail/some)
             ;; Definitely an attachment in place
@@ -1263,7 +1263,7 @@
                ,[e1 'non/none -> e1]
                (case-lambda ,info2 (clause () ,interface ,[body (->in-set-cont mode #f) -> body])))
          (guard (and (memq mode '(tail tail/none tail/some tail/reified))
-                     (eq? (primref-name pr) 'call-in-continuation)
+                     (memq (primref-name pr) '($call-in-continuation call-in-continuation))
                      (= interface 0)))
          (let ([tmp (make-tmp 'c)])
            `(let ([,tmp ,e1])
@@ -1273,7 +1273,7 @@
                ,[e2 'non/none -> e2] ; new attachments, which must extend continuation's
                (case-lambda ,info2 (clause () ,interface ,[body (->in-set-cont mode #t) -> body])))
          (guard (and (memq mode '(tail tail/none tail/some tail/reified))
-                     (eq? (primref-name pr) 'call-in-continuation)
+                     (eq? (primref-name pr) '$call-in-continuation)
                      (= interface 0)))
          (let ([tmp (make-tmp 'c)]
                [tmp2 (make-tmp 'as)])
@@ -2834,13 +2834,15 @@
         [(call ,info ,mdcl ,pr ,e1 ,[e2 #f -> * fp?2] ,[e3 #f -> * fp?3] ,e4)
          (guard (and (eq? '$object-set! (primref-name pr))
                      (nanopass-case (L7 Expr) e1
-                       [(quote ,d) (eq? d 'double)])))
+                       [(quote ,d) (eq? d 'double)]
+                       [else #f])))
          (Expr e4 #t)
          #f]
         [(call ,info ,mdcl ,pr ,e1 ,[e2 #f -> * fp?2] ,[e3 #f -> * fp?3])
          (guard (and (eq? '$object-ref (primref-name pr))
                      (nanopass-case (L7 Expr) e1
-                       [(quote ,d) (eq? d 'double)])))
+                       [(quote ,d) (eq? d 'double)]
+                       [else #f])))
          #t]
         [(call ,info ,mdcl ,pr ,[e1 #f -> * fp?1] ,[e2 #f -> * fp?2] ,e3)
          (guard (eq? 'bytevector-ieee-double-native-set! (primref-name pr)))
@@ -3088,7 +3090,7 @@
                  ; misbehaved gotos, i.e., paths ending in a goto that don't do an overflow
                  ; or trap check where the target label expects it to have been done.  if we
                  ; ever violate this assumption on a regular basis, might want to revisit and
-                 ; do somthing better.
+                 ; do something better.
                  ; ... test punt case by commenting out above for all but library.ss
                  `(overflow-check (trap-check #f ,(insert-loop-traps body)))))])
       (CaseLambdaExpr : CaseLambdaExpr (ir) -> CaseLambdaExpr ()
@@ -8855,7 +8857,7 @@
         ; as ordinary lambda expressions, there shouldn't be anything but ac0, cp, and argument
         ; registers, which we weed out here.  for library routines, there are often additional
         ; registers, sometimes for good reason and sometimes because we are lazy and didn't give
-        ; outselves a mechanism to prune out unneeded saves and restores.  for foreign-callable
+        ; ourselves a mechanism to prune out unneeded saves and restores.  for foreign-callable
         ; procedures, C argument registers and callee-save registers might show up live.
         ; we could enable a variant of this always that just checks normal procedures.  also,
         ; it might be nice to make it a bit more efficient, though it probably doesn't matter.
@@ -10084,6 +10086,7 @@
                        (let ([spillable-live (live-info-live live-info)])
                          (if (unspillable? x)
                              (let ([unspillable* (remq x unspillable*)])
+                               (unless (uvar-seen? x) (printf "!! ~s\n" x))
                                (safe-assert (uvar-seen? x))
                                (uvar-seen! x #f)
                                (if (and (var? rhs) (var-index rhs reg-spillinfo))

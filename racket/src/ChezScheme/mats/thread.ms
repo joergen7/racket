@@ -727,11 +727,37 @@
                                            (collect))])
                            (chew 0)))
                        (set! q (+ q 7)))])
+              (lock-object p)
+              (bt p)
+              (let f () (when (= q 0) ($yield) (f)))
+              (let f () (unless (= (length ($threads)) 1) ($yield) (f)))
+              (unlock-object p))
+            (unless (= q 14) (errorf #f "~s isn't 14" q))
+            (f (- n 1)))))
+      'cool)
+    'cool)
+  ($thread-check)
+  ;; copy of the test above, this time trying an immobile box instead of locked procedure
+  (eq?
+    (let ()
+      (define bt (foreign-procedure "(cs)backdoor_thread" (scheme-object) iptr))
+      (let f ([n 100])
+        (let ([q 0])
+          (unless (= n 0)
+            (let ([p (lambda ()
+                       (let ([count 10])
+                         (define chew (lambda (x) (when (> count 0) (chew (list 0)))))
+                         (parameterize ([collect-request-handler
+                                         (lambda ()
+                                           (set! count (- count 1))
+                                           (collect))])
+                           (chew 0)))
+                       (set! q (+ q 7)))])
               (let ([b (box-immobile p)])
                 (bt b)
                 (let f () (when (= q 0) ($yield) (f)))
                 (let f () (unless (= (length ($threads)) 1) ($yield) (f)))
-                (set-box! b #f)))
+                (keep-live b)))
             (unless (= q 14) (errorf #f "~s isn't 14" q))
             (f (- n 1)))))
       'cool)
@@ -1332,7 +1358,13 @@
     '(3.4 -4))
   ($thread-check)
   (begin
-    (load-shared-object (find-source "foreign1.so"))
+    (load-shared-object (let ([p (find-source "foreign1.so")])
+                          p
+                          (if (or (path-absolute? p)
+                                  (not (equal? "" (path-parent p))))
+                              p
+                              ;; specify relative to current directory:
+                              (path-build "." p))))
     #t)
   (equal?
     (let ()
@@ -1346,6 +1378,8 @@
       (define ls '())
       (ftype-set! A (x) a 3.4)
       (ftype-set! A (y) a 1)
+      (ff-locked-incr! (ftype-&ref A (y) a)) ; try once in main thread, in case this errors
+      (ff-locked-decr! (ftype-&ref A (y) a))
       (with-mutex m
         (do ([n n (fx- n 1)])
           ((fx= n 0))

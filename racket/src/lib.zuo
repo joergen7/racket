@@ -33,6 +33,7 @@
          setup-rktio
          setup-boot
          racket-version
+         check-destdir
          at-destdir
          icp
          icp-r
@@ -156,7 +157,7 @@
                        ;; writing the hash of every file to "stamp-file" means that
                        ;; we expect any change to effect the way that the compiled
                        ;; file runs:
-                       (fd-write out (file-sha1 path token)))
+                       (fd-write out (file-sha256 path token)))
                      paths)
                     (fd-close out))))))
 
@@ -361,6 +362,11 @@
               (~a X "." Y "." Z))
           (~a X "." Y "." Z "." W)))))
 
+(define (check-destdir config)
+  (unless (equal? "" (hash-ref config 'DESTDIR ""))
+    (unless (equal? (hash-ref config 'MAKE_COPYTREE #f) "copytree")
+      (error "`DESTDIR` cannot be set when `--prefix=...` wasn't supplied to `configure`"))))
+
 ;; Adds `DESTDIR` on the front, and also ensures that the path
 ;; is absolute
 (define (at-destdir config p)
@@ -387,13 +393,19 @@
       (cp src dest)
       (shell/wait (hash-ref config 'ICP_LIB) (string->shell src) (string->shell dest))))
 
+(define (do-strip config key path)
+  (unless (eq? 'windows (hash-ref (runtime-env) 'toolchain-type))
+    (define strip (hash-ref config key ""))
+    (when (equal? strip "")
+      (error (~a "`" key "` variable is empty; use \":\" to skip stripping")))
+    (unless (equal? strip ":")
+      (shell/wait strip (string->shell path)))))
+
 (define (strip-debug config path)
-  (unless (eq? 'windows (system-type))
-    (shell/wait (hash-ref config 'STRIP_DEBUG) (string->shell path))))
+  (do-strip config 'STRIP_DEBUG path))
 
 (define (strip-lib-debug config path)
-  (unless (eq? 'windows (system-type))
-    (shell/wait (hash-ref config 'STRIP_LIB_DEBUG) (string->shell path))))
+  (do-strip config 'STRIP_LIB_DEBUG path))
 
 (define (run-raco-setup config dest-racket cross-bootstrap-racket cross-compiler-args)
   (define windows? (eq? 'windows (system-type)))
@@ -510,31 +522,4 @@
                   (hash-ref config 'INSTALL_PKGSCOPE))))
 
 (define (infer-gnu-make-jobs)
-  ;; GNU make sets `MAKEFLAGS` to include `-j` and `--jobserver-fds=<in>,<out>`
-  ;; when parallel builds are enabled via `-j`, where <in> and <out> are
-  ; file descriptors for pipes to read and write 1-character job tokens
-  (define a (assoc "MAKEFLAGS" (hash-ref (runtime-env) 'env)))
-  (and a
-       (let ([args (shell->strings (cdr a))])
-         (and (ormap (lambda (arg) (string=? "-j" arg)) args)
-              (ormap (let ([match? (let ([fds? (glob->matcher "--jobserver-fds=*")]
-                                         [auth? (glob->matcher "--jobserver-auth=*")])
-                                     (lambda (s) (or (fds? s) (auth? s))))])
-                       (lambda (arg)
-                         (and (match? arg)
-                              (let ([fds (map string->integer
-                                              (string-split (cadr (string-split arg "=")) ","))])
-                                (and (= (length fds) 2)
-                                     (andmap integer? fds)
-                                     ;; read in all available job tokens, then give them back up,
-                                     ;; just so we can infer the number of tokens that would be available
-                                     (let ([in (fd-open-input (car fds))]
-                                           [out (fd-open-output (cadr fds))])
-                                       (and (fd-valid? in)
-                                            (fd-valid? out)
-                                            (let ([s (fd-read in 'avail)])
-                                              (and (string? s)
-                                                   (begin
-                                                     (fd-write out s)
-                                                     (+ 1 (string-length s))))))))))))
-                     args)))))
+  (maybe-jobserver-jobs))

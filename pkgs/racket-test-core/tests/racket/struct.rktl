@@ -863,6 +863,19 @@
 
 (err/rt-test (make-struct-type 'bad struct:date 2 0 #f null 'prefab))
 
+(test 'v prefab-struct-key #s(v one))
+(test '(v w 2) prefab-struct-key #s((v w 2) one two three))
+(test #f prefab-struct-key "apple")
+(test #f prefab-struct-key 10)
+
+(let ()
+  (define-struct t (a b) #:prefab)
+  (define-struct t2 (a b))
+  (define-struct (t3 t) (c) #:prefab)
+  (test '(t . 2) prefab-struct-type-key+field-count struct:t)
+  (test #f prefab-struct-type-key+field-count struct:t2)
+  (test '((t3 t 2) . 3) prefab-struct-type-key+field-count struct:t3))
+
 ;; ------------------------------------------------------------
 ;; Sealed
 
@@ -1012,7 +1025,13 @@
 
   (test #f equal? (make-t1 0 1) (make-t2 0 1))
   (test #t equal? (make-t1 0 1) (make-t1 0 1))
+  (test #t equal-always? (make-t1 0 1) (make-t1 0 1))
   (test #t equal? (make-t2 0 1) (make-t2 0 1))
+  (test #f equal-always? (make-t2 0 1) (make-t2 0 1))
+  (test #f chaperone-of? (make-t2 0 1) (make-t2 0 1))
+  (test #t impersonator-of? (make-t2 0 1) (make-t2 0 1))
+  (let ([t (make-t2 0 1)])
+    (test #t equal-always? t t))
   (test #t equal? 
         (shared ([t (make-t2 0 t)]) t) 
         (shared ([t (make-t2 0 t)]) t))
@@ -1022,6 +1041,10 @@
   (test #t = 
         (equal-hash-code (make-t1 0 1))
         (equal-hash-code (make-t1 0 1)))
+  (let ([t (make-t1 0 1)])
+    (test #t = 
+          (equal-always-hash-code t)
+          (equal-always-hash-code t)))
   (test #t =
         (equal-hash-code (shared ([t (make-t2 0 t)]) t))
         (equal-hash-code (shared ([t (make-t2 0 t)]) t)))
@@ -1033,6 +1056,7 @@
         (equal-secondary-hash-code (shared ([t (make-t2 0 t)]) t)))
   
   (test #t equal? (make-o 1 2 3) (make-o 1 20 3))
+  (test #f equal-always? (make-o 1 2 3) (make-o 1 20 3))
   (test #f equal? (make-o 10 2 3) (make-o 1 2 3))
   (test #f equal? (make-o 1 2 3) (make-o 1 2 30))
   (test #t equal? 
@@ -1048,6 +1072,10 @@
   (test #t = 
         (equal-hash-code (make-o 1 2 3))
         (equal-hash-code (make-o 1 20 3)))
+  (let ([t (make-o 1 2 3)])
+    (test #t =
+          (equal-always-hash-code t)
+          (equal-always-hash-code t)))
   (test #t =
         (equal-hash-code (shared ([t (make-o t 0 t)]) t))
         (equal-hash-code (shared ([t (make-o t 0 t)]) t)))
@@ -1060,6 +1088,66 @@
   (test #t =
         (equal-secondary-hash-code (shared ([t (make-o t 1 t)]) t))
         (equal-secondary-hash-code (shared ([t (make-o t 1 t)]) t)))
+
+  (void))
+
+(let ([was-always? #f])
+  (test 'new-protocol car '(new-protocol))
+  ;; new `prop:equal+hash` that more fully supports `equal-always?`
+  (define-struct o (x y z)
+    #:property prop:equal+hash (list
+                                (lambda (a b equal? now?)
+                                  (set! was-always? (not now?))
+                                  (and (equal? (o-x a) (o-x b))
+                                       (equal? (o-z a) (o-z b))))
+                                (lambda (a hash now?)
+                                  (set! was-always? (not now?))
+                                  (+ (hash (o-x a)) (* 9 (hash (o-z a))))))
+    #:mutable)
+
+  (test #t equal? (make-o 1 2 3) (make-o 1 20 3))
+  (test #f equal? (make-o 1 2 3) (make-o 1 20 30))
+  (test #f values was-always?)
+  (test #t equal-always? (make-o 1 2 3) (make-o 1 20 3))
+  (test #f equal-always? (make-o 1 2 3) (make-o 1 20 30))
+  (test #t values was-always?)
+  (test #t impersonator-of? (make-o 1 2 3) (make-o 1 20 3))
+  (test #f impersonator-of? (make-o 1 2 3) (make-o 1 20 30))
+  (test #f values was-always?)
+  (test #t chaperone-of? (make-o 1 2 3) (make-o 1 20 3))
+  (test #f chaperone-of? (make-o 1 2 3) (make-o 1 20 30))
+  (test #t values was-always?)
+
+  (test #t equal?
+        (shared ([t (make-o t 0 0)]) t) 
+        (shared ([t (make-o t 0 0)]) t))
+  (test #f equal?
+        (shared ([t (make-o t 0 0)]) t) 
+        (shared ([t (make-o t 0 1)]) t))
+  (test #t equal-always?
+        (shared ([t (make-o t 0 0)]) t) 
+        (shared ([t (make-o t 0 0)]) t))
+  (test #f equal-always?
+        (shared ([t (make-o t 0 0)]) t) 
+        (shared ([t (make-o t 0 1)]) t))
+
+  (test #t = (equal-hash-code (make-o 1 2 3)) (equal-hash-code (make-o 1 20 3)))
+  (test #f values was-always?)
+  (test #t = (equal-always-hash-code (make-o 1 2 3)) (equal-always-hash-code (make-o 1 20 3)))
+  (test #t values was-always?)
+  (test #t =
+        (equal-hash-code (shared ([t (make-o 0 0 t)]) t))
+        (equal-hash-code (shared ([t (make-o 0 0 t)]) t)))
+  (test #t =
+        (equal-always-hash-code (shared ([t (make-o 0 0 t)]) t))
+        (equal-always-hash-code (shared ([t (make-o 0 0 t)]) t)))
+  
+  (test #t = 
+        (equal-secondary-hash-code (make-o 0 1 3))
+        (equal-secondary-hash-code (make-o 0 10 3)))
+  (test #t =
+        (equal-secondary-hash-code (shared ([t (make-o 0 1 t)]) t))
+        (equal-secondary-hash-code (shared ([t (make-o 0 2 t)]) t)))
 
   (void))
 
@@ -1763,6 +1851,11 @@
   (err/rt-test (animal-ref 10) exn:fail:contract?
                #rx"animal-get: .*is-animal[?]"))
 
+(let ()
+  (struct a (b) #:authentic #:mutable)
+  (err/rt-test (a-b 1) exn:fail:contract? #rx"^a-b:")
+  (err/rt-test (set-a-b! 1 #f) exn:fail:contract? #rx"^set-a-b!:"))
+
 ;; ----------------------------------------
 ;; make sure `prop:object-name` works with applicables
 
@@ -1809,6 +1902,24 @@
   (struct a (x) #:property prop 1)
   (struct b a (y) #:property prop 2)
   (void))
+
+;; ----------------------------------------
+;; Regression test related to constant-folding optimization
+
+(let ([c (compile '(module m racket/base
+                     (struct? #s(a 1))))])
+  (define o (open-output-bytes))
+  (write c o)
+  (test #t 'compiled (compiled-module-expression? (parameterize ([read-accept-compiled #t])
+                                                    (read (open-input-bytes (get-output-bytes o)))))))
+
+(let ([c (compile (prefab-key->struct-type 'something 10))])
+  (define o (open-output-bytes))
+  (write c o)
+  (test (prefab-key->struct-type 'something 10)
+        values
+        (eval (parameterize ([read-accept-compiled #t])
+                (read (open-input-bytes (get-output-bytes o)))))))
 
 ;; ----------------------------------------
 

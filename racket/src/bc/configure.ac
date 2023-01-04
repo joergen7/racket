@@ -48,6 +48,7 @@ AC_ARG_ENABLE(lt,      [  --enable-lt=<prog>      use <prog> instead of libtool;
 m4_include(../ac/instlib_arg.m4)
 
 AC_ARG_ENABLE(libffi,  [  --enable-libffi         use installed libffi (enabled by default for Unix)], , enable_libffi=default)
+m4_include(../ac/iconv_arg.m4)
 m4_include(../ac/curses_arg.m4)
 
 m4_include(../ac/sdk_arg.m4)
@@ -71,6 +72,8 @@ AC_ARG_ENABLE(ffipoll, [  --enable-ffipoll        FFI calls only when embedding 
 
 AC_ARG_ENABLE(gprof,   [  --enable-gprof          compile for profiling with gprof (gcc only)])
 AC_ARG_ENABLE(gcov,    [  --enable-gcov           compile to gather gcov statistics (gcc3 only)])
+
+m4_include(../ac/postlink_arg.m4)
 
 m4_include(../ac/strip_arg.m4)
 AC_ARG_ENABLE(noopt,   [  --enable-noopt          drop -O C flags (useful for low-level debugging)])
@@ -278,8 +281,6 @@ LIBRACKET_DEP=""
 EXE_SUFFIX=
 SO_SUFFIX=.so
 
-POST_LINKER="echo"
-
 MMM=3m
 MMM_INSTALLED=
 MMM_CAP_INSTALLED=
@@ -311,6 +312,10 @@ else
   else
     ENABLE_CIFY=auto
   fi
+fi
+
+if test "${CC_FOR_BUILD}" = ""; then
+  CC_FOR_BUILD='$(PLAIN_CC) -O2'
 fi
 
 ###### OSKit stuff #######
@@ -543,7 +548,7 @@ case "$host_os" in
     LIBS="$LIBS -rdynamic"
     skip_curses_check=yes
     add_curses_lib="/usr/pkg/lib/libncurses.a"
-    POST_LINKER="paxctl +m"
+    default_post_linker="paxctl +m"
     ;;
   irix*)
     enable_cgcdefault="yes"
@@ -553,7 +558,7 @@ case "$host_os" in
       X_PRE_LIBS=""
     fi
     ;;
-  linux*)
+  linux*|gnu*)
     LIBS="$LIBS -ldl -lm -lrt -rdynamic"
     DYN_CFLAGS="-fPIC"
     curses_portable_link="/usr/lib/${host_cpu}-${host_os}/libncurses.a /usr/lib/${host_cpu}-${host_os}/libtermcap.a"
@@ -782,6 +787,10 @@ fi
 ############## Strip tool ################
 
 m4_include(../ac/strip.m4)
+
+############## post-linker ################
+
+m4_include(../ac/postlink.m4)
 
 ############## C flags ################
 
@@ -1356,6 +1365,15 @@ RKTIO_CONFIGURE_ARGS="${keep_configure_args} ${SUB_CONFIGURE_EXTRAS}"
 
 ############## final output ################
 
+case "$srcdir" in
+    /*)
+        upsrcdir="$srcdir"
+        ;;
+    *)
+        upsrcdir="../$srcdir"
+        ;;
+esac
+
 LIBS="$LIBS $EXTRALIBS"
 
 AC_SUBST(CC)
@@ -1460,7 +1478,11 @@ AC_SUBST(INSTALL_NAME_TOOL)
 AC_SUBST(LIBFFI_CONFIGURE_ARGS)
 AC_SUBST(RKTIO_CONFIGURE_ARGS)
 
-makefiles="Mf-config"
+AC_SUBST(CC_FOR_BUILD)
+AC_SUBST(CFLAGS_FOR_BUILD)
+AC_SUBST(upsrcdir)
+
+makefiles="Makefile"
 
 AC_OUTPUT($makefiles)
 

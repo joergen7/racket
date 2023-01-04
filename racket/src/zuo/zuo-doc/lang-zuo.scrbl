@@ -17,10 +17,20 @@ tend to use the names of Unix programs, which are much shorter than
 Racket's long names.
 
 The @racketmodname[zuo/base] language includes most of the bindings
-from @racketmodname[zuo], but not the ones that are from
-@racketmodname[zuo/cmdline], @racketmodname[zuo/build],
-@racketmodname[zuo/shell], @racketmodname[zuo/thread],
+from @racketmodname[zuo], but not the ones from @racketmodname[zuo/cmdline],
+@racketmodname[zuo/build], @racketmodname[zuo/shell], @racketmodname[zuo/thread],
 @racketmodname[zuo/glob], or @racketmodname[zuo/config].
+
+When using @racket[module->hash] on @racketmodname[zuo/base],
+@racketmodname[zuo], or a module implemented with one of those
+languages, the resulting hash table includes @racket['dynamic-require]
+mapped to the @racket[dynamic-require] function. Getting
+@racket[dynamic-require] that way provides a path from the primitive
+@seclink["module-protocol"]{Zuo kernel module protocol} to
+@racketmodname[zuo/base] module exports.
+
+@history[#:changed "1.2" @elem{Added the @racket['dynamic-require] key
+        for @racketmodname[zuo] and related languages.}]
 
 @section{Syntax and Evaluation Model}
 
@@ -54,7 +64,7 @@ modules that import it. Variables and macros that are not provided are
 completely inaccessible outside of the module.
 
 There are no @defterm{phases} in the sense of Racket. When
-@racketmodname[zuo] macro expansion encountered an import, it makes
+@racketmodname[zuo] macro expansion encounters an import, it makes
 all of the imported module's exports immediately available for use in
 macro implementations, both variables and macros. For example, an
 imported macro might be used both to implement a macro body and in
@@ -440,9 +450,11 @@ endianness.}
 Tries to parse @racket[str] as an integer returning @racket[#f] if
 that fails.}
 
-@defproc[(string-sha1 [str string?]) string?]{
+@defproc[(string-sha256 [str string?]) string?]{
 
-Returns the SHA-1 hash of @racket[str] as a 40-digit hexadecimal string.}
+Returns the SHA-256 hash of @racket[str] as a 64-digit hexadecimal string.
+
+See also @racket[file-sha256] and @racket[sha256-length].}
 
 @defform[(char str)]{
 
@@ -499,7 +511,9 @@ back into Zuo.
 )]{
 
 Analogous to @realracket*[symbol? symbol->string string->symbol
-string->uninterned-symbol] from @racketmodname[racket].}
+string->uninterned-symbol] from @racketmodname[racket], but
+@racket[string->symbol] accepts only strings that do not contain the
+null character.}
 
 
 @section{Hash Tables (Persistent Maps)}
@@ -509,7 +523,7 @@ hashing, but they're called that for similarly to Racket. A hash table
 maps symbols to other values, and updating a hash table produces a new
 hash table (which, internally, may share with the original).
 
-Hash table print in a way analogous to Racket, but there is no reader
+Hash tables print in a way analogous to Racket, but there is no reader
 support to convert the textual form back into a hash table value.
 
 @deftogether[(
@@ -537,10 +551,20 @@ support to convert the textual form back into a hash table value.
 
 Analogous to @realracket*[hash? hash hash-ref hash-set hash-remove
 hash-keys hash-count hash-keys-subset?] from @racketmodname[racket].
-Besides being constrained to symbol keys, there is one additional
-difference: the third argument to @racket[hash-ref], when supplied,
-is always used as a value to return if a key is missing, as
-opposed to a failure thunk.}
+
+Besides being constrained to symbol keys, there are two additional
+differences:
+
+@itemlist[
+
+ @item{the third argument to @racket[hash-ref], when supplied, is
+       always used as a value to return if a key is missing, as
+       opposed to a failure thunk; and}
+
+ @item{the @racket[hash-keys] function returns interned keys sorted
+       alphabetically.}
+
+]}
 
 
 @section{Procedures}
@@ -564,8 +588,8 @@ checks only whether the immediately enclosing prompt has the given tag.}
 
 @section{Paths}
 
-A @deftech{path string} is is a @tech{string} that is not non-empty
-and to contains no nul bytes.
+A @deftech{path string} is a @tech{string} that is not empty
+and contains no null bytes.
 
 @defproc[(path-string? [v any/c]) boolean?]{
 
@@ -611,11 +635,11 @@ all path separators the platform default (on Windows).}
 
 @defproc[(find-relative-path [base path-string?] [path path-string?]) path-string?]{
 
-Attempts to finds a path relative to @racket[base] that accesses the
+Attempts to find a path relative to @racket[base] that accesses the
 same file or directory as @racket[path]. Both @racket[base] and
 @racket[path] must be normalized in the sense of
 @racket[simple-form-path], otherwise @filepath{.} and @filepath{..}
-elements are treated normal path elements. Assuming that @racket[base]
+elements are treated as normal path elements. Assuming that @racket[base]
 and @racket[path] are normalized, the result is always normalized.
 
 The result path depends on whether @racket[base] and @racket[path] are
@@ -752,7 +776,7 @@ elements or a @litchar{.zuo} suffix.}
 
 Loads @racket[mod-path] if it has not been loaded already, and returns
 the @tech{hash table} representation of the loaded module. See also
-Secref["module-protocol"]}
+@secref["module-protocol"]}
 
 @defproc[(dynamic-require [mod-path module-path?] [export symbol?]) any/c]{
 
@@ -772,7 +796,7 @@ Returns a @tech{hash table} that maps each primitive and constant name
 available in the body of a @racketmodname[zuo/kernel] module to its value.}
 
 
-@section{void}
+@section{Void}
 
 @defproc[(void? [v any/c]) boolean?]{
 
@@ -792,7 +816,9 @@ value.}
 Reads all S-expressions in @racket[str], starting at index
 @racket[start] and returning a list of the S-expressions (in order as
 they appeared in the string). The @racket[where] argument, if not
-@racket[#f], is used to report the source of errors.}
+@racket[#f], is used to report the source of errors.
+
+See also @secref["reader"].}
 
 
 @deftogether[(
@@ -972,20 +998,37 @@ Reads from the input file or input stream associated with
 that many bytes, @racket[eof] to read all content up to an
 end-of-file, or @racket['avail] where supported (on Unix) to read as
 many bytes as available in non-blocking mode. The result is
-@racket[eof] if @racket[amount] is not @racket[0] or @racket['avail]
-and no bytes are available before an end-of-file; otherwise, it is a
+@racket[eof] if @racket[amount] is not @racket[0] or @racket[eof]
+and if no bytes are available before an end-of-file; otherwise, it is a
 string containing the read bytes.
 
 The number of bytes in the returned string can be less than
 @racket[amount] if the number of currently available bytes is less
 than @racket[amount] but at least one byte. The result can be an empty
-string only if @racket[amount] is @racket[0] or @racket['avail].}
+string only if @racket[amount] is @racket[0] or @racket['avail].
+
+On Windows, @racket['avail] mode is not supported for console input.
+
+@history[#:changed "1.5" @elem{Report @racket[eof] when available in @racket['avail] mode.}]}
 
 @defproc[(fd-write [handle handle?] [str string?]) void?]{
 
 Writes the bytes of @racket[str] to the output file or output stream
 associated with @racket[handle], erroring for any other kind of
 @racket[handle].}
+
+@defproc[(fd-poll [handles (listof handle?)] [timeout-msecs (or/c integer? #f) #f]) (or/c handle? #f)]{
+
+Given a list of open input and output file descriptor handles as
+@racket[handles], checks whether any is ready for reading or writing.
+If @racket[timeout-msecs] is @racket[#f], @racket[fd-poll] blocks
+until at least one is ready, and then it returns the first element of
+@racket[handles] that is ready. If @racket[timeout-msecs] is a number,
+then it specifies a number of milliseconds to wait; the result is
+@racket[#f] if no handle in @racket[handles] is ready before
+@racket[timeout-msecs] milliseconds pass.
+
+@history[#:added "1.1"]}
 
 @defproc[(fd-terminal? [handle handle?] [check-ansi? any/c #f]) boolean?]{
 
@@ -1080,7 +1123,9 @@ keys are as follows, and supplying an unrecognized key in
       created process to terminate; otherwise, and by default, the Zuo
       process waits for every processes created with @racket[process]
       to terminate before exiting itself, whether exiting normally, by
-      an error, or by a received termination signal (such as Ctl-C).}
+      an error, or by a received termination signal (such as Ctl-C);
+      any still-open input or output pipe created for the process is
+      closed before waiting for processes to exit.}
 
 @item{@racket['exact?] mapped to boolean (or any value): if not
       @racket[#f], a single @racket[arg] must be provided, and it is
@@ -1097,7 +1142,13 @@ keys are as follows, and supplying an unrecognized key in
 
 ]
 
-See also @racket[shell].}
+See also @racket[shell].
+
+@history[#:changed "1.1" @elem{Pipes created for a process are
+                               explicitly closed when a Zuo will
+                               terminate, and they are closed before
+                               waiting for processes to exit.}]}
+
 
 @defproc[(process-wait [process handle?] ...) handle?]{
 
@@ -1148,14 +1199,20 @@ with an executable name.}
 
 @section{Filesystem}
 
-@defproc[(stat [name path-string?] [follow-links? any/c #t]) (or/c hash? #f)]{
+@defproc[(stat [name path-string?]
+               [follow-links? any/c #t]
+               [false-on-error? any/c #f])
+         (or/c hash? #f)]{
 
 Returns information about the file, directory, or link referenced by
 @racket[name]. If @racket[follow-links?] is @racket[#f], then when
 @racket[name] refers to a link, information is reported about the
 link; otherwise, information is reported about the target of a link.
 
-If no such file, directory, or link exists, the result is @racket[#f].
+If @racket[name] is a valid path but such file, directory, or link exists,
+the result is @racket[#f]. If accessing @racket[name] encounters an error
+(e.g., @racket[name] uses a file as a directory or permission is denied),
+then @racket[#f] is reported instead of an error if @racket[false-on-error?].
 Otherwise, the hash table has similar keys and values as
 @realracket[file-or-directory-stat] from @racketmodname[racket], but
 with only certain keys per platform:
@@ -1235,18 +1292,43 @@ function is not supported on Windows.}
 Gets the content of a link @racket[name]. This function is not
 supported on Windows.}
 
-@defproc[(cp [source path-string?] [destination path-string?]) void?]{
+@deftogether[(
+@defproc[(cp [source path-string?] [destination path-string?] [options hash? (hash)]) void?]
+@defthing[:no-replace-mode hash?]
+)]{
 
-Copies the file at @racket[source] to @racket[destination],
-preserving permissions and replacing (or attempting to replace)
-@racket[destination] if it exists.}
+Copies the file at @racket[source] to @racket[destination], replacing
+(or attempting to replace) @racket[destination] if it exists.
 
-@defproc[(cp* [source path-string?] [destination path-string?]) void?]{
+On Unix, if @racket[destination] does not exist, it is created with
+the mode (i.e., permissions) specified by @racket['mode] in
+@racket[options], which must be an integer between 0 and 65535
+inclusive; if @racket['mode] is not provided, the mode of
+@racket[source] is used. The creation-time mode can be modified by
+the process's umask, but unless @racket[options] maps
+@racket['replace-mode] to @racket[#false], the mode is explicitly applied again
+to @racket[destination]---whether @racket[destination] was just
+created or exists already, and ignoring the process's umask. On
+Windows, the attributes of @racket[source] are always copied to
+@racket[destination], and if @racket['mode] is provided, then the file
+is made read only if and only if the @scheme[bitwise-and] of the mode
+value and @racket[2] is @racket[0].
+
+The @racket[:no-replace-mode] hash table maps
+@racket['no-replace-mode] to @racket[#true].
+
+@history[#:changed "1.6" @elem{Added the @racket[options] argument and
+                               @racket[:no-replace-mode].}]}
+
+@defproc[(cp* [source path-string?] [destination path-string?] [options hash? (hash)]) void?]{
 
 Copies the file, directory, or link @racket[source] to a corresponding
 new file, directory, or link @racket[destination], including the
 directory content if @racket[source] refers to a directory (and not to
-a link to a directory),.}
+a link to a directory). The @racket[options] argument is passed
+along to individual file-copy operations.
+
+@history[#:changed "1.6" @elem{Added the @racket[options] argument.}]}
 
 @deftogether[(
 @defproc[(file-exists? [name path-string?]) booelan?]
@@ -1255,7 +1337,9 @@ a link to a directory),.}
 )]{
 
 Uses @racket[stat] to check for a file, directory, or link,
-respectively.}
+respectively. If @racket[stat] encounters an error (e.g., access
+permission), then the file, directory, or link is treated as
+non-existent.}
 
 
 @section{Run Time Configuration}
@@ -1267,7 +1351,7 @@ Zuo process. The hash table includes the following keys:
 
 @itemlist[
 
-@item{@racket['args]: comment-line arguments provided when the
+@item{@racket['args]: command-line arguments provided when the
       process was started, not counting Zuo configuration arguments or
       the name of a script to run}
 
@@ -1294,9 +1378,13 @@ Zuo process. The hash table includes the following keys:
 @item{@racket['can-exec?]: a boolean whether @racket[process] supports
       a true value for the @racket['exec?] option}
 
-@item{@racket['version]: Zuo's version number as an integer}
+@item{@racket['version]: Zuo's major version number as an integer}
 
-]}
+@item{@racket['minor-version]: Zuo's minor version number as an integer}
+
+]
+
+@history[#:changed "1.1" @elem{Added @racket['minor-version].}]}
 
 @defproc[(system-type) symbol?]{
 

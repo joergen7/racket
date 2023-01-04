@@ -36,14 +36,15 @@
 /*****************************************/
 /* Architectures                         */
 
-#if ((defined(__powerpc__) || defined(__POWERPC__)) && !defined(__powerpc64__)) \
-  || defined(__sparc__)
-# define PORTABLE_BYTECODE_BIGENDIAN
-# define BIG_ENDIAN_IEEE_DOUBLE
+#if defined(__powerpc__) || defined(__POWERPC__) || defined(__sparc__)
+# if !(defined(__LITTLE_ENDIAN__) || defined(_LITTLE_ENDIAN))
+#  define PORTABLE_BYTECODE_BIGENDIAN
+#  define BIG_ENDIAN_IEEE_DOUBLE
+# endif
 # define FLUSHCACHE
 #endif
 
-#if (defined(__arm__) || defined(__arm64__) || defined(__aarch64__) || defined(_M_ARM64))
+#if defined(__arm__) || defined(__arm64__) || defined(__aarch64__) || defined(_M_ARM64) || defined(__riscv)
 # define FLUSHCACHE
 #endif
 
@@ -80,7 +81,7 @@ FORCEINLINE void store_unaligned_uptr(uptr *addr, uptr val) {
 /*****************************************/
 /* Operating systems                     */
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(__GNU__) /* Hurd */
 #define NOBLOCK O_NONBLOCK
 #define LOAD_SHARED_OBJECT
 #define USE_MMAP
@@ -91,7 +92,10 @@ FORCEINLINE void store_unaligned_uptr(uptr *addr, uptr val) {
 #define GETPAGESIZE() getpagesize()
 typedef char *memcpy_t;
 #define MAKE_NAN(x) { x = 0.0; x = x / x; }
-#define GETWD(x) getcwd((x),PATH_MAX)
+#ifndef __GNU__ /* Hurd: no PATH_MAX */
+/* n.b. don't test PATH_MAX directly: we have not yet included <limits.h>  */
+# define GETWD(x) getcwd((x),PATH_MAX)
+#endif
 typedef int tputsputcchar;
 #ifndef __ANDROID__
 # define LOCKF
