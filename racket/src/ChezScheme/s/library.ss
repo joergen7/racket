@@ -215,55 +215,47 @@
           (fl- ($inexactnum-imag-part x) ($inexactnum-imag-part y)))]))
 
 (define-library-entry (cfl/ x y)
-   ;; spurious overflows, underflows, and division by zero
+   ;; See "Algorithm 116: Complex Division" by Robert L. Smith,
+   ;; Communications of the ACM, Volume 5, Issue 8, Aug. 1962
    (cond
       [(flonum? y)
-       ;; a+bi/c => a/c + (b/c)i
+       ;; a+bi / c => a/c + (b/c)i
        (if (flonum? x)
            (fl/ x y)
            (fl-make-rectangular
               (fl/ ($inexactnum-real-part x) y)
               (fl/ ($inexactnum-imag-part x) y)))]
       [(flonum? x)
-       ;; a / c+di => c(a/(cc+dd)) + (-d(a/cc+dd))i
+       ;; a / c+di => a/(c+d(d/c)) + (-a(d/c)/(c+d(d/c)))i if |c| >= |d|
+       ;; a / c+di => a(c/d)/(d+c(c/d)) + (a/(d+c(c/d)))i if |c| < |d|
        (let ([c ($inexactnum-real-part y)] [d ($inexactnum-imag-part y)])
-          (let ([t (fl/ x (fl+ (fl* c c) (fl* d d)))])
-             (fl-make-rectangular (fl* c t) (fl- (fl* d t)))))]
+         (if (fl>= (flabs c) (flabs d))
+             (let* ([r (fl/ d c)]
+                    [den (fl+ c (fl* r d))])
+               (fl-make-rectangular
+                  (fl/ x den)
+                  (fl/ (fl- (fl* x r)) den)))
+             (let* ([r (fl/ c d)]
+                    [den (fl+ d (fl* r c))])
+               (fl-make-rectangular
+                  (fl/ (fl* x r) den)
+                  (fl/ (fl- x) den)))))]
       [else
-       ;; a+bi / c+di => (ac+bd)/(cc+dd) + ((bc-ad)/(cc+dd))i
+       ;; a+bi / c+di => (a+b(d/c))/(c+d(d/c)) + ((b-a(d/c))/(c+d(d/c)))i if |c| >= |d|
+       ;; a+bi / c+di => (b+a(c/d))/(d+c(c/d)) + ((a-b(c/d))/(d+c(c/d)))i if |c| < |d|
        (let ([a ($inexactnum-real-part x)] [b ($inexactnum-imag-part x)]
              [c ($inexactnum-real-part y)] [d ($inexactnum-imag-part y)])
-         ;; a+bi / c+di => (ac+bd)/(cc+dd) + ((bc-ad)/(cc+dd))i
-         (define (simpler-divide a b c d)
-           ;; Direct calculuation does not work as well for complex numbers with
-           ;; large parts, such as `(/ 1e+300+1e+300i 4e+300+4e+300i)`, but it
-           ;; works better for small parts, as in `(/ 0.0+0.0i 1+1e-320i)`
-           (let ([t (fl+ (fl* c c) (fl* d d))])
-             (fl-make-rectangular (fl/ (fl+ (fl* a c) (fl* b d)) t)
-                                  (fl/ (fl- (fl* b c) (fl* a d)) t))))
-         ;; Let r = c/d or d/c, depending on which is larger
-         (cond
-          [(fl< (flabs c) (flabs d))
-           (let ([r (fl/ d c)])
-             (if (infinity? r)
-                 ;; Too large; try form that works better with small c or d
-                 (simpler-divide a b c d)
-                 ;; a+bi / c+di => 
-                 (let ([x (fl+ c (fl* d r))]) ; x = c+dd/c = (cc+dd)/c
-                   ;; (a+br)/x + ((b-ar)/x)i = (a+bd/c)c/(cc+dd) + ((b-ad/c)c/(cc+dd))i
-                   ;; = (ac+bd)/(cc+dd) + ((bc-ad)/(cc+dd))i
-                   (fl-make-rectangular (fl/ (fl+ a (fl* b r)) x)
-                                        (fl/ (fl- b (fl* a r)) x)))))]
-          [else
-           (let ([r (fl/ c d)])
-             (if (infinity? r)
-                 ;; Too large; try form that works better with small c or d
-                 (simpler-divide a b c d)
-                 (let ([x (fl+ d (fl* c r))]) ; x = d+cc/d = (cc+dd)/d
-                   ;; (b+ar)/x + ((br-a)/x)i = (b+ac/d)d/(cc+dd) + ((bc/d-a)d/(cc+dd))i
-                   ;; = (bd+ac)/(cc+dd) + ((bc-ad)/(cc+dd))i
-                   (fl-make-rectangular (fl/ (fl+ b (fl* a r)) x)
-                                        (fl/ (fl- (fl* b r) a) x)))))]))]))
+         (if (fl>= (flabs c) (flabs d))
+             (let* ([r (fl/ d c)]
+                    [den (fl+ c (fl* r d))])
+               (fl-make-rectangular
+                  (fl/ (fl+ a (fl* b r)) den)
+                  (fl/ (fl- b (fl* a r)) den)))
+             (let* ([r (fl/ c d)]
+                    [den (fl+ d (fl* r c))])
+               (fl-make-rectangular
+                  (fl/ (fl+ (fl* a r) b) den)
+                  (fl/ (fl- (fl* b r) a) den)))))]))
 
 (let ()
   (define char-oops
@@ -717,6 +709,7 @@
   (define-library-entry (fllog x) (flonum-oops 'fllog x))
   (define-library-entry (fllog2 x y) (flonum-oops 'fllog (if (flonum? x) y x)))
   (define-library-entry (flexpt x y) (flonum-oops 'flexpt (if (flonum? x) y x)))
+  (define-library-entry (flbit-field x y z) (flonum-oops 'flbit-field x))
 
   (define-library-entry (flonum->fixnum x) (if (flonum? x)
                                                ($oops 'flonum->fixnum "result for ~s would be outside of fixnum range" x)
@@ -873,6 +866,9 @@
   (define exactintoops2
     (lambda (who x y)
       (exactintoops1 who (if (or (fixnum? x) (bignum? x)) y x))))
+  (define invalidindexoops
+    (lambda (who k)
+      ($oops who "invalid bit index ~s" k)))
 
   (define-library-entry (logand x y)
     (if (if (fixnum? x)
@@ -947,27 +943,27 @@
          (cond
            [(fixnum? k)
             (if (fx< k 0)
-                ($oops who "invalid bit index ~s" k)
+                (invalidindexoops who k)
                ; this case left to us by cp1in logbit? handler
                 (fx< n 0))]
            [(bignum? k)
             (if (< k 0)
-                ($oops who "invalid bit index ~s" k)
+                (invalidindexoops who k)
                ; this case left to us by cp1in logbit? handler
                 (fx< n 0))]
-           [else (exactintoops1 who k)])]
+           [else (invalidindexoops who k)])]
         [(bignum? n)
          (cond
            [(fixnum? k)
             (if (fx< k 0)
-                ($oops who "invalid bit index ~s" k)
+                (invalidindexoops who k)
                 ($logbit? k n))]
            [(bignum? k)
             (if (< k 0)
-                ($oops who "invalid bit index ~s" k)
+                (invalidindexoops who k)
                ; $logbit? requires k to be a fixnum
                 (fxlogtest (ash n (- k)) 1))]
-           [else (exactintoops1 who k)])]
+           [else (invalidindexoops who k)])]
         [else (exactintoops1 who n)]))
     (define-library-entry (logbit? k n) (do-logbit? 'logbit? k n))
     (define-library-entry (bitwise-bit-set? n k) (do-logbit? 'bitwise-bit-set? k n)))
@@ -977,14 +973,14 @@
         (cond
           [(fixnum? k)
            (if (fx< k 0)
-               ($oops 'logbit0 "invalid bit index ~s" k)
+               (invalidindexoops 'logbit0 k)
                ($logbit0 k n))]
           [(bignum? k)
            (if (< k 0)
-               ($oops 'logbit0 "invalid bit index ~s" k)
+               (invalidindexoops 'logbit0 k)
               ; $logbit0 requires k to be a fixnum
                ($logand n ($lognot (ash 1 k))))]
-          [else (exactintoops1 'logbit0 k)])
+          [else (invalidindexoops 'logbit0 k)])
         (exactintoops1 'logbit0 n)))
 
   (define-library-entry (logbit1 k n)
@@ -992,14 +988,14 @@
         (cond
           [(fixnum? k)
            (if (fx< k 0)
-               ($oops 'logbit1 "invalid bit index ~s" k)
+               (invalidindexoops 'logbit1 k)
                ($logbit1 k n))]
           [(bignum? k)
            (if (< k 0)
-               ($oops 'logbit1 "invalid bit index ~s" k)
+               (invalidindexoops 'logbit1 k)
               ; $logbit1 requires k to be a fixnum
                ($logor n (ash 1 k)))]
-          [else (exactintoops1 'logbit1 k)])
+          [else (invalidindexoops 'logbit1 k)])
         (exactintoops1 'logbit1 n)))
 
   (define-library-entry (logtest x y)

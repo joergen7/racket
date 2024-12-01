@@ -32,7 +32,7 @@
 (define compile/optimize
   (let ()
     ;; General strategy for checking optimization: compile to machine-independent
-    ;; linklets, then use `expand/optimize-linklet` (provided as a priitive just
+    ;; linklets, then use `expand/optimize-linklet` (provided as a primitive just
     ;; for this test suite) to run schemify and cp0
     (define expand/optimize-linklet (vm-primitive 'expand/optimize-linklet))
 
@@ -78,13 +78,13 @@
         (error 'compile/optimize "compiled content does not have expected shape: ~s"
                s-exp))
 
-      (define-values (mpi-vector requires provides phase-to-link-modules)
-          (deserialize-requires-and-provides bundle))
+      (define-values (mpi-vector requires recur-requires flattened-requires provides phase-to-link-modules)
+        (deserialize-requires-and-provides bundle))
       (define link-modules (hash-ref phase-to-link-modules 0 '()))
 
       ;; Support cross-module inlining
       (define (bundle->keys+uses bundle)
-        (define-values (mpi-vector requires provides phase-to-link-modules)
+        (define-values (mpi-vector requires recur-requires flattened-requires provides phase-to-link-modules)
           (deserialize-requires-and-provides bundle))
         (define link-modules (hash-ref phase-to-link-modules 0 '()))
         (define keys (for/list ([r (in-list link-modules)])
@@ -369,6 +369,8 @@
                    `(lambda (x) (eq? x ,val)))
         (test-comp `(lambda (x) (equal? ,val x))
                    `(lambda (x) (eq? ,val x)))
+        (test-comp `(lambda (x) (equal-always? x ,val))
+                   `(lambda (x) (eq? x ,val)))
         (test-comp #:except 'chez-scheme ; `eqv?` conversion happens in cpnanopass
                    `(lambda (x) (eqv? x ,val))
                    `(lambda (x) (eq? x ,val)))
@@ -378,6 +380,8 @@
        [test-equal-reduction/only-eqv
         (lambda (val)
          (test-comp `(lambda (x) (equal? x ,val))
+                    `(lambda (x) (eqv? x ,val)))
+         (test-comp `(lambda (x) (equal-always? x ,val))
                     `(lambda (x) (eqv? x ,val)))
          (test-comp `(lambda (x) (equal? ,val x))
                     `(lambda (x) (eqv? ,val x)))
@@ -3072,26 +3076,50 @@
            #f)
 
 ;; Make sure that `bitwise-and` is known to return a fixnum for non-negative
-;; fixnum arguments but not for a negative one
+;; fixnum arguments but not for a negative one or a large positive big-integer
 
 (test-comp '(lambda (x)
               (bitwise-ior (bitwise-and x 7) 1))
            '(lambda (x)
               (unsafe-fxior (bitwise-and x 7) 1)))
+(test-comp #:except 'racket
+           '(lambda (x)
+              (bitwise-ior (bitwise-and x (most-positive-fixnum)) 1))
+           '(lambda (x)
+              (unsafe-fxior (bitwise-and x (most-positive-fixnum)) 1)))
 (test-comp '(lambda (x)
               (bitwise-ior (bitwise-and x -7) 1))
            '(lambda (x)
               (unsafe-fxior (bitwise-and x -7) 1))
            #f)
+(test-comp '(lambda (x)
+              (bitwise-ior (bitwise-and x (add1 (most-positive-fixnum))) 1))
+           '(lambda (x)
+              (unsafe-fxior (bitwise-and x (add1 (most-positive-fixnum))) 1))
+           #f)
+
+;; Make sure `bitwise-ior` is known to return a fixnum for negative fixnum
+;; arguments but not for a zero or positive one, or large negative big-integer
+
 (test-comp #:except 'racket
            '(lambda (x)
               (bitwise-ior (bitwise-ior x -7) 1))
            '(lambda (x)
               (unsafe-fxior (bitwise-ior x -7) 1)))
+(test-comp #:except 'racket
+           '(lambda (x)
+              (bitwise-ior (bitwise-ior x (most-negative-fixnum)) 1))
+           '(lambda (x)
+              (unsafe-fxior (bitwise-ior x (most-negative-fixnum)) 1)))
 (test-comp '(lambda (x)
               (bitwise-ior (bitwise-ior x 7) 1))
            '(lambda (x)
               (unsafe-fxior (bitwise-ior x 7) 1))
+           #f)
+(test-comp '(lambda (x)
+              (bitwise-ior (bitwise-ior x (sub1 (most-negative-fixnum))) 1))
+           '(lambda (x)
+              (unsafe-fxior (bitwise-ior x (sub1 (most-negative-fixnum))) 1))
            #f)
 
 (test-comp `(lambda (x)
@@ -3776,6 +3804,44 @@
               (begin0
                (a? (a-x (a 1 2)))
                5)))
+
+;; check for inlined accessor, including when contract and realm info is present
+(for-each
+ (lambda (more)
+   (test-comp #:except 'racket
+              `(module m racket/base
+                 (require racket/unsafe/ops)
+                 (#%declare #:unsafe)
+                 (define-values (struct:a a a? a-x a-y)
+                   (let-values ([(struct:a a a? a-ref a-set!)
+                                 (make-struct-type 'a #f 2 0 #f
+                                                   (list (cons prop:authentic #t)))])
+                     (values struct:a a a?
+                             (make-struct-field-accessor a-ref 0 'a-x ,@more)
+                             (make-struct-field-accessor a-ref 1 'a-y ,@more))))
+                 (lambda (v)
+                   (+ (and (a? v) (a-x v))
+                      (and (a? v) (a-y v)))))
+              `(module m racket/base
+                 (require racket/unsafe/ops)
+                 (#%declare #:unsafe)
+                 (define-values (struct:a a a? a-x a-y)
+                   (let-values ([(struct:a a a? a-ref a-set!)
+                                 (make-struct-type 'a #f 2 0 #f
+                                                   (list (cons prop:authentic #t)))])
+                     (values struct:a a a?
+                             (make-struct-field-accessor a-ref 0 'a-x ,@more)
+                             (make-struct-field-accessor a-ref 1 'a-y ,@more))))
+                 (lambda (v)
+                   (+ (and (a? v) (unsafe-struct*-ref v 0))
+                      (and (a? v) (unsafe-struct*-ref v 1)))))))
+ (list '()
+       '('a?)
+       '("a?")
+       '(#f)
+       '('a? 'dreamland)
+       '("a?" 'dreamland)
+       '(#f 'dreamland)))
 
 (test-comp '(module m racket/base
               (struct a (x y) #:omit-define-syntaxes)
@@ -6611,6 +6677,239 @@
            '(lambda (x)
               (list (eq? x 7) (box 5))))
 
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Check for cross-module inlining in the presence of vacuous `let`
+;; This is specifically for schemify
+
+(register-top-level-module
+ (module add1/with-vacuous-let racket/base
+   (provide add1)
+   (define add1
+     (let ()
+       (letrec ()
+         (begin
+           (begin0
+             (values (lambda (x) (+ x 1))))))))))
+
+(register-top-level-module
+ (module add1/with-vacuous-let/not-broken racket/base
+   (provide add1)
+   (define add1
+     (let ()
+       (letrec ()
+         (begin
+           (begin0
+             (values (values (lambda (x) (+ x 1)))))))))))
+
+(register-top-level-module
+ (module add1/without-vacuous-let racket/base
+   (provide add1)
+   (define (add1 x)
+     (+ x 1))))
+
+(register-top-level-module
+ (module add1/with-copy-propagating-lets racket/base
+   (provide add1)
+   (define add1
+     (lambda (x)
+       (let ([x1 x])
+         (begin0
+           (letrec ([x2 x1]
+                    [x3 x1])
+             (begin
+               (quote-syntax ignore-me)
+               (+ x2 1)))))))))
+
+(when (eq? (system-type 'vm) 'chez-scheme)
+  (test-comp `(module m racket/base
+                (require 'add1/with-vacuous-let)
+                (add1 2))
+             `(module m racket/base
+                (require 'add1/without-vacuous-let)
+                (add1 2)))
+  (test-comp `(module m racket/base
+                (require 'add1/with-vacuous-let/not-broken)
+                (add1 2))
+             `(module m racket/base
+                (require 'add1/without-vacuous-let)
+                (add1 2)))
+  (test-comp `(module m racket/base
+                (require 'add1/with-copy-propagating-lets)
+                (add1 2))
+             `(module m racket/base
+                (require 'add1/without-vacuous-let)
+                (add1 2))))
+
+(register-top-level-module
+ (module add3/with-vacuous-let racket/base
+   (provide add3)
+   (define-values (add1 add2 add3)
+     (let ()
+       (letrec ()
+         (begin
+           (begin0
+             (values (lambda (x) (+ x 1))
+                     (lambda (x) (add1 (add1 x)))
+                     (lambda (x) (add1 (add2 x)))))))))))
+
+(register-top-level-module
+ (module add3/with-vacuous-let/broken racket/base
+   (provide add3)
+   (define-values (add1 add2 add3)
+     (let ()
+       (letrec ()
+         (begin
+           (begin0
+             (values (values (lambda (x) (+ x 1))
+                             (lambda (x) (add1 (add1 x)))
+                             (lambda (x) (add1 (add2 x))))))))))))
+
+(register-top-level-module
+ (module add3/without-vacuous-let racket/base
+   (provide add3)
+   (define (add1 x)
+     (+ x 1))
+   (define (add2 x)
+     (add1 (add1 x)))
+   (define (add3 x)
+     (add1 (add2 x)))))
+
+(when (eq? (system-type 'vm) 'chez-scheme)
+  (test-comp `(module m racket/base
+                (require 'add3/with-vacuous-let)
+                (add3 2))
+             `(module m racket/base
+                (require 'add3/without-vacuous-let)
+                (add3 2)))
+  (test-comp `(module m racket/base
+                (require 'add3/with-vacuous-let/broken)
+                (add3 2))
+             `(module m racket/base
+                (require 'add3/without-vacuous-let)
+                (add3 2))
+             #f))
+
+(register-top-level-module
+ (module add5/with-vacuous-let racket/base
+   (provide add5)
+   (define-values (add1 add2 add3 add4 add5)
+     (let ()
+       (letrec ()
+         (begin
+           (begin0
+             (values (lambda (x) (+ x 1))
+                     (lambda (x) (add1 (add1 x)))
+                     (lambda (x) (add1 (add2 x)))
+                     (lambda (x) (add1 (add3 x)))
+                     (lambda (x) (add1 (add4 x)))))))))))
+
+(register-top-level-module
+ (module add5/with-vacuous-let/broken racket/base
+   (provide add5)
+   (define-values (add1 add2 add3 add4 add5)
+     (let ()
+       (letrec ()
+         (begin
+           (begin0
+             (values (values (lambda (x) (+ x 1))
+                             (lambda (x) (add1 (add1 x)))
+                             (lambda (x) (add1 (add2 x)))
+                             (lambda (x) (add1 (add3 x)))
+                             (lambda (x) (add1 (add4 x))))))))))))
+
+(register-top-level-module
+ (module add5/without-vacuous-let racket/base
+   (provide add5)
+   (define (add1 x)
+     (+ x 1))
+   (define (add2 x)
+     (add1 (add1 x)))
+   (define (add3 x)
+     (add1 (add2 x)))
+   (define (add4 x)
+     (add1 (add3 x)))
+   (define (add5 x)
+     (add1 (add4 x)))))
+
+(when (eq? (system-type 'vm) 'chez-scheme)
+  (test-comp `(module m racket/base
+                (require 'add5/with-vacuous-let)
+                (add5 2))
+             `(module m racket/base
+                (require 'add5/without-vacuous-let)
+                (add5 2)))
+  (test-comp `(module m racket/base
+                (require 'add5/with-vacuous-let/broken)
+                (add5 2))
+             `(module m racket/base
+                (require 'add5/without-vacuous-let)
+                (add5 2))
+             #f))
+
+(register-top-level-module
+ (module add7/with-vacuous-let racket/base
+   (provide add7)
+   (define-values (add1 add2 add3 add4 add5 add6 add7)
+     (let ()
+       (letrec ()
+         (begin
+           (begin0
+             (values (lambda (x) (+ x 1))
+                     (lambda (x) (add1 (add1 x)))
+                     (lambda (x) (add1 (add2 x)))
+                     (lambda (x) (add1 (add3 x)))
+                     (lambda (x) (add1 (add4 x)))
+                     (lambda (x) (add1 (add5 x)))
+                     (lambda (x) (add1 (add6 x)))))))))))
+
+(register-top-level-module
+ (module add7/with-vacuous-let/broken racket/base
+   (provide add7)
+   (define-values (add1 add2 add3 add4 add5 add6 add7)
+     (let ()
+       (letrec ()
+         (begin
+           (begin0
+             (values (values (lambda (x) (+ x 1))
+                             (lambda (x) (add1 (add1 x)))
+                             (lambda (x) (add1 (add2 x)))
+                             (lambda (x) (add1 (add3 x)))
+                             (lambda (x) (add1 (add4 x)))
+                             (lambda (x) (add1 (add5 x)))
+                             (lambda (x) (add1 (add6 x))))))))))))
+
+(register-top-level-module
+ (module add7/without-vacuous-let racket/base
+   (provide add7)
+   (define (add1 x)
+     (+ x 1))
+   (define (add2 x)
+     (add1 (add1 x)))
+   (define (add3 x)
+     (add1 (add2 x)))
+   (define (add4 x)
+     (add1 (add3 x)))
+   (define (add5 x)
+     (add1 (add4 x)))
+   (define (add6 x)
+     (add1 (add5 x)))
+   (define (add7 x)
+     (add1 (add6 x)))))
+
+(when (eq? (system-type 'vm) 'chez-scheme)
+  (test-comp `(module m racket/base
+                (require 'add7/with-vacuous-let)
+                (add7 2))
+             `(module m racket/base
+                (require 'add7/without-vacuous-let)
+                (add7 2)))
+  (test-comp `(module m racket/base
+                (require 'add7/with-vacuous-let/broken)
+                (add7 2))
+             `(module m racket/base
+                (require 'add7/without-vacuous-let)
+                (add7 2))
+             #f))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Try to check that struct optimizations are ok
@@ -7246,6 +7545,39 @@
 
   (unless (a? val)
     (+ "unreachable 2")))
+
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; regression test for schemify inliner
+
+(let ()
+  (define (comp f g)
+    (lambda (x)
+      (f (g x))))
+
+  (define (double f)
+    (comp f f))
+
+  (define quad (double double))
+
+  (define f (quad add1))
+
+  (f 0))
+
+(let ()
+  (define (comp f g)
+    (case-lambda
+      [(x) (f (g x))]
+      [(x y) #f]))
+
+  (define (double f)
+    (comp f f))
+
+  (define quad (double double))
+
+  (define f (quad add1))
+
+  (f 0))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

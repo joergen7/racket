@@ -1,6 +1,7 @@
 #lang scheme/base
 
 (require racket/match
+         (prefix-in c: racket/contract)
          (prefix-in s: racket/set)
          scheme/mpair
          scheme/control scheme/foreign
@@ -473,6 +474,27 @@
       (match vec
         [(vector a _ ..7) (if (equal? (s:mutable-set 0) touched-indices) 'ok 'fail)])))
 
+   (comp
+    '(12 14 24 26)
+    (let ()
+      (define vec (vector 12 14 16 18 20 22 24 26))
+      (match vec
+        [(vector a b _ ... c d) (list a b c d)])))
+
+   (comp
+    '(12 14)
+    (let ()
+      (define vec (vector 12 14 16 18 20 22 24 26))
+      (match vec
+        [(vector a b _ ...) (list a b)])))
+
+   (comp
+    '(24 26)
+    (let ()
+      (define vec (vector 12 14 16 18 20 22 24 26))
+      (match vec
+        [(vector _ ... c d) (list c d)])))
+
    (comp 1
          (match #&1
            [(box a) a]
@@ -708,6 +730,14 @@
 
    (comp 1
          (match (box 'x) ('#&x 1) (_ #f)))
+
+   (let ()
+     (c:define/contract (my-unbox obj)
+       (c:-> (c:box/c c:any/c) c:any/c)
+       (match obj
+         [(box x) x]))
+
+     (comp 1 (my-unbox (box 1))))
 
    (comp 2
          (match (vector 1 2) ('#(1 2) 2) (_ #f)))

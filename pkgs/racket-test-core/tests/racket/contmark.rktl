@@ -138,7 +138,7 @@
 
 (require (prefix-in unit: racket/unit))
 
-;; ;; Hide keywords from scheme/unit.rkt:
+;; Hide keywords from racket/unit:
 (define import #f)
 (define export #f)
 (define link #f)
@@ -757,6 +757,8 @@
                   (with-continuation-mark 'y 13
                     (with-continuation-mark 'x 14
                       (call-with-immediate-continuation-mark 'x (lambda (v) v))))))
+
+(test 'nope call/cc (λ (k) (call-with-immediate-continuation-mark 'key k 'nope)))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

@@ -39,14 +39,14 @@ re-exported by @racketmodname[net/url] and @racketmodname[net/url-string].}
 @; ----------------------------------------
 
 
-@defstruct[url ([scheme (or/c false/c string?)]
-                [user (or/c false/c string?)]
-                [host (or/c false/c string?)]
-                [port (or/c false/c exact-nonnegative-integer?)]
+@defstruct[url ([scheme (or/c #f string?)]
+                [user (or/c #f string?)]
+                [host (or/c #f string?)]
+                [port (or/c #f exact-nonnegative-integer?)]
                 [path-absolute? boolean?]
                 [path (listof path/param?)]
-                [query (listof (cons/c symbol? (or/c false/c string?)))]
-                [fragment (or/c false/c string?)])]{
+                [query (listof (cons/c symbol? (or/c #f string?)))]
+                [fragment (or/c #f string?)])]{
 
 The basic structure for all URLs, which is explained in RFC 3986
 @cite["RFC3986"]. The following diagram illustrates the parts:
@@ -102,7 +102,7 @@ paths to from URL structure types and back again are provided by the
 
 @defthing[url-regexp regexp?]{
 A @tech[#:doc '(lib "scribblings/reference/reference.scrbl")]{regexp value} 
-that can be useful for matching url strings. Mostly follows 
+that can be useful for matching URL strings. Mostly follows 
 RFC 3986 @cite["RFC3986"], Appendix B, except for using @tt{*} instead of 
 @tt{+} for the scheme part (see @racket[url]).
 @history[#:added "6.4.0.7"]}
@@ -115,7 +115,7 @@ struct. The @racket[string->url] procedure uses
 sensitive to the @racket[current-alist-separator-mode] parameter for
 determining the association separator.
 
-The contract on @racket[str] insists that, if the url has a scheme,
+The contract on @racket[str] insists that, if the URL has a scheme,
 then the scheme begins with a letter and consists only of letters,
 numbers, @litchar{+}, @litchar{-}, and @litchar{.} characters.
 
@@ -541,8 +541,8 @@ The default mapping is the empty list (i.e., no proxies).}
 
 @defparam[current-no-proxy-servers dest-hosts-list (listof (or/c string? regexp?))]{
 
-A parameter that determines which servers will be accessed directly
-i.e. without resort to @racket[current-proxy-servers]. It is a list of
+A parameter that determines which servers will be accessed directly,
+i.e., without resort to @racket[current-proxy-servers]. It is a list of
 
 @itemize[
          
@@ -570,7 +570,7 @@ where a pattern is one of:
          
   @item{a string beginning with a @litchar{.} (period): converted to a
     regexp that performs a suffix match on a destination host name;
-    e.g. @litchar[".racket-lang.org"] matches destinations of
+    e.g., @litchar[".racket-lang.org"] matches destinations of
     @litchar["doc.racket-lang.org"], @litchar["pkgs.racket-lang.org"], but
     neither @litchar["doc.bracket-lang.org"] nor
     @litchar["pkgs.racket-lang.org.uk"];
@@ -583,7 +583,7 @@ where a pattern is one of:
 
 @defproc[(proxy-server-for
           [url-schm string?]
-          [dest-host-name (or/c false/c string?) #f])
+          [dest-host-name (or/c #f string?) #f])
          (or/c (list/c string? string? (integer-in 0 65535)) #f)]{
 
 Returns the proxy server entry for the combination of @racket[url-schm]
@@ -598,7 +598,7 @@ and @racket[host], or @racket[#f] if no proxy is to be used.}
 @defproc[(http-sendrecv/url [u url?]
                             [#:method method (or/c bytes? string? symbol?) #"GET"]
                             [#:headers headers (listof (or/c bytes? string?)) empty]
-                            [#:data data (or/c false/c bytes? string? data-procedure/c) #f]
+                            [#:data data (or/c #f bytes? string? data-procedure/c) #f]
                             [#:content-decode decodes (listof symbol?) '(gzip deflate)])
          (values bytes? (listof bytes?) input-port?)]{
 

@@ -3789,6 +3789,26 @@
                                               (call/cc (lambda (k) k))))))
                  'x))
 
+  (equal? '42
+          (with-continuation-mark 'a 42
+            (with-continuation-mark 'b (continuation-marks-first (current-continuation-marks) 'a)
+              (continuation-marks-first (current-continuation-marks) 'b))))
+  (equal? '42
+          (with-continuation-mark 'a 42
+            (values
+             (with-continuation-mark 'b (continuation-marks-first (current-continuation-marks) 'a)
+               (continuation-marks-first (current-continuation-marks) 'b)))))
+
+  (equal? '43
+          (with-continuation-mark 'a 'b
+            (with-continuation-mark (continuation-marks-first (current-continuation-marks) 'a) 43
+              (continuation-marks-first (current-continuation-marks) 'b))))
+  (equal? '43
+          (with-continuation-mark 'a 'b
+            (values
+             (with-continuation-mark (continuation-marks-first (current-continuation-marks) 'a) 43
+               (continuation-marks-first (current-continuation-marks) 'b)))))
+
   ;; if this goes quadratic, then it will look like non-termination:
   (with-continuation-mark
       'x 'yes
@@ -4214,7 +4234,8 @@
             (and (equal? (x2) x2)
                  (not (x1))
                  (not (x2))))))
-   (parameterize ([collect-trip-bytes (expt 2 24)])
+   (parameterize ([collect-trip-bytes (expt 2 24)]
+                  [collect-maximum-generation-threshold-factor 0])
      (let ([k 1000000])
        (let ([g (make-guardian)])
          (let f ([n k])
@@ -4229,7 +4250,8 @@
                [else (collect) (f n)])))
          #t)))
    ;; same for ordered:
-   (parameterize ([collect-trip-bytes (expt 2 24)])
+   (parameterize ([collect-trip-bytes (expt 2 24)]
+                  [collect-maximum-generation-threshold-factor 0])
      (let ([k 1000000])
        (let ([g (make-guardian #t)])
          (let f ([n k])
@@ -4367,11 +4389,14 @@
        ;; report how long a collection takes averaged
        ;; over `iters` tries
        (define iters 10)
-       (let loop ([g #f] [accum 0] [j iters])
+       (let loop ([g #f] [accum 0] [j iters] [iters-mult 1])
          (if (zero? j)
              (if (zero? accum)
-                 g
-                 (/ accum iters))
+                 ;; more iterations to get non-0 CPU time:
+                 (loop g accum iters (add1 iters-mult))
+                 (begin
+                   (keep-live g)
+                   (/ accum (* iters iters-mult))))
              (let ([g (let loop ([i n])
                         (let ([g (make-guardian ordered?)])
                           (if (zero? i)
@@ -4379,14 +4404,15 @@
                               (let ([next-g (loop (sub1 i))])
                                 (g (get-key next-g) next-g)
                                 g))))])
-               (let ([start (current-time)])
+               (let ([start (current-time 'time-process)])
                  (collect (collect-maximum-generation))
-                 (let ([delta (time-difference (current-time) start)])
+                 (let ([delta (time-difference (current-time 'time-process) start)])
                    (loop g
                          (+ accum
                             (* (time-second delta) 1e9)
                             (time-nanosecond delta))
-                         (sub1 j))))))))
+                         (sub1 j)
+                         iters-mult)))))))
 
      ;; Make sure guardian chains imply GC times that
      ;; look linear, as opposed to quadratic
@@ -4451,7 +4477,7 @@
    ;; self representative doesn't count as cycle
    (let ([g (make-guardian #t)])
      (let ([s (gensym)])
-       (g s  s))
+       (g s s))
      (collect)
      (symbol? (g)))
    ;; try a longer cycle:
@@ -4817,6 +4843,23 @@
               (begin (set-car! x (cons 'd 'e)) (equal? (car x) '(d . e)))
               (begin (collect (collect-maximum-generation))
                      (bwp-object? (car x))))))
+   ;; check interaction of weak pairs, generations, and specific target generations for collection
+   (with-interrupts-disabled
+    (parameterize ([#%$enable-check-heap #t]
+                   [collect-maximum-generation (max (collect-maximum-generation) 2)])
+      (let ([key "key"])
+        (let ([e (weak-cons key #f)])
+          (collect 0 1 1)
+          (let ([key2 (gensym key)])
+            ;; e is gen 1, key2 is gen 0:
+            (set-car! e key2)
+            (collect 1 1 2)
+            ;; Now, e is gen 1, key2 is gen 0
+            (and (eq? (car e) key2)
+                 (begin
+                   (collect 1 2 2)
+                   ;; Check that the GC update the reference to `key2` in `e`:
+                   (eq? (car e) key2))))))))
  )
 
 (mat ephemeron
@@ -4929,11 +4972,11 @@
          (collect 2)
          (let*-values ([(key es) (mk n (gensym) '())]
                        [(root holds) (mk* n key es)])
-           (let ([start (current-time)])
+           (let ([start (current-time 'time-process)])
              (collect 0 1)
              (collect 1 2)
              (collect 2 2)
-             (let ([delta (time-difference (current-time) start)])
+             (let ([delta (time-difference (current-time 'time-process) start)])
                ;; Sanity check on ephemerons
                (for-each (lambda (e)
                            (when (eq? #!bwp (ephemeron-key e))
@@ -4991,20 +5034,22 @@
    ;; ----------------------------------------
    ;; Check interaction of mutation and incremental generation promotion
 
-   (parameterize ([collect-request-handler void] [collect-maximum-generation (max (collect-maximum-generation) 2)])
-    (let ([key "key"])
-      (let ([e (ephemeron-cons key #f)])
-        (collect 0 1 1)
-        (let ([key2 (gensym key)])
-          ;; e is gen 1, key2 is gen 0:
-          (set-car! e key2)
-          (collect 1 1 2)
-          ;; Now, e is gen 1, key2 is gen 0
-          (and (eq? (car e) key2)
-               (begin
-                 (collect 1 2 2)
-                 ;; Check that the GC update the reference to `key2` in `e`:
-                 (eq? (car e) key2)))))))
+   (with-interrupts-disabled
+    (parameterize ([#%$enable-check-heap #t]
+                   [collect-maximum-generation (max (collect-maximum-generation) 2)])
+      (let ([key "key"])
+        (let ([e (ephemeron-cons key #f)])
+          (collect 0 1 1)
+          (let ([key2 (gensym key)])
+            ;; e is gen 1, key2 is gen 0:
+            (set-car! e key2)
+            (collect 1 1 2)
+            ;; Now, e is gen 1, key2 is gen 0
+            (and (eq? (car e) key2)
+                 (begin
+                   (collect 1 2 2)
+                   ;; Check that the GC update the reference to `key2` in `e`:
+                   (eq? (car e) key2))))))))
 
    ;; ----------------------------------------
    ;; Check GC interaction with zero-sized contnuations - unlikely

@@ -40,6 +40,7 @@ void S_thread_init(void) {
     s_thread_cond_init(&S_terminated_cond);
     S_alloc_mutex.owner = 0;
     S_alloc_mutex.count = 0;
+    S_main_thread_id = s_thread_self();
 
 # ifdef IMPLICIT_ATOMIC_AS_EXPLICIT
     s_thread_mutex_init(&S_implicit_mutex);
@@ -125,6 +126,7 @@ ptr S_create_thread_object(const char *who, ptr p_tc) {
 
   WINDERS(tc) = Snil;
   ATTACHMENTS(tc) = Snil;
+  HANDLERSTACK(tc) = Sfalse;
   CACHEDFRAME(tc) = Sfalse;
   STACKLINK(tc) = SYMVAL(S_G.null_continuation_id);
   STACKCACHE(tc) = Snil;
@@ -175,6 +177,10 @@ ptr S_create_thread_object(const char *who, ptr p_tc) {
   LZ4OUTBUFFER(tc) = 0;
 
   CP(tc) = 0;
+
+  /* if a collection is needed, then ask the new thread to check right away */
+  if (Sboolean_value(S_symbol_value(S_G.collect_request_pending_id)))
+    TRAP(tc) = (ptr)1;
 
   tc_mutex_release();
 
@@ -360,7 +366,7 @@ static s_thread_rv_t start_thread(void *p) {
 }
 
 
-scheme_mutex_t *S_make_mutex() {
+ptr S_make_mutex(void) {
   scheme_mutex_t *m;
 
   m = (scheme_mutex_t *)malloc(sizeof(scheme_mutex_t));
@@ -371,7 +377,7 @@ scheme_mutex_t *S_make_mutex() {
   m->owner = s_thread_self();
   m->count = 0;
 
-  return m;
+  return TO_PTR(m);
 }
 
 void S_mutex_free(scheme_mutex_t *m) {

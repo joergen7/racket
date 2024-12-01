@@ -1224,9 +1224,12 @@
 	 (lambda (x)
 	   (test (void) (list x)
 		 (parameterize ([print-unreadable #f])
-		   (display x p)))
+		   (display x p)))  
 	   (err/rt-test (parameterize ([print-unreadable #f])
 			  (write x p))
+                        exn:fail?)  
+	   (err/rt-test (parameterize ([print-unreadable #f])
+			  (print x p))
                         exn:fail?))]
 	[try-good
 	 (lambda (x)
@@ -1656,6 +1659,16 @@
 ;; make sure this doesn't take too long and use so much memory
 ;; that we crash:
 (test #t integer? (datum-intern-literal (- (expt 2 10000000))))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; make sure span is in bytes when port does not count lines
+(let ()
+  (define s (open-input-string "\u3BB"))
+  (test 2 syntax-span (read-syntax 'x s)))
+(let ()
+  (define s (open-input-string "↑"))
+  (test 3 syntax-span (read-syntax 'x s)))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

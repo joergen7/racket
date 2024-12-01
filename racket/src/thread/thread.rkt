@@ -100,6 +100,10 @@
 (module* for-future #f
   (provide break-enabled-default-cell))
 
+(module* for-stats #f
+  (provide thread-descheduled?
+           thread-sched-info))
+
 ;; ----------------------------------------
 
 (struct thread node (name
@@ -953,6 +957,11 @@
   (when (eq? t check-t)
     (check-for-break)
     (when (in-atomic-mode?)
+      ;; This callback could get dropped; see `add-end-atomic-callback!`
+      ;; for more information. That's not entirely harmless, because
+      ;; it might delay detection of a thread break, and our current
+      ;; approach is to document the limitation (e.g., when breaking
+      ;; the current thread in a foreign callback).
       (add-end-atomic-callback! check-for-break))))
 
 (define (break>? k1 k2)

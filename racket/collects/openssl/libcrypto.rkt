@@ -57,10 +57,17 @@
         "3")])
     ;; Don't use the versionless dylib on macOS, as it aborts on 10.15
     (case (system-type)
-      [(macosx) versions]
+      [(macosx)
+       ;; Don't use the versionless dylib on macOS, as it aborts on 10.15.
+       ;; Also don't look for older versions, because that can log an error
+       ;; in "mzssl.rkt". Just recognize the version that's provided by
+       ;; the "racket-lib" package.
+       '("1.1")]
       [else
        (case (path->string (system-library-subpath #f))
-         [("x86_64-darwin" "i386-darwin" "aarch64-darwin") versions]
+         [("x86_64-darwin" "i386-darwin" "aarch64-darwin")
+          ;; Even in Unix mode, avoid trying versionless on Mac OS
+          versions]
          [else
           (cons "" ; versionless (eg from devel pkg)
                 versions)])])))
@@ -79,7 +86,26 @@
     [else '(so "libcrypto")]))
 
 (define libcrypto
-  (with-handlers ([exn:fail? (lambda (x)
-                               (set! libcrypto-load-fail-reason (exn-message x))
-                               #f)])
-    (ffi-lib libcrypto-so openssl-lib-versions)))
+  (cond
+    ;; On iOS, linking to regular shared objects (except those provided
+    ;; by Apple) is not supported. Instead, the library must be linked
+    ;; via an XCFramework containing a position-independent library such
+    ;; as the one provided by [1]. Here, we assume the library has been
+    ;; loaded if we can get the OpenSSL_version_num function.
+    ;;
+    ;; [1]: https://github.com/krzyzanowskim/OpenSSL-Package
+    [(eq? (system-type 'os*) 'ios)
+     (define the-lib (ffi-lib #f))
+     (define openssl-version
+       ((get-ffi-obj
+         "OpenSSL_version_num" the-lib
+         (_fun -> _ulong)
+         (lambda ()
+           (lambda ()
+             0)))))
+     (and (> openssl-version 0) the-lib)]
+    [else
+     (with-handlers ([exn:fail? (lambda (x)
+                                  (set! libcrypto-load-fail-reason (exn-message x))
+                                  #f)])
+       (ffi-lib libcrypto-so openssl-lib-versions))]))

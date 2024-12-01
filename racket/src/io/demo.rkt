@@ -12,6 +12,10 @@
                   [current-directory host:current-directory]
                   [path->string host:path->string]))
 
+(require (file "/tmp/simp.rkt"))
+(check-simplify (lambda (p) (path->string (simplify-path (host:path->string p)))))
+(exit)
+
 (path->string (current-directory))
 (set-string->number?! string->number)
 
@@ -395,6 +399,9 @@
                       (car content))
         (error))
       (loop (add1 x) (cdr content) (list* bstr bstr accum))])))
+
+(test #t (equal? (build-path "a" "b") (build-path "a" "b")))
+(test #t (equal-always? (build-path "a" "b") (build-path "a" "b")))
 
 (let ()
   (define path (build-path "compiled" "demo-out"))

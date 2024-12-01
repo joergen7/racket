@@ -129,7 +129,13 @@
      (define big-endian?
        (if target
            (case target
-             [("tppc32le") #t]
+             [("tppc32osx" "ppc32osx"
+                          "tppc32le" "ppc32le"
+                          "tppc32fb" "ppc32fb"
+                          "tppc32ob" "ppc32ob"
+                          "tppc32nb" "ppc32nb"
+                          "tpb64b" "pb64b"
+                          "tpb32b" "pb32b") #t]
              [else #f])
            (system-big-endian?)))
 

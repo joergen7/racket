@@ -1,6 +1,99 @@
-Version 8.8
+Version 8.16
+Add `port-file-stat`
+
+Version 8.15, Ocotober 2024
+Sort and highlight documentation-search results by core documentation
+ and main-distribution packages
+Add "language family" to documents, support filtering searches by
+ language family, and highlight results that are not the main family
+Add `'ios` as a compilation target distinct from `'macos`
+Use `AI_V4MAPPED` and `AI_ADDRCONFIG` for hostname resolution via
+ `getaddrinfo`, which improves IPv4 vs. IPv6 on some platforms
+raco pkg: Add `uninstall` command prefer it to `remove`
+raco pkg: Improve `--clone` transition for packages that are included
+ in a distribution, and improve `--unclone` propagation to implied
+ffi/unsafe: Add `'zeroed-atomic[-interior]` allocation mode
+compiler/demod: Repair for Windows paths and some syntax scopes
+
+Version 8.14, July 2024
+Add `case-λ`, add `match-λ` (and variants) to `racket/match`, and
+ change the binding of `λ` to be `free-identifier=?` to `lambda`
+Add the `compiler/demod` language, improve `raco demod` to support
+ the preservation of syntax, provides, macros, and submodules, and
+ improve the effectiveness of definition pruning
+Generalize `contract-in` to have the same features as `contract-out`
+Add `hash-filter` to `racket/hash`
+Add `#:flatten-requires` and `#:unlimited-compile` keywords for
+ `#%declare`
+Add `raco/testing`, now used by `rackunit/log`, as a home for general
+ testing like `test-log` and `current-test-invocation-directory`
+Adjust `raco test` to use `current-test-invocation-directory`, and
+ adjust `raco test` output to show well-formed module paths
+Support an embedding of Racket CS where boot files are provided in
+ memory, instead of requiring a file
+Fix `equal-always?` on paths, fxvectors, flvectors, extflvectors,
+ and stencil vectors
+
+Version 8.13, April 2024
+Add `racket/treelist` and `racket/mutable-treelist`
+Add `contract-in`
+Add `hash-filter-keys` and `hash-filter-values` to `racket/hash`
+Add `vector-extend` and `vector*-extend` ro `racket/vector`
+Add `syntax-local-lift-require-top-level-form`
+Add `syntax-local-make-definition-context-introducer`
+Improve support for static generation of foreign-function bindings via
+ machine-specific cross-module optimization
+Use Unicode 15.1 for character and string operations
+
+Version 8.12, January 2024
+Change `open-input-file`, `open-output-file`, and `subprocess`
+ on variants of Unix and Mac OS where O_CLOEXEC is supported
+ to open files with that flag and to refrain from closing all
+ file descriptors (without O_CLOEXEC) in `subprocess`
+Add support for `hash` and `hash*` patterns in `match`
+Add `vector-set/copy` to `racket/vector`
+Add `pregexp-quote`
+Add `convention:hyphen->{Pascal,camel}Case` FFI conventions
+Add `racket/case` with `case/equal-always` and related forms
+Add configured build stamp to `banner` result
+Change treatment of shadowing for a `for/fold` accumulator
+ variable by an iteration clause
+Change `PLT_LINKLET_SHOW` and variants to write to error port,
+ and adjusted the output format
+Add partial support for static generation of foreign-function
+ bindings
+
+Version 8.11, October 2023
+Add `#:do` option support to `match` clauses
+Add `#:indent` to `write-json`
+Add `initiate-sequence` and extend `:do-in` to allow an inner
+ definition sequence
+Fix `module-path?` to disallow trailing dots in directory elements
+
+Version 8.10, July 2023
+Improve Check Syntax binding arrows from `define-local-member-name`
+Change `syntax-parse` to use interpreted mode for patterns outside
+ syntax classes
+Allow fxvectors and flvectors in fasl and compiled code
+Add `[im]mutable-string?`, `[im]mutable-bytes?`, `[im]mutable-vector?`,
+ `[im]mutable-box?`, and `[im]mutable-hash?`
+
+Version 8.9, April 2023
+Use Unicode 15.0 for character and string operations
+Add `racket/hash-code`
+Add `fxrshift/logical`
+Add support for `configure-expand` submodules
+Add support for multiple values to `stream-cons`
+Improve `unit/c` to see more bindings and to enforce contracts
+ within `constract` forms
+Add an optipnal results clause to `define-values/invoke-unit`
+Change TCP output port block buffering to imply TCP_NODELAY
+
+Version 8.8, January 2023
 Add `#:param` option to `->i`
+Extend `copy-file` with permission-management arguments
 Fix CS `[:word:]` regexp pattern to include ASCII digits
+Other bug repairs and other changes noted in the documentation
 
 Version 8.7, October 2022
 Use Unicode 14.0 for character and string operations
@@ -108,7 +201,7 @@ Switch Racket CS immutable hash table to HAMTs, based on
  stencil vectors in the Chez Scheme
 Bug repairs and other changes noted in the documentation
 
-Version 7.6, January 2019
+Version 7.6, January 2020
 Bug repairs and other changes noted in the documentation
 
 Version 7.5, November 2019

@@ -1342,6 +1342,7 @@ enum {
   MZCONFIG_ERROR_DISPLAY_HANDLER,
   MZCONFIG_ERROR_PRINT_VALUE_HANDLER,
   MZCONFIG_ERROR_PRINT_SYNTAX_HANDLER,
+  MZCONFIG_ERROR_NAME_SYNTAX_HANDLER,
   MZCONFIG_ERROR_MESSAGE_ADJUSTER,
 
   MZCONFIG_EXIT_HANDLER,
@@ -1941,6 +1942,7 @@ MZ_EXTERN void scheme_set_stdio_makers(Scheme_Stdio_Maker_Proc in,
 
 
 MZ_EXTERN void scheme_set_banner(char *s);
+MZ_EXTERN void scheme_set_build_stamp(char *s);
 MZ_EXTERN Scheme_Object *scheme_set_exec_cmd(char *s);
 MZ_EXTERN Scheme_Object *scheme_set_run_cmd(char *s);
 MZ_EXTERN void scheme_set_collects_path(Scheme_Object *p);

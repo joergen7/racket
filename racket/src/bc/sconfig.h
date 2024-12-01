@@ -356,7 +356,7 @@
 #   define FREEBSD_CONTROL_387
 #  endif
 # elif defined(__amd64__)
-#  define SCHEME_ARCH "amd64"
+#  define SCHEME_ARCH "x86_64"
 #  define REGISTER_POOR_MACHINE
 #  define MZ_USE_JIT_X86_64
 #  define MZ_TRY_EXTFLONUMS
@@ -691,6 +691,8 @@
 # define TRIG_ZERO_NEEDS_SIGN_CHECK
 
 # define USE_UNDERSCORE_SETJMP
+
+# define LIMIT_POLL_FREQUENCY_BY_MONOTONIC_TIME
 
 #ifndef XONX
 # define MACOS_UNICODE_SUPPORT
@@ -1202,6 +1204,10 @@
  /* FFI_CALLBACK_NEED_INT_CLEAR indiates thet libffi callback results
     that are smaller than an `int' should clear `int'-sized space
     in the result area. */
+
+ /* LIMIT_POLL_FREQUENCY_BY_MONOTONIC_TIME indicates that getting
+    monotonic time is much faster than polling, so it makes sense
+    to check monotonic time to limit polling frequency. */
 
 #endif  /* FLAGS_ALREADY_SET */
 

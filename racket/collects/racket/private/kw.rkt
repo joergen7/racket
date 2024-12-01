@@ -29,7 +29,8 @@
                        "stxcase-scheme.rkt"
                        "qqstx.rkt"))
 
-  (#%provide new-lambda new-λ
+  (#%provide new-lambda
+             (rename new-lambda new-λ)
              new-define
              new-app
              make-keyword-procedure
@@ -224,6 +225,9 @@
                       0 0 #f
                       (list (cons prop:method-arity-error #t))))
 
+  (define (fmt v)
+    ((error-syntax->string-handler) v #f))
+
   (define (generate-arity-string proc)
     (let-values ([(req allowed) (procedure-keywords proc)]
                  [(a) (procedure-arity proc)]
@@ -237,13 +241,13 @@
                                 ""
                                 "s")
                             (case (length req)
-                              [(1) (format " ~a" (car req))]
-                              [(2) (format " ~a and ~a" (car req) (cadr req))]
+                              [(1) (format " ~a" (fmt (car req)))]
+                              [(2) (format " ~a and ~a" (fmt (car req)) (fmt (cadr req)))]
                               [else
                                (let loop ([req req])
                                  (if (null? (cdr req))
-                                     (format " and ~a" (car req))
-                                     (format " ~a,~a" (car req)
+                                     (format " and ~a" (fmt (car req)))
+                                     (format " ~a,~a" (fmt (car req))
                                              (loop (cdr req)))))])))]
                  [(method-adjust)
                   (lambda (a)
@@ -916,23 +920,20 @@
                            'needed-kws
                            'kws))))]))))))]))
   
-  (define-syntaxes (new-lambda new-λ)
-    (let ([new-lambda
-           (lambda (stx)
-             (if (eq? (syntax-local-context) 'expression)
-                 (parse-lambda
-                  stx
-                  #f
-                  (lambda (e) e)
-                  (lambda (impl kwimpl wrap core-id unpack-id n-req
-                                opt-not-supplieds opt-not-supplied-srclocs
-                                rest? req-kws all-kws all-kw-not-supplied-srclocs)
-                    (quasisyntax/loc stx
-                      (let ([#,core-id #,impl])
-                        (let ([#,unpack-id #,kwimpl])
-                          #,wrap)))))
-                 (quasisyntax/loc stx (#%expression #,stx))))])
-      (values new-lambda new-lambda)))
+  (define-syntax (new-lambda stx)
+    (if (eq? (syntax-local-context) 'expression)
+        (parse-lambda
+         stx
+         #f
+         (lambda (e) e)
+         (lambda (impl kwimpl wrap core-id unpack-id n-req
+                       opt-not-supplieds opt-not-supplied-srclocs
+                       rest? req-kws all-kws all-kw-not-supplied-srclocs)
+           (quasisyntax/loc stx
+             (let ([#,core-id #,impl])
+               (let ([#,unpack-id #,kwimpl])
+                 #,wrap)))))
+        (quasisyntax/loc stx (#%expression #,stx))))
   
   (define (missing-kw proc . args)
     (apply
@@ -942,7 +943,7 @@
      args))
 
   (define (raise-missing-kw name req-kws args)
-    (raise-wrong-kws name #t #t #f null null req-kws null args))
+    (raise-wrong-kws name #t #t #f null null (car req-kws) #f args))
 
   (define-for-syntax (generate-proc-id default local-name)
     (cond
@@ -1176,8 +1177,7 @@
                         (define #,id #,rhs)))]
              [can-opt? (lambda (lam-id)
                          (and (identifier? lam-id)
-                              (or (free-identifier=? lam-id #'new-lambda)
-                                  (free-identifier=? lam-id #'new-λ))
+                              (free-identifier=? lam-id #'new-lambda)
                               (let ([ctx (syntax-local-context)])
                                 (or (and (memq ctx '(module module-begin))
                                          (compile-enforce-module-constants))
@@ -1660,7 +1660,7 @@
                           (format "\n   ~e" v))
                         args)
                    (map (lambda (kw kw-arg)
-                          (format "\n   ~a ~e" kw kw-arg))
+                          (format "\n   ~a ~e" (fmt kw) kw-arg))
                         kws kw-args))))])
         (define (application-message str)
           (error-message->adjusted-string 'application
@@ -1678,7 +1678,7 @@
                      "  procedure: ~a\n"
                      "  given keyword: ~a"
                      "~a")
-                    name/val extra-kw args-str))
+                    name/val (fmt extra-kw) args-str))
                   (if proc?
                       (application-message
                        (format
@@ -1703,7 +1703,7 @@
                      "  procedure: ~a\n"
                      "  required keyword: ~a"
                      "~a")
-                    name/val missing-kw args-str))
+                    name/val (fmt missing-kw) args-str))
                   (application-message
                    (format
                     (string-append
@@ -1805,7 +1805,7 @@
                  allowed-kw
                  plain-proc)
                 ;; Some keywords are required, so "plain" proc is
-                ;;  irrelevant; we build a new one that wraps `raise-missing-kws'.
+                ;;  irrelevant; we build a new one that wraps `raise-missing-kw'.
                 (let ([name (or name
                                 (and (named-keyword-procedure? proc)
                                      (vector-ref (keyword-procedure-name+fail* proc) 0))
@@ -1824,7 +1824,7 @@
                    allowed-kw
                    (procedure-reduce-arity-mask
                     (lambda args
-                      (raise-missing-kw name req-kw))
+                      (raise-missing-kw name req-kw args))
                     mask)
                    name
                    realm)))))))
@@ -1923,7 +1923,7 @@
                         (if (vector? raw-name+fail)
                             (procedure-reduce-arity-mask
                              (lambda args
-                               (raise-missing-kw name req-kw))
+                               (raise-missing-kw name req-kw args))
                              (arithmetic-shift (procedure-arity-mask (vector-ref name+fail 2)) -1))
                             (vector-ref name+fail 2))
                         name
@@ -2212,7 +2212,7 @@
                                        (if (vector? raw-name+fail)
                                            (procedure-reduce-arity-mask
                                             (lambda args
-                                              (raise-missing-kw name req-kw))
+                                              (raise-missing-kw name req-kw args))
                                             (arithmetic-shift (procedure-arity-mask (vector-ref name+fail 2)) -1))
                                            (vector-ref name+fail 2))
                                        (vector-ref name+fail 0)

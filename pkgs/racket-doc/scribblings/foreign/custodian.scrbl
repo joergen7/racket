@@ -33,7 +33,7 @@ if @racket[weak?] is @racket[#f]. A value associated with a custodian
 can therefore be finalized via will executors, at least through will
 registrations and @racket[register-finalizer] uses @emph{after}
 calling @racket[register-custodian-shutdown], but the value becomes
-strongly held when no there are no other strong references and no
+strongly held when there are no other strong references and no
 later-registered finalizers or wills apply.
 
 If @racket[ordered?] is true when @racket[weak] is @racket[#f], then
@@ -77,8 +77,8 @@ is taken.}
                  [callback (any/c . -> . any)]
                  [custodian custodian? (current-custodian)]
                  [#:at-exit? at-exit? any/c #f]
-                 [#:custodian-available available-callback ((any/c -> void?) -> any) (lambda (_unreg) (void))]
-                 [#:custodian-unavailable unavailable-callback ((-> void?) -> any) (lambda (_reg-fnl) (_reg-fnl))])
+                 [#:custodian-available available-callback ((any/c . -> . void?) . -> . any) (lambda (_unreg) (void))]
+                 [#:custodian-unavailable unavailable-callback ((-> void?) . -> . any) (lambda (_reg-fnl) (_reg-fnl))])
          any]{
 
 Registers @racket[callback] to be applied (in atomic mode) to

@@ -98,6 +98,8 @@
    (define enclosing-self (compile-context-module-self cctx))
    (define self (parsed-module-self p))
    (define requires (parsed-module-requires p))
+   (define recur-requires (parsed-module-recur-requires p))
+   (define flattened-requires (parsed-module-flattened-requires p))
    (define provides (parsed-module-provides p))
    (define encoded-root-expand-ctx-box (box (parsed-module-encoded-root-ctx p))) ; for `module->namespace`
    (define body-context-simple? (parsed-module-root-ctx-simple? p))
@@ -119,6 +121,7 @@
    
    (define cross-phase-persistent? #f)
    (define unsafe?-box (box #f))
+   (define unlimited-compile?-box (box #f))
    
    ;; Callback to track phases that have side effects
    (define side-effects (make-hasheqv))
@@ -162,13 +165,16 @@
                                               [(parsed-#%declare? body)
                                                (define-match m (parsed-s body) '(_ kw ...))
                                                (for ([kw (in-list (m 'kw))])
-                                                 (when (eq? (syntax-e kw) '#:cross-phase-persistent)
-                                                   (set! cross-phase-persistent? #t))
-                                                 (when (eq? (syntax-e kw) '#:empty-namespace)
-                                                   (set! empty-result-for-module->namespace? #t)
-                                                   (set-box! encoded-root-expand-ctx-box #f))
-                                                 (when (eq? (syntax-e kw) '#:unsafe)
-                                                   (set-box! unsafe?-box #t)))
+                                                 (case (syntax-e kw)
+                                                   [(#:cross-phase-persistent)
+                                                    (set! cross-phase-persistent? #t)]
+                                                   [(#:empty-namespace)
+                                                    (set! empty-result-for-module->namespace? #t)
+                                                    (set-box! encoded-root-expand-ctx-box #f)]
+                                                   [(#:unsafe)
+                                                    (set-box! unsafe?-box #t)]
+                                                   [(#:unlimited-compile)
+                                                    (set-box! unlimited-compile?-box #t)]))
                                                #f]
                                               [else #f]))
                     #:get-module-linklet-info (lambda (mod-name phase)
@@ -177,6 +183,7 @@
                                                 (and ht (hash-ref ht phase #f)))
                     #:serializable? serializable?
                     #:module-prompt? #t
+                    #:unlimited-compile?-box unlimited-compile?-box
                     #:to-correlated-linklet? to-correlated-linklet?
                     #:unsafe?-box unsafe?-box
                     #:realm realm))
@@ -202,7 +209,7 @@
                                                     (hash-ref phase-to-link-extra-inspectorsss phase #f)))))))
    
    ;; Assemble the declaration linking unit, which includes linking
-   ;; information for each phase, is instanted once for a module
+   ;; information for each phase, is instantiated once for a module
    ;; declaration, and is shared among instances
    (define declaration-linklet
      (and serializable?
@@ -211,8 +218,9 @@
                  (make-correlated-linklet s 'decl)
                  (performance-region
                   ['compile 'module 'linklet]
-                  (compile-linklet s 'decl))))
-           (generate-module-declaration-linklet mpis self requires provides
+                  (compile-linklet s (hasheq 'module full-module-name
+                                             'name 'decl)))))
+           (generate-module-declaration-linklet mpis self requires recur-requires flattened-requires provides
                                                 phase-to-link-module-uses-expr
                                                 portal-stxes))))
    
@@ -228,7 +236,9 @@
                  (performance-region
                   ['compile 'module 'linklet]
                   (define-values (linklet new-keys)
-                    (compile-linklet s 'syntax-literals
+                    (compile-linklet s
+                                     (hasheq 'module full-module-name
+                                             'name 'syntax-literals)
                                      (vector deserialize-instance
                                              empty-top-syntax-literal-instance
                                              empty-syntax-literals-data-instance
@@ -277,7 +287,8 @@
                            (make-correlated-linklet s 'syntax-literals-data)
                            (performance-region
                             ['compile 'module 'linklet]
-                            (compile-linklet s 'syntax-literals-data #f #f '(serializable)))))
+                            (compile-linklet s (hasheq 'module full-module-name
+                                                       'name 'syntax-literals-data)))))
            `(linklet
              ;; imports
              (,deserialize-imports
@@ -301,7 +312,8 @@
                            (make-correlated-linklet s 'data)
                            (performance-region
                             ['compile 'module 'linklet]
-                            (compile-linklet s 'data))))
+                            (compile-linklet s (hasheq 'module full-module-name
+                                                       'name 'data)))))
            (generate-module-data-linklet mpis))))
 
    ;; Combine linklets with other metadata as the bundle:
@@ -373,6 +385,8 @@
   (compiled-in-memory ld
                       self
                       requires
+                      recur-requires
+                      flattened-requires
                       provides
                       phase-to-link-module-uses
                       (current-code-inspector)

@@ -90,6 +90,15 @@ PLAIN_RACKET =
 # Chez Scheme boot files
 BOOTFILE_RACKET =
 
+# For CS, `SCHEME` can be set to a Chez Scheme (v9.5.3 and up)
+# executable that runs on the build platform; if set, this will be used
+# to create the Chez Scheme boot files (for both cross and non-cross
+# builds); this is a much more direct path than supplying `RACKET`; it
+# does not need to match the Chez Scheme version as used in the Racket
+# being built; a "reboot" bootstrapping path is able to reconstruct
+# boot files across versions.
+SCHEME =
+
 # For CS, points a cross build at a directory containing a host build;
 # this path can be relative to the cross build directory
 CS_HOST_WORKAREA_PREFIX =
@@ -103,7 +112,7 @@ CFLAGS_FOR_BUILD =
 
 # This branch name must be changed each time the pb boot files are
 # updated:
-PB_BRANCH = v9.9.9-pre-release.14
+PB_BRANCH = v10.2.0-pre-release.1-1
 PB_REPO = https://github.com/racket/pb
 
 # Set to empty for Git before v1.7.10:
@@ -132,7 +141,8 @@ PKG_UPDATE_OPTIONS =
 # Options passed along to any `raco setup` run:
 PLT_SETUP_OPTIONS =
 
-# Catalog for package sources:
+# Catalog for package sources, but packages within this
+# repo take precedence:
 SRC_CATALOG = https://pkgs.racket-lang.org
 
 # Built-in catalog for package sources (not meant to be configured):
@@ -177,6 +187,7 @@ BUILD_VARS = MAKE=$(MAKE) \
              RACKET="$(RACKET)" \
              PLAIN_RACKET="$(PLAIN_RACKET)" \
              BOOTFILE_RACKET="$(BOOTFILE_RACKET)" \
+             SCHEME="$(SCHEME)" \
              CS_HOST_WORKAREA_PREFIX="$(CS_HOST_WORKAREA_PREFIX)" \
              PB_BRANCH="$(PB_BRANCH)" \
              PB_REPO="$(PB_REPO)" \
@@ -630,8 +641,8 @@ ping: $(ZUO)
 # Zuo build rules
 
 racket/src/build/bin/zuo: racket/src/zuo/zuo.c
-	mkdir -p racket/src/build/bin
-	$(CC_FOR_BUILD) $(CFLAGS_FOR_BUILD) -DZUO_LIB_PATH='"../../zuo/lib"' -o $(ZUO) racket/src/zuo/zuo.c
+	$(PLUS_MODIFIER) mkdir -p racket/src/build/bin
+	$(PLUS_MODIFIER) $(CC_FOR_BUILD) $(CFLAGS_FOR_BUILD) -DZUO_LIB_PATH='"../../zuo/lib"' -o $(ZUO) racket/src/zuo/zuo.c
 
 racket\src\build\zuo.exe: racket\src\zuo\zuo.c
 	IF NOT EXIST racket\src\build cmd /c mkdir racket\src\build

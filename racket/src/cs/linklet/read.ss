@@ -1,7 +1,7 @@
 
 (define (read-linklet-bundle-hash in)
   (performance-region
-   'read-linklet
+   'read-bundle
    (let* ([len (integer-bytes->integer (read-bytes 4 in) #f #f)]
           [bstr (read-bytes len in)])
      (adjust-linklet-bundle-laziness-and-literals
@@ -28,10 +28,11 @@
         (loop (cddr ls)
               (hash-set ht
                         key
-                        (if (linklet? val)
-                            (adjust-linklet-laziness
-                             (decode-linklet-literals val))
-                            val))))])))
+                        (cond
+                          [(linklet? val)
+                           (adjust-linklet-laziness
+                            (decode-linklet-literals val))]
+                          [else val]))))])))
 
 (define (adjust-linklet-laziness linklet)
   (set-linklet-code linklet

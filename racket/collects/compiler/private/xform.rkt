@@ -228,7 +228,7 @@
         (define D "[0-9]")
         (define L "[a-zA-Z_]")
         (define H "[a-fA-F0-9]")
-        (define E (format "[Ee][+-]?~a+" D))
+        (define E (format "[Eef][+-]?~a+" D))
         (define FS "(?:f|F|l|L)")
         (define IS "(?:u|U|l|L)*")
 
@@ -1001,10 +1001,12 @@
           ;;  nested function calls because it takes more than one argument:
           (append
            '(memcpy memmove memcmp memset
-		    __builtin___memmove_chk __inline_memmove_chk
-		    __builtin___memcpy_chk __inline_memcpy_chk
-		    __builtin___memset_chk __inline_memset_chk
-		    __builtin___memcmp_chk __inline_memcmp_chk
+		    __builtin___memmove_chk __inline_memmove_chk __memmove_ichk
+		    __builtin___memcpy_chk __inline_memcpy_chk __memcpy_ichk
+		    __builtin___memset_chk __inline_memset_chk __memset_ichk
+		    __builtin___memcmp_chk __inline_memcmp_chk __memcmp_ichk
+		    __builtin___strcpy_chk __inline_strcpy_chk __strcpy_ichk
+		    __builtin___sprintf_chk __inline_sprintf_chk __sprintf_ichk
                     strcmp strcoll strcpy _mzstrcpy strcat
 		     __builtin_memset
                     printf sprintf vsprintf vprintf
@@ -1679,6 +1681,8 @@
                      (when show-info? (printf "/* FUNCTION ~a */\n" name))
                      (if (or (positive? suspend-xform)
                              (not pgc?)
+                             (and (eq? (tok-n (car e)) 'extern)
+                                  (equal? (tok-n (cadr e)) "C++"))
                              (and where
                                   (regexp-match re:h where)
                                   (let loop ([e e][prev #f])
@@ -1799,14 +1803,22 @@
                         (let ([s (tok-n (list-ref e (- l 3)))])
                           (and (symbol? s)
                                (not (eq? '= s))
-                               (not (eq? '__attribute__ s)))))
+                               (or (not (eq? '__attribute__ s))
+                                   ;; try skipping over `__attribute__`
+                                   (loop (- l 2))))))
+                       (and
+                        (> l 2)
+                        (eq? (tok-n (list-ref e (- l 2))) 'noexcept)
+                        (loop (- l 1)))
                        (and
                         ;; next-to-last is 0, then =, then parens
+                        (> l 2)
                         (eq? 0 (tok-n (list-ref e (- l 2))))
                         (eq? '= (tok-n (list-ref e (- l 3))))
                         (loop (- l 2)))
                        (and
                         ;; next-to-last is 0, then =, then parens
+                        (> l 2)
                         (eq? '__attribute__ (tok-n (list-ref e (- l 3))))
                         (loop (- l 2))))))))
 
@@ -1906,7 +1918,8 @@
                                 ;; `const' can appear between the arg parens
                                 ;;  and the function body; this happens in the
                                 ;;  OS X headers
-                                (and (eq? 'const (tok-n v))
+                                ;; `noexcept` happens in Windows C++ headers
+                                (and (memq (tok-n v) '(const noexcept))
                                      (positive? (sub1 ll))
                                      (parens? (list-ref e (- ll 2))))))))))))
 
@@ -1965,6 +1978,8 @@
                (loop (cddr e) type)]
               [(eq? '__attribute__ (tok-n (car e)))
                (loop (cddr e) type)]
+              [(eq? 'noexcept (tok-n (car e)))
+               (loop (cdr e) type)]
               [(parens? (cadr e))
                (let ([name (tok-n (let ([p (car e)])
 				    (if (parens? p)
@@ -2527,12 +2542,17 @@
                                       (tok-n (caddr e))
                                       (+ p 2))]
                              [else (loop (cdr e) (add1 p))]))]
-                        [(args-e) (seq->list (seq-in (list-ref e (if (and func-pos
-                                                                          (eq? class-name function-name))
-                                                                     (add1 func-pos)
-                                                                     (if assert-no-conversion?
-                                                                         (- len 2)
-                                                                         (sub1 len))))))]
+                        [(args-e) (seq->list (seq-in
+                                              (let* ([pos (if (and func-pos
+                                                                   (eq? class-name function-name))
+                                                              (add1 func-pos)
+                                                              (if assert-no-conversion?
+                                                                  (- len 2)
+                                                                  (sub1 len)))]
+                                                     [pos (if (memq (tok-n (list-ref e pos)) '(const noexcept))
+                                                              (sub1 pos)
+                                                              pos)])
+                                                (list-ref e pos))))]
                         [(arg-vars all-arg-vars)
                          (let-values ([(arg-pragmas arg-decls) (body->lines (append
                                                                              args-e

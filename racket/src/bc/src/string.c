@@ -54,6 +54,8 @@ Scheme_Object *scheme_system_type_proc;
 static Scheme_Object *make_string (int argc, Scheme_Object *argv[]);
 static Scheme_Object *string (int argc, Scheme_Object *argv[]);
 static Scheme_Object *string_p (int argc, Scheme_Object *argv[]);
+static Scheme_Object *immutable_string_p (int argc, Scheme_Object *argv[]);
+static Scheme_Object *mutable_string_p (int argc, Scheme_Object *argv[]);
 static Scheme_Object *string_length (int argc, Scheme_Object *argv[]);
 static Scheme_Object *string_eq (int argc, Scheme_Object *argv[]);
 static Scheme_Object *string_locale_eq (int argc, Scheme_Object *argv[]);
@@ -101,6 +103,8 @@ static Scheme_Object *make_byte_string (int argc, Scheme_Object *argv[]);
 static Scheme_Object *byte_string (int argc, Scheme_Object *argv[]);
 static Scheme_Object *byte_p (int argc, Scheme_Object *argv[]);
 static Scheme_Object *byte_string_p (int argc, Scheme_Object *argv[]);
+static Scheme_Object *immutable_byte_string_p (int argc, Scheme_Object *argv[]);
+static Scheme_Object *mutable_byte_string_p (int argc, Scheme_Object *argv[]);
 static Scheme_Object *byte_string_length (int argc, Scheme_Object *argv[]);
 static Scheme_Object *byte_string_eq (int argc, Scheme_Object *argv[]);
 static Scheme_Object *byte_string_lt (int argc, Scheme_Object *argv[]);
@@ -188,11 +192,12 @@ ROSYM static Scheme_Object *fs_change_symbol, *target_machine_symbol, *cross_sym
 ROSYM static Scheme_Object *racket_symbol, *cgc_symbol, *_3m_symbol, *cs_symbol;
 ROSYM static Scheme_Object *force_symbol, *infer_symbol;
 ROSYM static Scheme_Object *platform_3m_path, *platform_cgc_path, *platform_cs_path;
-READ_ONLY static Scheme_Object *zero_length_char_string;
-READ_ONLY static Scheme_Object *zero_length_char_immutable_string;
-READ_ONLY static Scheme_Object *zero_length_byte_string;
+READ_ONLY Scheme_Object *scheme_zero_length_char_string;
+READ_ONLY Scheme_Object *scheme_zero_length_char_immutable_string;
+READ_ONLY Scheme_Object *scheme_zero_length_byte_string;
 
 SHARED_OK static char *embedding_banner;
+SHARED_OK static char build_stamp_banner[128];
 SHARED_OK static Scheme_Object *vers_str;
 SHARED_OK static Scheme_Object *banner_str;
 
@@ -218,6 +223,8 @@ THREAD_LOCAL_DECL(static void *current_locale_name_ptr);
 static void reset_locale(void);
 
 #define current_locale_name ((const mzchar *)current_locale_name_ptr)
+
+static void update_banner(const char *build_stamp);
 
 static const mzchar empty_char_string[1] = { 0 };
 static const mzchar xes_char_string[2] = { 0x78787878, 0 };
@@ -275,13 +282,13 @@ scheme_init_string (Scheme_Startup_Env *env)
   force_symbol = scheme_intern_symbol("force");
   infer_symbol = scheme_intern_symbol("infer");
 
-  REGISTER_SO(zero_length_char_string);
-  REGISTER_SO(zero_length_char_immutable_string);
-  REGISTER_SO(zero_length_byte_string);
-  zero_length_char_string = scheme_alloc_char_string(0, 0);
-  zero_length_char_immutable_string = scheme_alloc_char_string(0, 0);
-  SCHEME_SET_CHAR_STRING_IMMUTABLE(zero_length_char_immutable_string);
-  zero_length_byte_string = scheme_alloc_byte_string(0, 0);
+  REGISTER_SO(scheme_zero_length_char_string);
+  REGISTER_SO(scheme_zero_length_char_immutable_string);
+  REGISTER_SO(scheme_zero_length_byte_string);
+  scheme_zero_length_char_string = scheme_alloc_char_string(0, 0);
+  scheme_zero_length_char_immutable_string = scheme_alloc_char_string(0, 0);
+  SCHEME_SET_CHAR_STRING_IMMUTABLE(scheme_zero_length_char_immutable_string);
+  scheme_zero_length_byte_string = scheme_alloc_byte_string(0, 0);
 
   REGISTER_SO(complete_symbol);
   REGISTER_SO(continues_symbol);
@@ -313,8 +320,7 @@ scheme_init_string (Scheme_Startup_Env *env)
 
   vers_str = scheme_make_utf8_string(scheme_version());
   SCHEME_SET_CHAR_STRING_IMMUTABLE(vers_str);
-  banner_str = scheme_make_utf8_string(scheme_banner());
-  SCHEME_SET_CHAR_STRING_IMMUTABLE(banner_str);
+  update_banner(NULL);
 
   REGISTER_SO(scheme_string_p_proc);
   p = scheme_make_folding_prim(string_p, "string?", 1, 1, 1);
@@ -323,6 +329,16 @@ scheme_init_string (Scheme_Startup_Env *env)
                                                             | SCHEME_PRIM_PRODUCES_BOOL);
   scheme_addto_prim_instance("string?", p, env);
   scheme_string_p_proc = p;
+
+  p = scheme_make_folding_prim(immutable_string_p, "immutable-string?", 1, 1, 1);
+  SCHEME_PRIM_PROC_FLAGS(p) |= scheme_intern_prim_opt_flags(SCHEME_PRIM_IS_OMITABLE
+                                                            | SCHEME_PRIM_PRODUCES_BOOL);
+  scheme_addto_prim_instance("immutable-string?", p, env);
+
+  p = scheme_make_folding_prim(mutable_string_p, "mutable-string?", 1, 1, 1);
+  SCHEME_PRIM_PROC_FLAGS(p) |= scheme_intern_prim_opt_flags(SCHEME_PRIM_IS_OMITABLE
+                                                            | SCHEME_PRIM_PRODUCES_BOOL);
+  scheme_addto_prim_instance("mutable-string?", p, env);
 
   scheme_addto_prim_instance("make-string",
 			     scheme_make_immed_prim(make_string,
@@ -626,6 +642,16 @@ scheme_init_string (Scheme_Startup_Env *env)
                                                             | SCHEME_PRIM_PRODUCES_BOOL);
   scheme_addto_prim_instance("bytes?", p, env);
   scheme_byte_string_p_proc = p;
+
+  p = scheme_make_folding_prim(immutable_byte_string_p, "immutable-bytes?", 1, 1, 1);
+  SCHEME_PRIM_PROC_FLAGS(p) |= scheme_intern_prim_opt_flags(SCHEME_PRIM_IS_OMITABLE
+                                                            | SCHEME_PRIM_PRODUCES_BOOL);
+  scheme_addto_prim_instance("immutable-bytes?", p, env);
+
+  p = scheme_make_folding_prim(mutable_byte_string_p, "mutable-bytes?", 1, 1, 1);
+  SCHEME_PRIM_PROC_FLAGS(p) |= scheme_intern_prim_opt_flags(SCHEME_PRIM_IS_OMITABLE
+                                                            | SCHEME_PRIM_PRODUCES_BOOL);
+  scheme_addto_prim_instance("mutable-bytes?", p, env);
 
   scheme_addto_prim_instance("make-bytes",
 			     scheme_make_immed_prim(make_byte_string,
@@ -1121,8 +1147,8 @@ Scheme_Object *string_append_immutable(int argc, Scheme_Object *argv[])
 
   r = do_string_append("string-append-immutable", argc, argv);
 
-  if (r == zero_length_char_string)
-    return zero_length_char_immutable_string;
+  if (r == scheme_zero_length_char_string)
+    return scheme_zero_length_char_immutable_string;
 
   SCHEME_SET_CHAR_STRING_IMMUTABLE(r);
 
@@ -2048,19 +2074,60 @@ char *scheme_version(void)
 # endif
 #endif
 
+#define RACKET_BANNER_FMT(insert)               \
+  ("Welcome to Racket"                          \
+   " v" MZSCHEME_VERSION insert VERSION_SUFFIX  \
+   ".\n")
+
 char *scheme_banner(void)
 {
   if (embedding_banner)
     return embedding_banner;
-  else
-    return ("Welcome to Racket"
-            " v" MZSCHEME_VERSION VERSION_SUFFIX
-            ".\n");
+
+  if (build_stamp_banner[0])
+    return build_stamp_banner;
+
+  return RACKET_BANNER_FMT("");
 }
 
 void scheme_set_banner(char *s)
 {
   embedding_banner = s;
+}
+
+void scheme_set_build_stamp(char *s)
+{
+  update_banner(s);
+}
+
+/* if build_stamp is not NULL, assume that we're in the main place */
+static void update_banner(const char *build_stamp)
+{
+#if defined(MZ_USE_PLACES)
+  void *gc_state;
+#endif
+
+  if (build_stamp && build_stamp[0]) {
+    snprintf(build_stamp_banner, sizeof(build_stamp_banner),
+             RACKET_BANNER_FMT("-%s"),
+             build_stamp);
+  } else
+    build_stamp_banner[0] = 0;
+
+#if defined(MZ_USE_PLACES)
+  if (build_stamp)
+    gc_state = GC_switch_to_master_gc();
+  else
+    gc_state = NULL;
+#endif
+
+  banner_str = scheme_make_utf8_string(scheme_banner());
+  SCHEME_SET_CHAR_STRING_IMMUTABLE(banner_str);
+
+#if defined(MZ_USE_PLACES)
+  if (build_stamp)
+    GC_switch_back_from_master(gc_state);
+#endif
 }
 
 int scheme_byte_string_has_null(Scheme_Object *o)
@@ -3180,7 +3247,7 @@ int mz_locale_strcoll(char *s1, int d1, int l1, char *s2, int d2, int l2, int cv
     if (!origl1)
       return -1;
 
-    /* Compare an unconverable character directly. No case conversions
+    /* Compare an unconvertable character directly. No case conversions
        if it's outside the locale. */
     if (((unsigned int *)s1)[d1] > ((unsigned int *)s2)[d2])
       return 1;
@@ -3239,7 +3306,7 @@ int do_locale_comp(const char *who, const mzchar *us1, intptr_t ul1, const mzcha
   }
 
   /* Walk back through the strings looking for nul characters. If we
-     find one, compare the part after the null character to update
+     find one, compare the part after the nul character to update
      endres, then continue. Unfortunately, we do too much work if an
      earlier part of the string (tested later) determines the result,
      but hopefully nul characters are rare. */
@@ -3368,6 +3435,13 @@ static Scheme_Object *mz_recase(const char *who, int to_up, mzchar *us, intptr_t
   Scheme_Object *s, *parts = scheme_null;
 
   reset_locale();
+
+  if (!locale_on) {
+    int len = ulen;
+    int mode = (to_up ? 1 : 0);
+    us = scheme_string_recase(us, 0, len, mode, 0, &len);
+    return scheme_make_sized_char_string(us, len, 0);
+  }
 
   if (current_locale_name
       && !*current_locale_name
@@ -5187,7 +5261,7 @@ static intptr_t utf8_decode_x(const unsigned char *s, intptr_t start, intptr_t e
 		if (pending_surrogate) {
 		  if (us)
 		    ((unsigned short *)us)[j] = pending_surrogate;
-		  j++; /* Accept previousy written unpaired surrogate */
+		  j++; /* Accept previously written unpaired surrogate */
 		  pending_surrogate = 0;
 		  if (j >= dend)
 		    break;
@@ -5201,7 +5275,7 @@ static intptr_t utf8_decode_x(const unsigned char *s, intptr_t start, intptr_t e
 	      if (pending_surrogate) {
 		if (us)
 		  ((unsigned short *)us)[j] = pending_surrogate;
-		j++; /* Accept previousy written unpaired surrogate */
+		j++; /* Accept previously written unpaired surrogate */
 		pending_surrogate = 0;
 		if (j >= dend)
 		  break;

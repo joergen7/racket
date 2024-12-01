@@ -89,7 +89,9 @@ with some exceptions: @racket[quote-syntax] and @racket[#%top] are not allowed;
 @racket[#%plain-lambda] is spelled @racket[lambda];
 @racket[#%plain-app] is omitted (i.e., application is implicit);
 @racket[lambda], @racket[case-lambda], @racket[let-values], and
-@racket[letrec-values] can have only a single body expression; and
+@racket[letrec-values] can have only a single body expression;
+@racket[begin-unsafe] is like @racket[begin] in an expression position,
+but its body is compiled in @tech{unsafe mode}; and
 numbers, booleans, strings, and byte strings are self-quoting.
 Primitives are accessed directly by name, and shadowing is not allowed
 within a @racketidfont{linklet} form for primitive names (see
@@ -116,23 +118,24 @@ element of compilation.
 Returns @racket[#t] if @racket[v] is a @tech{linklet}, @racket[#f]
 otherwise.}
 
-
 @defproc*[([(compile-linklet [form (or/c correlated? any/c)]
-                             [name any/c #f]
+                             [info (or/c hash? any/c) #f]
                              [import-keys #f #f]
                              [get-import #f #f]
                              [options (listof (or/c 'serializable 'unsafe 'static 'quick
-                                                     'use-prompt 'uninterned-literal))
+                                                     'use-prompt 'unlimited-compile
+                                                     'uninterned-literal))
                                       '(serializable)])
             linklet?]
            [(compile-linklet [form (or/c correlated? any/c)]
-                             [name any/c]
+                             [info (or/c hash? any/c)]
                              [import-keys vector?]
                              [get-import (or/c #f (any/c . -> . (values (or/c linklet? instance? #f)
                                                                         (or/c vector? #f))))
                                          #f]
                              [options (listof (or/c 'serializable 'unsafe 'static 'quick
-                                                    'use-prompt 'uninterned-literal))
+                                                    'use-prompt 'unlimited-compile
+                                                    'uninterned-literal))
                                       '(serializable)])
             (values linklet? vector?)])]{
 
@@ -142,8 +145,13 @@ As long as @racket['serializable] included in @racket[options], the
 resulting linklet can be marshaled to and from a byte stream when it is
 part of a @tech{linklet bundle} (possibly in a @tech{linklet directory}).
 
-The optional @racket[name] is associated to the linklet for debugging
-purposes and as the default name of the linklet's instance.
+The optional @racket[info] hash provides various debugging details
+about the linklet, such as the module name the linklet is part of,
+the linklet name, and the phase for body linklets. If a @racket['name]
+value is present in the hash, it is associated to the linklet for
+debugging purposes and as the default name of the linklet's instance.
+If @racket[info] is not a hash, it is assumed to be a name value
+directly for backward compatibility.
 
 The optional @racket[import-keys] and @racket[get-import] arguments
 support cross-linklet optimization. If @racket[import-keys] is a
@@ -155,7 +163,8 @@ corresponds to the variable's import set. The @racket[get-import]
 function can then return a linklet or instance that represents an instance to be
 provided to the compiled linklet when it is eventually instantiated;
 ensuring consistency between reported linklet or instance and the eventual
-instance is up to the caller of @racket[compile-linklet]. If
+instance is up to the caller of @racket[compile-linklet], but see also
+@racket[linklet-add-target-machine-info]. If
 @racket[get-import] returns @racket[#f] as its first value, the
 compiler will be prevented from making any assumptions about the
 imported instance. The second result from @racket[get-import] is an
@@ -186,7 +195,10 @@ contract is subsumed by the safe operation's contract. The fact that
 the linklet is compiled in @tech{unsafe mode} can be exposed through
 @racket[variable-reference-from-unsafe?] using a variable reference
 produced by a @racket[#%variable-reference] form within the module
-body.
+body. Within a linklet an individual expression can be compiled in
+unsafe mode by wrapping it in @racket[begin-unsafe]; when a whole
+linklet is compiled in unsafe mode, @racket[begin-unsafe] is redundant
+and ignored.
 
 If @racket['static] is included in @racket[options], then the linklet
 must be instantiated only once; if the linklet is serialized, then any
@@ -207,6 +219,10 @@ supplying @racket[#t] as the @racket[_use-prompt?] argument to
 @racket[instantiate-linklet] may only wrap a prompt around the entire
 instantiation.
 
+If @racket['unlimited-compile] is included in @racket[options], then
+compilation never falls back to interpreted mode for an especially
+large linklet. See also @secref["cs-compiler-modes"].
+
 If @racket['uninterned-literal] is included in @racket[options], then
 literals in @racket[form] will not necessarily be interned via
 @racket[datum-intern-literal] when compiling or loading the linklet.
@@ -219,11 +235,13 @@ The symbols in @racket[options] must be distinct, otherwise
 
 @history[#:changed "7.1.0.8" @elem{Added the @racket['use-prompt] option.}
          #:changed "7.1.0.10" @elem{Added the @racket['uninterned-literal] option.}
-         #:changed "7.5.0.14" @elem{Added the @racket['quick] option.}]}
+         #:changed "7.5.0.14" @elem{Added the @racket['quick] option.}
+         #:changed "8.11.1.2" @elem{Changed @racket[info] to a hash.}
+         #:changed "8.13.0.9" @elem{Added the @racket['unlimited-compile] option.}]}
 
 
 @defproc*[([(recompile-linklet [linklet linklet?]
-                               [name any/c #f]
+                               [info (or/c hash? any/c) #f]
                                [import-keys #f #f]
                                [get-import #f #f]
                                [options (listof (or/c 'serializable 'unsafe 'static 'quick
@@ -231,7 +249,7 @@ The symbols in @racket[options] must be distinct, otherwise
                                         '(serializable)])
             linklet?]
            [(recompile-linklet [linklet linklet?]
-                               [name any/c]
+                               [info (or/c hash? any/c)]
                                [import-keys vector?]
                                [get-import (or/c (any/c . -> . (values (or/c linklet? #f)
                                                                        (or/c vector? #f)))
@@ -248,7 +266,8 @@ and potentially optimizes it further.
 @history[#:changed "7.1.0.6" @elem{Added the @racket[options] argument.}
          #:changed "7.1.0.8" @elem{Added the @racket['use-prompt] option.}
          #:changed "7.1.0.10" @elem{Added the @racket['uninterned-literal] option.}
-         #:changed "7.5.0.14" @elem{Added the @racket['quick] option.}]}
+         #:changed "7.5.0.14" @elem{Added the @racket['quick] option.}
+         #:changed "8.11.1.2" @elem{Changed @racket[info] to a hash.}]}
 
 
 @defproc[(eval-linklet [linklet linklet?]) linklet?]{
@@ -314,6 +333,25 @@ Returns a description of a linklet's exports. Each element of the list
 corresponds to a variable that is made available by the linklet in its
 instance.}
 
+@defproc[(linklet-add-target-machine-info [linklet linklet?]
+                                          [from-linklet linklet?])
+         linklet?]{
+
+When @racket[compile-linklet] or @racket[recompile-linklet] requests a
+linklet via @racket[_get-import] for cross-module information, the
+linklet is expected to have information compatible with the current
+compilation target as determined by
+@racket[current-compile-target-machine]. To simplify the management of
+linklets to both run and use for cross-compilation, a linklet
+implementation may support information for multiple target machines
+within a linklet, in which case
+@racket[linklet-add-target-machine-info] returns a linklet like
+@racket[linklet] but with target-specific information added from
+@racket[from-linklet]. The two linklets must be from compatible
+sources, but @racket[linklet-add-target-machine-info] might perform
+only a sanity check for compatibility.
+
+@history[#:added "8.12.0.3"]}
 
 @defproc[(linklet-directory? [v any/c]) boolean?]{
 

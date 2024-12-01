@@ -276,6 +276,13 @@
                                                     (path->url
                                                      (path->directory-path
                                                       (build-path (find-doc-dir) "local-redirect")))))
+           ;; When defined, `user_doc_root` points to the directory containing
+           ;; "search/index.html", which is usd to run a search entered on the search
+           ;; box at the top left of an individual document's page
+           (fprintf o "user_doc_root = ~s;\n" (url->string
+                                               (path->url
+                                                (path->directory-path
+                                                 (find-user-doc-dir)))))
            (newline o))
          (fprintf o "var ~alink_dirs = [" (if user? "user_" ""))
          (define (extract-name e)
@@ -290,7 +297,7 @@
                                            (url->string (path->url e))
                                            (format "../~a" name))))
          (fprintf o "];\n\n")
-         (fprintf o (rewrite-code prefix here-url num-bins))
+         (fprintf o "~a" (rewrite-code prefix here-url num-bins))
          (newline o)))
       (unless (file-exists? alt-dest)
         ;; make empty alternate file; in `user?` mode, this

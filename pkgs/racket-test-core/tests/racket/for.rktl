@@ -3,18 +3,8 @@
 
 (Section 'for)
 
-(require "for-util.rkt")
-
-;; These are copied from
-;; https://github.com/racket/r6rs/blob/master/r6rs-lib/rnrs/arithmetic/fixnums-6.rkt
-(define CS? (eq? 'chez-scheme (system-type 'vm)))
-(define 64-bit? (fixnum? (expt 2 33)))
-(define (least-fixnum) (if CS?
-                           (if 64-bit? (- (expt 2 60)) -536870912)
-                           (if 64-bit? (- (expt 2 62)) -1073741824)))
-(define (greatest-fixnum) (if CS?
-                              (if 64-bit? (- (expt 2 60) 1) +536870911)
-                              (if 64-bit? (- (expt 2 62) 1) +1073741823)))
+(require "for-util.rkt"
+         racket/fixnum)
 
 (define (five) 5)
 
@@ -37,14 +27,14 @@
 (test-sequence [(3.0 4.0 5.0 6.0)] (in-inclusive-range 3.0 6.0))
 (test-sequence [(3.0 3.5 4.0 4.5 5.0 5.5 6.0)] (in-inclusive-range 3.0 6.0 0.5))
 (test-sequence [(#e3.0 #e3.1 #e3.2 #e3.3)] (in-inclusive-range #e3.0 #e3.3 #e0.1))
-(test-sequence [(,(least-fixnum)
-                 ,(+ (least-fixnum) 1))]
-               (in-inclusive-range (least-fixnum)
-                                   (+ (least-fixnum) 1)))
-(test-sequence [(,(- (greatest-fixnum) 1)
-                 ,(greatest-fixnum))]
-               (in-inclusive-range (- (greatest-fixnum) 1)
-                                   (greatest-fixnum)))
+(test-sequence [(,(most-negative-fixnum)
+                 ,(+ (most-negative-fixnum) 1))]
+               (in-inclusive-range (most-negative-fixnum)
+                                   (+ (most-negative-fixnum) 1)))
+(test-sequence [(,(- (most-positive-fixnum) 1)
+                 ,(most-positive-fixnum))]
+               (in-inclusive-range (- (most-positive-fixnum) 1)
+                                   (most-positive-fixnum)))
 (err/rt-test (for/list ([x (in-range)]) x))
 (err/rt-test (in-range))
 (err/rt-test (for/list ([x (in-inclusive-range 1)]) x))
@@ -306,6 +296,30 @@
            (number->string i))
          c)))
 
+;; make sure `#:break` is not confused by shadowing
+(test 0 'break-0 (for*/fold ([x 0]) ([x '(1)]) #:break #true (add1 x)))
+(test 0 'break-0 (for*/fold ([x 0]) ([x '(1)] [y '(3)]) #:break #true (add1 x)))
+(test 0 'break-0 (for*/fold ([x 0]) ([x '(1)] #:break #true) (add1 x)))
+(test 0 'break-0 (for*/fold ([x 0]) ([x '(1)] [y '(3)] #:break #true) (add1 x)))
+(test 0 'break-0 (for*/fold ([x 0]) ([x '(1)] #:break #true [y '(3)]) (add1 x)))
+
+(test 2 'break-2 (for*/fold ([x 0]) ([x '(1)]) #:break #false (add1 x)))
+(test 2 'break-2 (for*/fold ([x 0]) ([x '(1)] [y '(3)]) #:break #false (add1 x)))
+(test 2 'break-2 (for*/fold ([x 0]) ([x '(1)] #:break #false) (add1 x)))
+(test 2 'break-2 (for*/fold ([x 0]) ([x '(1)] [y '(3)] #:break #false) (add1 x)))
+(test 2 'break-2 (for*/fold ([x 0]) ([x '(1)] #:break #false [y '(3)]) (add1 x)))
+
+(test 2 'break-v2 (for*/fold ([x 0]) ([x '(1)] [y (in-value 3)]) #:break #false (add1 x)))
+(test 2 'break-v2 (for*/fold ([x 0]) ([x '(1)] [y (in-value 3)] #:break #false) (add1 x)))
+(test 2 'break-v2 (for*/fold ([x 0]) ([x '(1)] #:break #false [y (in-value 3)]) (add1 x)))
+
+;; make sure `#:final` is not treated like `#:break`
+(test 2 'final-0 (for*/fold ([x 0]) ([x '(1)]) #:final #true (add1 x)))
+(test 2 'final-0 (for*/fold ([x 0]) ([x '(1)] [y '(3)]) #:final #true (add1 x)))
+(test 2 'final-0 (for*/fold ([x 0]) ([x '(1)] #:final #true) (add1 x)))
+(test 2 'final-0 (for*/fold ([x 0]) ([x '(1)] [y '(3)] #:final #true) (add1 x)))
+(test 2 'final-0 (for*/fold ([x 0]) ([x '(1)] #:final #true [y '(3)]) (add1 x)))
+
 ;; Basic sanity checks.
 (test '#(1 2 3 4) 'for/vector (for/vector ((i (in-range 4))) (+ i 1)))
 (test '#(1 2 3 4) 'for/vector-fast (for/vector #:length 4 ((i (in-range 4))) (+ i 1)))
@@ -507,6 +521,21 @@
                                            ([x (values (in-value 2))])
                                    x))
 
+;; Check against pre-8.11.1.3 weird effect of shadowing fold variables
+(let ([accum null])
+  (test '("x" 10 10)
+        'weird-shadow
+        (cons (for*/fold ([x 0]) ([x '(10)] [y '(1 2)]) (set! accum (cons x accum)) "x")
+              accum)))
+(let ([accum null])
+  (test '("x" 10 10)
+        'weird-shadow
+        (cons
+         (for*/fold ([x 0]) ([x '(10)] [y '(1 2)] #:break #false) (set! accum (cons x accum)) "x")
+         accum)))
+
+;; Check against pre-8.11.1.3 weird ordering of fold variable's initial value,
+;; but for continued weird absence of fold varibales in the initial clause
 (let ([x 'out]
       [prints '()])
   (for/fold ([x (begin
@@ -517,7 +546,7 @@
                            (list 1 2 3)))])
     (set! prints (cons x prints))
     x)
-  (test '(3 2 1 (top out) (rhs out)) values prints))
+  (test '(3 2 1 (rhs out) (top out)) values prints))
 
 ;; check ranges on `in-vector', especially as a value
 (test '() 'in-empty-vector (let ([v (in-vector '#())]) (for/list ([e v]) e)))
@@ -795,7 +824,7 @@
              #rx"expected\\: list\\?")
 (err/rt-test (for ([x (in-mlist (list 1 2 3))]) x)
              exn:fail:contract?
-             #rx"expected\\: mpair\\?")
+             #rx"expected:.*or/c mpair\\? null\\?")
 (err/rt-test (for ([x (in-vector '(1 2))]) x)
              exn:fail:contract?
              #rx"expected\\: vector")
@@ -1100,7 +1129,42 @@
   (check for/list values map extra) ; 1 and 2 arguments are special-cased
   (check for/list values for-each)
   (check for/list values ormap)
-  (check for/list values andmap))
+  (check for/list values andmap)
+
+  ;; similar check for `sequence-generate`
+  (let ()
+    (define l (cons (box 1) (cons (box 2) null)))
+    (define wb (make-weak-box (car l)))
+
+    (define-values (more? val) (sequence-generate l))
+    (set! l #f)
+
+    (let loop ()
+      (cond
+        [(more?)
+         (define u (unbox (val)))
+         (collect-garbage)
+         (cons (cons u (weak-box-value wb)) (loop))]
+        [else null])))
+
+  ;; similar check for `sequence-generate*`
+  (let ()
+    (define l (cons (box 1) (cons (box 2) null)))
+    (define wb (make-weak-box (car l)))
+
+    (define-values (vals next) (sequence-generate* l))
+    (set! l #f)
+
+    (let loop ([vals vals] [next next])
+      (cond
+        [vals
+         (define u (unbox (car vals)))
+         (collect-garbage)
+         (cons (cons u (weak-box-value wb))
+               (let ()
+                 (define-values (new-vals new-next) (next))
+                 (loop new-vals new-next)))]
+        [else null]))))
 
 ;; ----------------------------------------
 ;; `for/foldr`
@@ -1337,6 +1401,151 @@
       'final-if-7
       (for/list ([i (in-range 10)] #:splice (final-if-7 i)) i))
 
+;; splicing clauses in `for/and`, `for/or`, and `for/first`
+;; These expand differently than in non-splicing cases
+
+(test #f
+      'parallel3/and
+      (for/and (#:splice (parallel3 n m))
+        (and (not (= n m))
+             (list n m))))
+(test #f
+      'parallel3/and
+      (for*/and (#:splice (parallel3 n m))
+        (and (not (= n m))
+             (list n m))))
+
+(test #f
+      'cross3/and
+      (for/and (#:splice (cross3 n m))
+        (and (not (= n m))
+             (list n m))))
+(test #f
+      'cross3/and
+      (for*/and (#:splice (cross3 n m))
+        (and (not (= n m))
+             (list n m))))
+
+(test #f
+      'parallel3/or
+      (for/or (#:splice (parallel3 n m))
+        (and (not (= n m))
+             (list n m))))
+(test #f
+      'parallel3/or
+      (for*/or (#:splice (parallel3 n m))
+        (and (not (= n m))
+             (list n m))))
+
+(test '(0 1)
+      'cross3/or
+      (for/or (#:splice (cross3 n m))
+        (and (not (= n m))
+             (list n m))))
+(test '(0 1)
+      'cross3/or
+      (for*/or (#:splice (cross3 n m))
+        (and (not (= n m))
+             (list n m))))
+
+(test '(0 0)
+      'parallel3/first
+      (for/first (#:splice (parallel3 n m))
+        (list n m)))
+(test '(0 0)
+      'parallel3/first
+      (for*/first (#:splice (parallel3 n m))
+        (list n m)))
+
+(test '(0 0)
+      'cross3/first
+      (for/first (#:splice (cross3 n m))
+        (list n m)))
+(test '(0 0)
+      'cross3/first
+      (for*/first (#:splice (cross3 n m))
+        (list n m)))
+
+;; ----------------------------------------
+;; defining sequence syntax
+
+(define (every-third/proc l)
+  (unless (list? l) (error "oops"))
+  (make-do-sequence
+   (lambda ()
+     (values car
+             (lambda (l)
+               (and (pair? l)
+                    (pair? (cdr l))
+                    (pair? (cddr l))
+                    (cdddr l)))
+             values
+             l
+             pair?
+             (lambda (v) #t)
+             #f))))
+
+(define-sequence-syntax every-third
+  (lambda () #'every-third/proc)
+  (lambda (stx)
+    (syntax-case stx ()
+      [[(id) (_ expr)]
+       #`[(id) (:do-in
+                ;; outer-ids
+                ([(l) expr])
+                ;; outer-expr-or-defn
+                (begin
+                  (define (check-list l)
+                    (unless (list? l)
+                      (error "oops")))
+                  (check-list l))
+                ;; loop vars
+                ([l l])
+                ;; pos guard
+                (pair? l)
+                ;; inner vars
+                ([(id) (car l)]
+                 [(next-l) (and (pair? l)
+                                (pair? (cdr l))
+                                (pair? (cddr l))
+                                (cdddr l))])
+                ;; inner-end-or-defn
+                #,@(if (eq? (syntax-e #'expr) 'hack-skip)
+                       null
+                       (list
+                        #'(begin
+                            (define (bad-check)
+                              (when (eq? id 'bad)
+                                (error "that's bad")))
+                            (bad-check))))
+                ;; pre-guard
+                #t
+                ;; post-guard
+                #t
+                ;; loop args
+                (next-l))]])))
+
+(define-syntax-rule (check a b c) c)
+
+(test '(1 4 7) 'every-third (for/list ([i (every-third '(1 2 3 4 5 6 7 8))])
+                              i))
+
+(test '(1 4 7) 'every-third (let ([hack-skip '(1 2 3 4 5 6 7 8)])
+                              (for/list ([i (every-third hack-skip)])
+                                i)))
+
+(err/rt-test (for/list ([i (every-third '(1 2 3 bad 5 6 7 8))])
+               i)
+             "that's bad")
+
+(test '(1 bad 7) 'every-third (let ([hack-skip '(1 2 3 bad 5 6 7 8)])
+                                (for/list ([i (every-third hack-skip)])
+                                  i)))
+
+(test '(1 4 7) 'every-third (let ([seq (every-third '(1 2 3 4 5 6 7 8))])
+                              (for/list ([i seq])
+                                i)))
+
 ;; ----------------------------------------
 ;; Make sure explicitly quoted datum doesn't need to have a `#%datum` binding
 
@@ -1352,6 +1561,134 @@
       eval-syntax #`(for/list ([i (quote #,(datum->syntax #f #"1"))]) i))
 (test '(1)
       eval-syntax #`(for/list ([(k v) (quote #,(datum->syntax #f #hash((1 . 0))))]) k))
+
+;; ----------------------------------------
+;; regression test for a missing "outer edge" scope
+
+(let ()
+  (define-sequence-syntax in-digits
+    (lambda () #'values)
+    (lambda (stx)
+      (syntax-case stx ()
+        [[(d) (_ nat)]
+         #'[(d)
+            (:do-in
+             ([(n) nat])
+             values
+             ([i n])
+             (not (zero? i))
+             ([(j d) (quotient/remainder i 10)])
+             #t
+             #t
+             [(- i 1)])]] ; <- regression would make this `i` ambigious
+        [_ #f])))
+
+  (for ([i (in-digits 12)]) i))
+
+;; ----------------------------------------
+;; Check more fold variables in outermost iteration clauses
+
+(test '(3 2 1)
+      'for/fold-var-in-outermost
+      (let ([a '(1 2 3)])
+        (for/fold ([a '()])
+                  ([x (in-list a)])
+          (cons x a))))
+
+(test '(1 2 3)
+      'for/fold-var-in-outermost/result
+      (let ([a '(1 2 3)])
+        (for/fold ([a '()]
+                   #:result (reverse a))
+                  ([x (in-list a)])
+          (cons x a))))
+
+(test '(1 2 3)
+      'for/foldr-var-in-outermost
+      (let ([a '(1 2 3)])
+        (for/foldr ([a '()])
+                   ([x (in-list a)])
+          (cons x a))))
+
+(test '(3 2 1)
+      'for/foldr-var-in-outermost/result
+      (let ([a '(1 2 3)])
+        (for/foldr ([a '()]
+                    #:result (reverse a))
+                   ([x (in-list a)])
+          (cons x a))))
+
+(test '(1 2 3)
+      'for/foldr-var-in-outermost/delay
+      (let ([a '(1 2 3)])
+        (force
+         (for/foldr ([a '()]
+                     #:delay)
+                    ([x (in-list a)])
+           (cons x (force a))))))
+
+(test '(3 2 1)
+      'for/foldr-var-in-outermost/delay/result
+      (let ([a '(1 2 3)])
+        (for/foldr ([a '()]
+                    #:delay
+                    #:result (reverse (force a)))
+                   ([x (in-list a)])
+          (cons x (force a)))))
+
+(test '()
+      'for/fold-var-not-in-outermost
+      (let ([a '(1 2 3)])
+        (for/fold ([a '()])
+                  (#:when #t
+                   [x (in-list a)])
+          (cons x a))))
+
+(test '()
+      'for/fold-var-not-in-outermost/result
+      (let ([a '(1 2 3)])
+        (for/fold ([a '()]
+                   #:result (reverse a))
+                  (#:when #t
+                   [x (in-list a)])
+          (cons x a))))
+
+(test '(1 2 3)
+      'for/foldr-var-not-in-outermost
+      (let ([a '(1 2 3)])
+        (for/foldr ([a '()])
+                   (#:when #t
+                    [x (in-list a)])
+          (cons x a))))
+
+(test '(3 2 1)
+      'for/foldr-var-not-in-outermost/result
+      (let ([a '(1 2 3)])
+        (for/foldr ([a '()]
+                    #:result (reverse a))
+                   (#:when #t
+                    [x (in-list a)])
+          (cons x a))))
+
+(test '(1 2 3)
+      'for/foldr-var-not-in-outermost/delay
+      (let ([a '(1 2 3)])
+        (force
+         (for/foldr ([a '()]
+                     #:delay)
+                    (#:when #t
+                     [x (in-list a)])
+           (cons x (force a))))))
+
+(test '(3 2 1)
+      'for/foldr-var-not-in-outermost/delay/result
+      (let ([a '(1 2 3)])
+        (for/foldr ([a '()]
+                    #:delay
+                    #:result (reverse (force a)))
+                   (#:when #t
+                    [x (in-list a)])
+          (cons x (force a)))))
 
 ;; ----------------------------------------
 

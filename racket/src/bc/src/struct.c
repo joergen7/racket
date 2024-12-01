@@ -962,7 +962,7 @@ Scheme_Object *scheme_chaperone_props_get(Scheme_Object *props, Scheme_Object *p
     }
     return NULL;
   } else
-    return (Scheme_Object *)scheme_hash_tree_get((Scheme_Hash_Tree *)props, prop);
+    return (Scheme_Object *)scheme_eq_hash_tree_get((Scheme_Hash_Tree *)props, prop);
 }
 
 Scheme_Object *scheme_chaperone_props_remove(Scheme_Object *props, Scheme_Object *prop)
@@ -6633,7 +6633,8 @@ Scheme_Object *scheme_parse_chaperone_props(const char *who, int start_at, int a
     /* Check */
     for (pos = start_at; pos < argc; pos += 2) {
       v = argv[pos];
-      if (!SAME_TYPE(SCHEME_TYPE(v), scheme_chaperone_property_type))
+      if (!SAME_TYPE(SCHEME_TYPE(v), scheme_chaperone_property_type)
+          && (v != scheme_hash_kind_key))
         scheme_wrong_contract(who, "impersonator-property?", pos, argc, argv);
 
       if (pos + 1 >= argc)

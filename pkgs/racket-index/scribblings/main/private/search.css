@@ -14,7 +14,7 @@
 }
 
 .search-result-wrapper-pkg-main-dist {
-    background-color: #DC3220;
+    background-color: #A0CAC5;
     padding-right: 5px;
 }
 
@@ -22,4 +22,20 @@
     margin: 0.1em 0em;
     padding: 0.25em 1em;
     cursor: default;
+}
+
+.search-status {
+    font-weight: bold;
+    color: #601515;
+    padding: 2pt;
+}
+
+.context-line {
+}
+
+.language-family {
+    float: right;
+    clear: both;
+    text-align: right;
+    color: #A0A0A0;
 }

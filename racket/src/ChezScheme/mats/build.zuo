@@ -185,7 +185,7 @@
      (hash 'eval "interpret" 'spi "f" 'cp0 "f" 'name "spi")
      (hash 'eval "interpret" 'spi "f" 'cp0 "t" 'name "spi-cp0")
      (hash 'eval "interpret" 'spi "t" 'cp0 "f" 'ctb "(/ (collect-trip-bytes) 64)" 'hci "503" 'name "spi-ctb")
-     (hash 'eval "interpret" 'spi "t" 'cp0 "t" 'cgr "2" 'hci "101" 'p "t" 'name "chi-cgr-p")))))
+     (hash 'eval "interpret" 'spi "t" 'cp0 "t" 'cgr "2" 'hci "101" 'p "t" 'name "hci-cgr-p")))))
 
 ;; Adjust combinations generated below with extra options to match
 ;; cases above where the option affects exception messages
@@ -270,6 +270,7 @@
     (map at-source
          '(;; prettysrc is src to use for pretty-print test; we leave out mat files
            ;; with cycles, e.g., primvars.ms, misc.ms, 4.ms, 5_1.ms, hash.ms
+           ;; Note: the tests expect these files to be ASCII.
            "3.ms" "5_3.ms" "5_4.ms" "5_5.ms" "bytevector.ms" "thread.ms" "profile.ms"
            "5_6.ms" "5_7.ms" "5_8.ms" "6.ms" "io.ms" "format.ms" "7.ms" "record.ms" "enum.ms" "8.ms"
            "fx.ms" "fl.ms" "cfl.ms" "foreign.ms" "unix.ms" "windows.ms" "examples.ms" "ieee.ms" "date.ms"
@@ -362,7 +363,7 @@
                                                  "cc")))
                         (cons "FTYPE_CFLAGS"
                               (build-shell (or (lookup 'CPPFLAGS) "")
-                                           (if (glob-match? "*nt" m)
+                                           (if (eq? 'windows (system-type))
                                                "-DWIN32"
                                                "")
                                            (or (lookup 'mdinclude) "")
@@ -758,7 +759,7 @@
                                                       (string->shell (at-dir "../bin" m
                                                                              (~a "csv" (get-dll-version)
                                                                                  ".lib"))))]
-				       [(glob-match? "*nt" m)
+				       [(eq? 'windows (system-type))
 					(config-merge config 'LDFLAGS
 						      (string->shell (at-dir "../boot" m "schemeexe.lib")))]
 				       [else config])])

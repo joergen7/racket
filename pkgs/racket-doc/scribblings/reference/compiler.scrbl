@@ -53,7 +53,12 @@ especially large linklet, and machine-code mode is used for functions
 that are small enough within that outer contour. ``Small enough'' is
 determined by the @envvar-indexed{PLT_CS_COMPILE_LIMIT} environment
 variable, and the default value of 10000 means that most Racket
-modules have no interpreted component.
+modules have no interpreted component. The
+@racket[#:unlimited-compile] option for @racket[#%declare] disables
+interpreted mode for the enclosing module. Check @racket['info]
+logging at the @racket['linklet] topic (e.g., set @envvar{PLTSTDERR}
+to @tt["info@linklet"]) to discover when compilation is restricted to
+smaller functions by @envvar{PLT_CS_COMPILE_LIMIT}.
 
 JIT compilation mode is used only if the @envvar-indexed{PLT_CS_JIT}
 environment variable is set on startup, otherwise pure interpreter
@@ -74,16 +79,19 @@ enabled, but performance is not otherwise affected.
 @section[#:tag "compiler-inspect"]{Inspecting Compiler Passes}
 
 When the @envvar-indexed{PLT_LINKLET_SHOW} environment variable is set
-on startup, the Racket process's standard output shows intermediate
+on startup, the Racket process's standard error shows intermediate
 compiled forms whenever a Racket form is compiled. For all Racket
 variants, the output shows one or more @tech{linklets} that are
 generated from the original Racket form.
 
-For the @tech{CS} implementation of Racket, a ``schemified'' version of the linklet
-is also shown as the translation of the @racket[linklet] form to a
-Chez Scheme procedure form. The following environment variables imply
-@envvar{PLT_LINKLET_SHOW} and show additional intermediate compiled
-forms or adjust the way forms are displayed:
+For the @tech{CS} implementation of Racket, a ``schemified'' version
+of the linklet is also shown as the translation of the
+@racket[linklet] form to a Chez Scheme procedure form. The output also
+indicates which modules and linklets the compiler is working on.
+
+The following environment variables imply @envvar{PLT_LINKLET_SHOW}
+and show additional intermediate compiled forms or adjust the way
+forms are displayed:
 
 @itemlist[
 
@@ -110,9 +118,6 @@ forms or adjust the way forms are displayed:
          compilation of form that were previously prepared by
          compilation with @envvar{PLT_CS_JIT} set}
 
-   @item{@envvar-indexed{PLT_LINKLET_SHOW_PATHS} --- show lifted
-         path and serialization information alongside a schemified form}
-
    @item{@envvar-indexed{PLT_LINKLET_SHOW_KNOWN} --- show recorded
          known-binding information alongside a schemified form}
 
@@ -123,7 +128,8 @@ forms or adjust the way forms are displayed:
    @item{@envvar-indexed{PLT_LINKLET_SHOW_PASSES} --- show the
          intermediate form of a schemified linklet after the specified
          passes (listed space-separated) in Chez Scheme's internal
-         representation}
+         representation; the special name @tt{all} will show the
+         intermediate form after all Chez Scheme passes}
 
    @item{@envvar-indexed{PLT_LINKLET_SHOW_ASSEMBLY} --- show the
          compiled form of a schemified linklet in Chez Scheme's
@@ -136,3 +142,8 @@ set on startup, then Racket prints cumulative timing information about
 compilation and evaluation times on exit. When the
 @envvar-indexed{PLT_EXPANDER_TIMES} environment variable is set,
 information about macro-expansion time is printed on exit.
+
+@history[#:changed "8.8.0.10" @elem{Added special pass name @tt{all}
+                                    to @envvar{PLT_LINKLET_SHOW_PASSES}.}
+         #:changed "8.11.1.2" @elem{Added module and linklet info
+                                    to output.}]

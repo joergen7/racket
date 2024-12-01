@@ -583,6 +583,27 @@ being expanded.
          #:changed "8.2.0.7" @elem{Added the @tech{outside-edge scope} and @tech{use-site scope}
                                    tracking behaviors.}]}
 
+@defproc[(syntax-local-make-definition-context-introducer
+          [name (and/c symbol? (not/c 'macro)) 'intdef])
+         ((syntax?) ((or/c 'flip 'add 'remove)) . ->* . syntax?)]{
+
+Like @racket[make-syntax-introducer], but the encapsulated
+@tech{scope} is pruned from @racket[quote-syntax] forms, much like the
+scopes associated with a new definition context (see
+@racket[syntax-local-make-definition-context]). The @racket[name]
+argument is used as the symbolic name, which serves as a debugging
+aid.
+
+Typically, @racket[internal-definition-context-add-scopes] and
+@racket[internal-definition-context-splice-binding-identifier] are
+preferred, but this function can be useful when you are sure that you
+want a single scope that should be pruned from @racket[quote-syntax]
+forms.
+
+@transform-time[]
+
+@history[#:added "8.12.0.8"]}
+
 
 @defproc[(internal-definition-context-add-scopes [intdef-ctx internal-definition-context?]
                                                  [stx syntax?])
@@ -673,6 +694,9 @@ for @racket[intdef-ctx] for all parts of @racket[stx].
 This function is provided for backwards compatibility;
 @racket[internal-definition-context-add-scopes] and
 @racket[internal-definition-context-splice-binding-identifier] are preferred.
+See also @racket[syntax-local-make-definition-context-introducer] for
+encapsulating a single scope that should be pruned from
+@racket[quote-syntax] forms.
 
 @history[#:added "6.3"]}
 
@@ -932,7 +956,7 @@ within a @racket[module] form (see @racket[syntax-transforming-module-expression
 then the @exnraise[exn:fail:contract].}
 
 
-@defproc[(syntax-local-lift-require [raw-require-spec any/c] [stx syntax?] [new-scope? #t])
+@defproc[(syntax-local-lift-require [raw-require-spec any/c] [stx syntax?] [new-scope? any/c #t])
          syntax?]{
 
 Lifts a @racket[#%require] form corresponding to
@@ -1137,6 +1161,16 @@ transformer} application by the expander for an expression
 within a @racket[module] form, @racket[#f] otherwise.}
 
 
+@defproc[(syntax-local-compiling-module?) boolean?]{
+
+Returns @racket[#t] during the dynamic extent of a @tech{syntax
+transformer} application by the expander in a @tech{module-begin
+context} and when the expansion is part of a compilation process where
+a compiled module can be returned directly. See also @racket[module].
+
+@history[#:added "8.13.0.7"]}
+
+
 @defproc[(syntax-local-identifier-as-binding [id-stx identifier?]
                                              [intdef-ctx (or/c internal-definition-context? #f) #f])
          identifier?]{
@@ -1208,7 +1242,7 @@ and different result procedures use distinct scopes.
 @defproc[(make-interned-syntax-introducer [key (and/c symbol? symbol-interned?)])
          ((syntax?) ((or/c 'flip 'add 'remove)) . ->* . syntax?)]{
 
-Like @racket[make-syntax-introducer], but the encapsulated @tech{scope} is interned. Multiple calls to
+Like @racket[make-syntax-introducer], but the encapsulated @tech{scope} is an @deftech{interned scope}. Multiple calls to
 @racket[make-interned-syntax-introducer] with the same @racket[key] will produce procedures that flip,
 add, or remove the same scope, even across @tech{phases} and module @tech{instantiations}.
 Furthermore, the scope remains consistent even when embedded in @tech{compiled} code, so a scope
@@ -1518,6 +1552,16 @@ converted to an absolute module path that is equivalent to
 @racket[module-path] relative to the value of
 @racket[current-require-module-path].}
 
+@defproc[(syntax-local-lift-require-top-level-form [top-level-stx syntax?])
+         void?]{
+ Lifts @racket[top-level-stx] to the top-level of the enclosing module, immediately
+ following the @racket[require] that is being expanded.
+
+ @transform-time[] In addition, this procedure may only be called while
+ expanding a @tech{require transformer}.
+
+ @history[#:added "8.12.0.13"]
+}
 
 @defproc[(syntax-local-require-certifier)
          ((syntax?) (or/c #f (syntax? . -> . syntax?))
@@ -1674,7 +1718,7 @@ Returns @racket[#t] if @racket[v] has the
 
 
 @defstruct[export ([local-id identifier?]
-                   [out-sym symbol?]
+                   [out-id identifier?]
                    [mode phase+space?]
                    [protect? any/c]
                    [orig-stx syntax?])]{
@@ -1686,7 +1730,7 @@ A structure representing a single exported identifier:
  @item{@racket[local-id] --- the identifier that is bound within the
        exporting module.}
 
- @item{@racket[out-sym] --- the external name of the binding.}
+ @item{@racket[out-id] --- the external name of the binding.}
 
  @item{@racket[mode] --- the @tech{phase level} and @tech{binding
        space} of the export (which affects how it is imported).}
@@ -1699,8 +1743,25 @@ A structure representing a single exported identifier:
 
 ]
 
-@history[#:changed "8.2.0.3" @elem{Generalized @racket[mode] to phase--space combinations.}]}
+@history[#:changed "8.2.0.3" @elem{Generalized @racket[mode] to phase--space combinations.}]
 
+@history[#:changed "8.9.0.5" @elem{Changed the @racket[out-sym] field
+        to @racket[out-id]. For backward compatibility, the
+        @racket[make-export] constructor also accepts a symbol, and a
+        @racket[export-out-sym] function returns the @racket[syntax-e]
+        value of the @racket[out-id].}]
+
+}
+
+@defproc[(export-out-sym [ex export?]) symbol?]{
+
+Composes @racket[syntax-e] with @racket[export-out-id].
+
+This function is intended for backward compatibility. Use
+@racket[export-out-id] directly, instead.
+
+@history[#:added "8.9.0.5"]
+}
 
 @defproc[(syntax-local-provide-certifier)
          ((syntax?) (or/c #f (syntax? . -> . syntax?))

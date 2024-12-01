@@ -69,7 +69,9 @@ A literal or printed box starts with @litchar{#&}. @see-read-print["box"]{boxes}
 
 @defproc[(box? [v any/c]) boolean?]{
 
-Returns @racket[#t] if @racket[v] is a box, @racket[#f] otherwise.}
+Returns @racket[#t] if @racket[v] is a box, @racket[#f] otherwise.
+
+See also @racket[immutable-box?] and @racket[mutable-box?].}
 
 
 @defproc[(box [v any/c]) box?]{
@@ -130,12 +132,15 @@ boxes that are not @tech{impersonators}.
 
   When Racket is compiled with support for @tech{futures},
   @racket[box-cas!] is guaranteed to use a hardware @emph{compare and
-  set} operation. Uses of @racket[box-cas!] be performed safely in a
+  set} operation. Uses of @racket[box-cas!] can be performed safely in a
   @tech{future} (i.e., allowing the future thunk to continue in
   parallel). See also @secref["memory-order"].}
 
 @; ----------------------------------------------------------------------
 @include-section["hashes.scrbl"]
+
+@; ----------------------------------------------------------------------
+@include-section["treelists.scrbl"]
 
 @; ----------------------------------------------------------------------
 @include-section["sequences.scrbl"]

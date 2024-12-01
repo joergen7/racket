@@ -101,7 +101,8 @@
                   #:mode (or/c 'as-is 'source 'binary 'binary-lib 'built)
                   #:quiet? boolean?
                   #:from-command-line? boolean?
-                  #:dest (or/c (and/c path-string? complete-path?) #f))
+                  #:dest (or/c (and/c path-string? complete-path?) #f)
+                  #:original (or/c string? #f))
         void?)]
   [pkg-update
    (->* ((listof (or/c string? pkg-desc?)))
@@ -181,6 +182,8 @@
                         #:force-strip? boolean?
                         #:dry-run? boolean?)
         (or/c #f 'skip (listof (or/c path-string? (non-empty-listof path-string?)))))]
+  [pkg-migrate-available-versions
+   (-> (listof string?))]
   [pkg-catalog-show
    (->* ((listof string?))
         (#:all? boolean?
@@ -278,7 +281,7 @@
                 (listof module-path?)
                 any/c))]
   [extract-pkg-dependencies
-   (->* ((symbol? (-> any/c) . -> . any/c))
+   (->* ((or/c #f (symbol? (-> any/c) . -> . any/c)))
         (#:build-deps? boolean?
                        #:filter? boolean?
                        #:versions? boolean?)

@@ -387,7 +387,7 @@
     (define-instruction value (fpcastto)
       [(op (x mem) (y fpur)) `(set! ,(make-live-info) ,(mem->mem x 'fp) ,y)]
       [(op (x ur) (y fpur)) `(set! ,(make-live-info) ,x (asm ,info ,asm-fpcastto ,y))])
-    
+
     (define-instruction value (fpcastfrom)
       [(op (x fpmem) (y ur)) `(set! ,(make-live-info) ,(mem->mem x 'uptr) ,y)]
       [(op (x fpur) (y ur)) `(set! ,(make-live-info) ,x (asm ,info ,asm-fpcastfrom ,y))]))
@@ -527,12 +527,19 @@
         (with-output-language (L15d Effect)
                               (define add-offset
                                 (lambda (r)
-                                  (if (eqv? (nanopass-case (L15d Triv) w [(immediate ,imm) imm]) 0)
-                                      (k r)
-                                      (let ([u (make-tmp 'u)])
-                                        (seq
-                                         `(set! ,(make-live-info) ,u (asm ,null-info ,asm-add ,r ,w))
-                                         (k u))))))
+                                  (nanopass-case (L15d Triv) w
+                                                 [(immediate ,imm)
+                                                  (if (eqv? imm 0)
+                                                      (k r)
+                                                      (let ([u (make-tmp 'u)])
+                                                        (seq
+                                                         `(set! ,(make-live-info) ,u (asm ,null-info ,asm-add ,r ,w))
+                                                         (k u))))]
+                                                 [else
+                                                  (let ([u (make-tmp 'u)])
+                                                    (seq
+                                                     `(set! ,(make-live-info) ,u (asm ,null-info ,asm-add ,r ,w))
+                                                     (k u)))])))
                               (if (eq? y %zero)
                                   (add-offset x)
                                   (let ([u (make-tmp 'u)])
@@ -563,7 +570,7 @@
                       `(asm ,null-info ,(asm-lock+/- op) ,r ,u1 ,u2)))))])
 
     (define-instruction effect (cas)
-      [(op (x ur) (y ur) (w imm12) (old ur) (new ur))
+      [(op (x ur) (y ur) (w imm12 ur) (old ur) (new ur))
        (lea->reg x y w
                  (lambda (r)
                    (let ([u1 (make-tmp 'u1)] [u2 (make-tmp 'u2)])
@@ -1008,20 +1015,18 @@
       (Trivit (dest src0 src1)
               (emit mul dest src0 src1 code*))))
 
+  ;; overflow if hi64(src0*src1) != (lo64(src0*src1) >> 63)
   (define asm-mul/ovfl
     (lambda (code* dest src0 src1)
       (Trivit (dest src0 src1)
-        (emit xor %scratch1 src0 src1 ; 1 high bit => expect negative
-              (emit mulh %scratch0 src0 src1
+              (emit mulh %scratch1 src0 src1
                     (emit mul dest src0 src1
-                          ;; overflow if %scratch0 doesn't hold 0 for an expected
-                          ;; positive result or -1 for an expected negative result;
-                          ;; also overflow if dest doesn't match expected sign
-                          (emit srai %scratch1 %scratch1 63 ; -1 => expected negative; 0 => expected positive
-                                (emit srli %cond dest 63 ; 1 => negative in `dest`
-                                      (emit or %scratch0 %scratch0 %cond ; combine negativity of results
-                                            (emit xor %cond %scratch0 %scratch1 ; 0 => expectation matches => no overflow
-                                                  code*))))))))))
+                          (emit srai %cond dest 63
+                                (emit bne %scratch1 %cond 12
+                                      (emit addi %cond %real-zero 0
+                                            (emit jal %real-zero 8
+                                                  (emit addi %cond %real-zero 1
+                                                        code*))))))))))
 
   (define asm-div
     (lambda (code* dest src0 src1)
@@ -1408,7 +1413,7 @@
     ;; dest can be an mref, and then the offset is double-aligned
     (lambda (code* dest src)
       (gen-fpmove who code* dest src #t)))
-    
+
   (define-who asm-fpmove-single
     (lambda (code* dest src)
       (gen-fpmove who code* dest src #f)))
@@ -1460,7 +1465,7 @@
     (lambda (code* dest src)
       (Trivit (dest src)
         (emit fmov.d.x dest src '() code*))))
-  
+
   ;; flonum to fixnum
   (define-who asm-fptrunc
     (lambda (code* dest src)
@@ -1661,7 +1666,7 @@
                 [(index) (n ireg breg)
                  (safe-assert (eqv? n 0))
                  (emit add %scratch1 ireg breg
-                       (emit ld %jump %cond 0
+                       (emit ld %jump %scratch1 0
                              (emit jalr %real-zero %jump 0 '())))]
                 [else (sorry! who "unexpected src ~s" src)]))))
 

@@ -25,7 +25,7 @@
 
 ;; Hack to make AArch64 Mac OS and Windows libraries look like other Macs:
 (define aarch64-renames
-  `(("libffi.7" "libffi.6")))
+  `(("libmpfr.6" "libmpfr.4")))
 
 (define libs
   `("libffi.6"
@@ -522,11 +522,14 @@
   (define (fixup p p-new)
     (unless (framework? p)
       (printf "Fixing ~s\n" p-new)
+      ;; newer tools do not need this step, and it confuses newer `install_name_tool`
+      #;
       (when aarch64?
 	(system (format "codesign --remove-signature ~a" p-new)))
       (unless (memq 'write (file-or-directory-permissions p-new))
         (file-or-directory-permissions p-new #o744))
-      (system (format "install_name_tool -id ~a ~a" (file-name-from-path p-new) p-new))
+      (unless (system (format "install_name_tool -id ~a ~a" (file-name-from-path p-new) p-new))
+        (error "naming failed"))
       (for-each (lambda (s)
                   (system (format "install_name_tool -change ~a @loader_path/~a ~a"
                                   (format "~a/~a.dylib" from (revert-name s renames))

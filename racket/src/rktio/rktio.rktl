@@ -575,6 +575,12 @@
  rktio_socket_shutdown
  (((ref rktio_t) rktio) ((ref rktio_fd_t) rfd) (int mode)))
 (define-function/errno
+ #f
+ ()
+ rktio_ok_t
+ rktio_tcp_nodelay
+ (((ref rktio_t) rktio) ((ref rktio_fd_t) rfd) (rktio_bool_t enable)))
+(define-function/errno
  NULL
  ()
  (ref rktio_fd_t)
@@ -1136,6 +1142,12 @@
  (((ref rktio_t) rktio)
   (rktio_const_string_t path)
   (rktio_bool_t follow_links)))
+(define-function/errno
+ NULL
+ ()
+ (ref rktio_stat_t)
+ rktio_fd_stat
+ (((ref rktio_t) rktio) ((ref rktio_fd_t) fd)))
 (define-function/errno
  NULL
  ()

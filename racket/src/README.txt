@@ -75,8 +75,10 @@ If you need more information specific to Racket BC, see
 
 Quick instructions:
 
- From this directory (where the `configure` file is), run the following
- commands:
+ From this directory (where the `configure` file is), run the
+ following commands:
+
+   # see extra commands below when building withing a Git clone
 
    mkdir build
    cd build
@@ -96,18 +98,28 @@ Quick instructions:
  Some build modes may require GNU Make. See "Dependency details" below
  for more information about dependencies.
 
- When building from a Git clone, after `make install`, the Racket
- installation is still more "minimal" than a "Minimal Racket"
- distribution, because it does not have the "racket-lib" package
- installed. Consider adding that package with
+ When working from a clone of the Racket Git repository, as opposed to
+ a source code distirbution, prefix the above commands with
+  
+   make --directory=../../ pb-fetch
+
+ and add a command to run the installed `raco` to the end:
 
    raco pkg install -i racket-lib
 
 Detailed instructions:
 
  0. If you have an old Racket installation in the target directory,
-    remove it (unless you are using an "in-place" build from a
-    repository as described below).
+    remove it (unless you are using an "in-place" build as described
+    below).
+
+    When building from a clone of the Racket Git repository, note that
+    "../../build.md" has more information about build options in that
+    mode. If you work from here, though, an extra step is needed to
+    download or update sources in "ChezScheme/boot/pb" (which are
+    already present in a source code distribution):
+
+       make --directory=../../ pb-fetch
 
  1. Select (or create) a build directory.
 
@@ -171,8 +183,10 @@ Detailed instructions:
 
          env CC=cc [here]configure
 
-    To add an include path, be sure to use CPPFLAGS="-I..." instead of
-    CFLAGS="-I...". The CPPFLAGS variable controls C pre-processing,
+    Use CFLAGS+=.... to add to CFLAGS instead of replacing the default,
+    and `+=` also works for the variables CPPFLAGS, LDFLAGS, and LIBS.
+    To add an include path, be sure to use CPPFLAGS+="-I..." instead of
+    CFLAGS+="-I...". The CPPFLAGS variable controls C pre-processing,
     which includes C compilation, and the Racket build normally uses
     the C pre-processor directly for some parts of the build.
 
@@ -202,6 +216,14 @@ Detailed instructions:
     scripts. If you need to select the C compiler to build `bin/zuo`
     (which is a single C file that needs only system headers), then
     supply `CC_FOR_BUILD=<compiler>` as an argument to `make`.
+
+    For a `--prefix` build that is not a cross-compilation, this step
+    also compiles ".zo" bytecode files for collections and packages,
+    and it renders documentation; those prepared files are written in
+    the build directory and moved into place by `make install`. For a
+    build that does not use `--prefix` or is a cross compilation,
+    building collections and packages is deferred to the `make
+    install` step.
 
  4. Run `make install`.
 
@@ -265,13 +287,20 @@ Detailed instructions:
     versions of the dynamic libraries in your installation target.
 
  5. After an "in-place" install from a source distribution, the
-   "racket/src" directory is no longer needed, and it can be safely
-   deleted. Build information is recorded in a "buildinfo" file in the
-   installation.
+    "racket/src" directory is no longer needed, and it can be safely
+    deleted. Build information is recorded in a "buildinfo" file in
+    the installation.
 
-   For a build without `--prefix` (or with `--enable-origtree`) and
-   without `--enable-shared`, you can safely move the install tree,
-   because all file references within the installation are relative.
+    For a build without `--prefix` (or with `--enable-origtree`) and
+    without `--enable-shared`, you can safely move the install tree,
+    because all file references within the installation are relative.
+
+ 6. When building from a Git clone, after `make install`, the Racket
+    installation is still more "minimal" than a "Minimal Racket"
+    distribution, because it does not have the "racket-lib" package
+    installed. Consider adding that package with
+
+       raco pkg install -i racket-lib
 
 Dependency details:
 
@@ -415,10 +444,11 @@ Cross-compilation requires at least two flags to `configure`:
    The `configure` script uses OS to find suitable compilation tools,
    such as `OS-gcc` and `OS-strip`.
 
- * `--enable-racket=RACKET`, where RACKET is a path to a Racket
-   executable that runs on the build platform; the executable must be
-   the same version of Racket and the same virtual machine (i.e., CS
-   or BC) as being built for the target platform.
+ * `--enable-racket=RACKET`, where RACKET is either "auto" or a path
+   to a Racket executable that runs on the build platform; in the
+   latter case, the executable must be the same version of Racket and
+   the same virtual machine (i.e., CS or BC) as being built for the
+   target platform.
 
    This flag is needed because building and installing Racket requires
    running (an existing build of) Racket.
@@ -428,13 +458,12 @@ Cross-compilation requires at least two flags to `configure`:
    run `configure` again (with no arguments) in a "local" subdirectory
    to create a build for the current platform.
 
-For Racket CS, an additional flag is required:
+For Racket CS, an additional flag is required when not using
+`--enable-racket=auto`:
 
- * `--enable-scheme=SCHEME`, where SCHEME is a Chez Scheme (v9.5.3 and
-   up) executable that runs on the build platform; it does not need to
-   match the Chez Scheme version as used in the Racket being built; a
-   "reboot" bootstrapping path is able to reconstruct boot files across
-   versions.
+ * `--enable-scheme=SCHEME`, where SCHEME is a Chez Scheme executable
+   that runs on the build platform; for cross-compilation, it must
+   match the Chez Scheme version as used in the Racket being built.
  
    Supplying `--enable-scheme=DIR` is also supported, where DIR is a
    path that has a "ChezScheme" directory where Chez Scheme is built
@@ -446,12 +475,12 @@ allowed for non-cross builds, too:
  * For Racket CS, supplying either selects a Racket or Chez Scheme
    implementation used to create boot files to the build platform.
    Supplying Chez Scheme is a much more direct path. These executables
-   do not need to match the versions being built, as there are
-   bootstrapping paths that can handle differences where needed. If
-   you supply both Racket and Chez Scheme, then Racket is used
-   (despite being less direct).
+   do not need to match the versions being built in non-cross mode, as
+   there are bootstrapping paths that can handle differences where
+   needed. If you supply both Racket and Chez Scheme, then Racket is
+   used (despite being less direct).
 
- * For Racket BC, `--enable-racket=RACKET` selects a Racket for
+ * For Racket BC, `--enable-racket=RACKET` selects a Racket to
    prepare C sources to cooperate with garbage collection. Its version
    needs to be close to the one being built, and potentially exactly
    the same version.

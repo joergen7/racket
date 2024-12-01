@@ -29,6 +29,7 @@
 (define list ($hand-coded 'list-procedure))
 (define $record ($hand-coded '$record-procedure))
 (define vector ($hand-coded 'vector-procedure))
+(define immutable-vector ($hand-coded 'immutable-vector-procedure))
 (define cons* ($hand-coded 'cons*-procedure))
 (define list* ($hand-coded 'list*-procedure))
 (define $apply ($hand-coded '$apply-procedure))
@@ -87,7 +88,7 @@
   (lambda (bv i)
     (unless (reference-bytevector? bv) ($oops who "~s is not a reference bytevector" bv))
     (unless (and (fixnum? i)
-                 (not ($fxu< (fx- (bytevector-length bv) (fx- (constant ptr-bytes) 1)) i)))
+                 (fx<= 0 i (fx- (bytevector-length bv) (constant ptr-bytes))))
       ($oops who "invalid index ~s for ~s" i bv))
     (bytevector-reference-ref bv i)))
 
@@ -96,7 +97,7 @@
     (lambda (bv i)
       (unless (reference-bytevector? bv) ($oops who "~s is not a reference bytevector" bv))
       (unless (and (fixnum? i)
-                   (not ($fxu< (fx- (bytevector-length bv) (fx- (constant ptr-bytes) 1)) i)))
+                   (fx<= 0 i (fx- (bytevector-length bv) (constant ptr-bytes))))
         ($oops who "invalid index ~s for ~s" i bv))
       (ref bv i))))
 
@@ -104,7 +105,7 @@
   (lambda (bv i val)
     (unless (reference-bytevector? bv) ($oops who "~s is not a reference bytevector" bv))
     (unless (and (fixnum? i)
-                 (not ($fxu< (fx- (bytevector-length bv) (fx- (constant ptr-bytes) 1)) i)))
+                 (fx<= 0 i (fx- (bytevector-length bv) (constant ptr-bytes))))
       ($oops who "invalid index ~s for ~s" i bv))
     (bytevector-reference-set! bv i val)))
 
@@ -226,7 +227,7 @@
 
 (define $intern-gensym
   (foreign-procedure "(cs)s_intern_gensym"
-    (scheme-object)
+    (scheme-object scheme-object)
     void))
 
 (define cpu-time
@@ -665,7 +666,8 @@
       [(pb)
        (unless (vector? x)
          ($oops 'foreign-callable-entry-point "~s is not a vector" x))
-       (bitwise-arithmetic-shift-left (vector-ref x 2) (constant fixnum-offset))]
+       (bitwise-and (bitwise-arithmetic-shift-left (vector-ref x 2) (constant fixnum-offset))
+                    (- (bitwise-arithmetic-shift-left 1 (constant ptr-bits)) 1))]
       [else
        (unless ($code? x)
          ($oops 'foreign-callable-entry-point "~s is not a code object" x))
@@ -1455,7 +1457,7 @@
 ; not safe; assumes `val` is older than `v`
 (define $stencil-vector-fill-set!
   (lambda (v i val)
-    ($stencil-vector-set! v i val)))
+    ($stencil-vector-fill-set! v i val)))
 
 ; not safe
 (define $record-ref
@@ -1788,6 +1790,11 @@
        ($oops '$current-attachments "malformed attachments ~s" w))
      ($current-attachments w)]))
 
+(define-who $current-handler-stack
+  (case-lambda
+   [() ($current-handler-stack)]
+   [(w) ($current-handler-stack w)]))
+
 (define lock-object
   (foreign-procedure "(cs)lock_object" (scheme-object) void))
 (define unlock-object
@@ -1844,6 +1851,10 @@
   (foreign-procedure "(cs)s_ptr_in_heap" (ptr) boolean))
 
 (define $event (lambda () ($event)))
+
+;; expected to be inlined, but if not, the fact that an uninlined
+;; function is called will create a trap check
+(define $event-trap-check (lambda () (void)))
 
 (let ()
   (define (inc)

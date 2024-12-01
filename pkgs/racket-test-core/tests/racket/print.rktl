@@ -444,6 +444,21 @@
   (try 7 #:ok? #f)
   (try (box 7) #:ok? #f))
 
+;; Check that some other values are allowed as quoted in compiled code
+(for-each (lambda (v)
+            (define s (open-output-bytes))
+            (write (compile v) s)
+            (test v
+                  values
+                  (eval (parameterize ([read-accept-compiled #t])
+                          (read (open-input-bytes (get-output-bytes s)))))))
+          (list
+           1
+           "apple"
+           (vector 1 2 3)
+           (fxvector 1 2 3 -100)
+           (flvector 1.0 2.0 3.0 +inf.0 +nan.0)))
+
 ;; ----------------------------------------
 ;; Test print parameters
 
@@ -899,6 +914,18 @@
   (test "#<procedure:other-name>" format "~a" f3)
   (test 'other-name object-name f3))
 
+;; ----------------------------------------
+
+(parameterize ([global-port-print-handler
+                (lambda (v o [depth 0])
+                  (display "<redacted>" o))])
+  (let ([o (open-output-string)])
+    (print '(hello) o)
+    (test "<redacted>" get-output-string o)
+    (default-global-port-print-handler '(hello) o)
+    (test "<redacted>'(hello)" get-output-string o)
+    (default-global-port-print-handler '(hello) o 1)
+    (test "<redacted>'(hello)(hello)" get-output-string o)))
 
 ;; ----------------------------------------
 

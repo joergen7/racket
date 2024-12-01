@@ -14,6 +14,7 @@
                      racket/provide
                      racket/package
                      racket/splicing
+                     racket/case
                      racket/runtime-path
                      racket/lazy-require
                      (only-in compiler/cm-accomplice
@@ -146,7 +147,13 @@ expansion leads to any other primitive form, then the form is wrapped
 with @racketidfont{#%module-begin} using the lexical context of the
 module body; this identifier must be bound by the initial
 @racket[module-path] import, and its expansion must produce a
-@racket[#%plain-module-begin] to supply the module body. Finally, if
+@racket[#%plain-module-begin] to supply the module body. If partial
+expansion produces a compiled module in the sense of
+@racket[compiled-module-expression?], that compiled module is used
+for the enclosing module (skipping all other expansion and compilation
+steps), but such a result is allowed only in a compilation mode
+where @racket[syntax-local-compiling-module?] produces true and
+when the current @tech{code inspector} is the initial one. Finally, if
 multiple @racket[form]s are provided, they are wrapped with
 @racketidfont{#%module-begin}, as in the case where a single
 @racket[form] does not expand to @racket[#%plain-module-begin].
@@ -354,6 +361,10 @@ enclosing module. If there is only one @racket[module+] for a given
 @racket[(module* id #f form ...)], but still moved to the end of the
 enclosing module.
 
+A @tech{syntax property} on the @racket[module*] form with the key
+@indexed-racket['origin-form-srcloc] records the @racket[srcloc] for
+every contributing @racket[module+] form.
+
 When a module contains multiple submodules declared with
 @racket[module+], then the relative order of the initial
 @racket[module+] declarations for each submodule determines the
@@ -365,6 +376,9 @@ A submodule must not be defined using @racket[module+] @emph{and}
 of @racket[module+] pieces, then it must be made @emph{only} of
 @racket[module+] pieces. }
 
+@history[#:changed "8.9.0.1"
+         @elem{Added @racket['origin-form-srcloc] syntax property.}]
+
 
 @defform[(#%module-begin form ...)]{
 
@@ -373,7 +387,13 @@ Legal only in a @tech{module begin context}, and handled by the
 
 The @racket[#%module-begin] form of @racketmodname[racket/base] wraps
 every top-level expression to print non-@|void-const| results using
-@racket[current-print].
+the @tech{print handler} as determined by @racket[current-print],
+and it also returns the values after printing.
+This printing is added as part of the @racket[#%module-begin] expansion, so
+the prompt that @racket[module] itself adds is outside the printing
+wrapper---and it potentially makes the values returned after printing
+relevant, because a continuation could be captured and then invoked in
+a different context.
 
 The @racket[#%module-begin] form of @racketmodname[racket/base] also
 declares a @racket[configure-runtime] submodule (before any other
@@ -402,6 +422,8 @@ Legal only in a @tech{module begin context}, and handled by the
          ([declaration-keyword #:cross-phase-persistent
                                #:empty-namespace
                                #:require=define
+                               #:flatten-requires
+                               #:unlimited-compile
                                #:unsafe
                                (code:line #:realm identifier)])]{
 
@@ -426,6 +448,23 @@ module:
        allowed to shadow a @racket[#%require] (or @racket[require])
        binding. This declaration does not affect shadowing of a
        module's initial imports (i.e., the module's language).}
+
+@item{@indexed-racket[#:flatten-requires] --- declares the performance
+       hint that a compiled form of the module should gather
+       transitive imports into a single, flattened list, which can
+       improve performance when the module is @tech{instantiate}d or
+       when it is attached via @racket[namespace-attach-module] or
+       @racket[namespace-attach-module-declaration]. Flattening
+       imports can be counterproductive, however, when it is applied
+       to multiple modules that are both use by another and that have
+       overlapping transitive-import subtrees.}
+
+@item{@indexed-racket[#:unlimited-compile] --- declares that
+       compilation should not fall back to interpreted mode for an
+       especially large module body. Otherwise, a compilation mode is
+       selected based on the size of the module body (as converted to
+       a @tech{linklet}) and the @envvar{PLT_CS_COMPILE_LIMIT} environment
+       variable (see @secref["cs-compiler-modes"]).}
 
 @item{@indexed-racket[#:unsafe] --- declares that the module can be
        compiled without checks that could trigger
@@ -457,7 +496,9 @@ context} or a @tech{module-begin context}. Each
 @history[#:changed "6.3" @elem{Added @racket[#:empty-namespace].}
          #:changed "7.9.0.5" @elem{Added @racket[#:unsafe].}
          #:changed "8.4.0.2" @elem{Added @racket[#:realm].}
-         #:changed "8.6.0.9" @elem{Added @racket[#:require=define].}]}
+         #:changed "8.6.0.9" @elem{Added @racket[#:require=define].}
+         #:changed "8.13.0.4" @elem{Added @racket[#:flatten-requires].}
+         #:changed "8.13.0.9" @elem{Added @racket[#:unlimited-compile].}]}
 
 
 @;------------------------------------------------------------------------
@@ -564,7 +605,9 @@ bindings of each @racket[require-spec] are visible for expanding later
  @defsubform[(only-in require-spec id-maybe-renamed ...)]{
   Like @racket[require-spec], but constrained to those exports for
   which the identifiers to bind match @racket[id-maybe-renamed]: as
-  @racket[_id] or as @racket[_orig-id] in @racket[[_orig-id _bind-id]]. If
+  @racket[_id] or as @racket[_orig-id] in @racket[[_orig-id _bind-id]].
+  When a @racket[id-maybe-renamed] has a @racket[_bind-id], the lexical
+  context of @racket[_bind-id] is used for the binding. If
   the @racket[_id] or @racket[_orig-id] of any @racket[id-maybe-renamed]
   is not in the set that @racket[require-spec] describes, a syntax
   error is reported.
@@ -601,11 +644,19 @@ bindings of each @racket[require-spec] are visible for expanding later
     (require (prefix-in tcp: racket/tcp))
     tcp:tcp-accept
     tcp:tcp-listen
-  ]}
+  ]
+
+  A @tech{syntax property} with the key
+  @indexed-racket['import-or-export-prefix-ranges] is added to the
+  local identifier in the expanded form of @racket[require].
+
+  @history[#:changed "8.9.0.5" @elem{Added the @racket['import-or-export-prefix-ranges]
+                                     syntax property.}]}
 
  @defsubform[(rename-in require-spec [orig-id bind-id] ...)]{
   Like @racket[require-spec], but replacing the identifier to
-  bind @racket[orig-id] with @racket[bind-id]; if any
+  bind @racket[orig-id] with @racket[bind-id]. The lexical context of
+  @racket[bind-id] is used for the binding. If any
   @racket[orig-id] is not in the set that @racket[require-spec]
   describes, a syntax error is reported.
   
@@ -1126,7 +1177,14 @@ as follows.
      (define num-eggs 2))
    (require 'nest)
    chicken:num-eggs
- ]}
+ ]
+ 
+  A @tech{syntax property} with the key
+  @indexed-racket['import-or-export-prefix-ranges] is added to the
+  exported identifier in the expanded form of @racket[provide].
+
+  @history[#:changed "8.9.0.5" @elem{Added the @racket['import-or-export-prefix-ranges]
+                                     syntax property.}]}
 
  @defsubform[(struct-out id)]{Exports the bindings associated with a
  structure type @racket[id]. Typically, @racket[id] is bound with
@@ -2069,14 +2127,23 @@ optional keyword argument whose value is not provided; optional
 by-position arguments include @racket[#f] for each non-provided
 argument, and then the sequence of optional-argument values is
 followed by a parallel sequence of booleans to indicate whether each
-optional-argument value was provided.}
+optional-argument value was provided.
+
+@history[#:changed "8.13.0.5" @elem{
+Adjusted binding so that @racket[(free-identifier=? #'λ #'lambda)] produces
+@racket[#t].
+}]
+}
 
 
-@defform/subs[(case-lambda [formals body ...+] ...)
+@deftogether[(
+@defform[(case-lambda [formals body ...+] ...)]
+@defform/subs[(case-λ [formals body ...+] ...)
               ([formals (id ...)
                         (id ...+ . rest-id)
-                        rest-id])]{
-               
+                        rest-id])]
+)]{
+
 Produces a procedure. Each @racket[[formals body ...+]]
 clause is analogous to a single @racket[lambda] procedure; applying
 the @racket[case-lambda]-generated procedure is the same as applying a
@@ -2100,7 +2167,10 @@ support keyword and optional arguments.
         (f 1)
         (f 1 2)
         (f 1 2 3)))
-]}
+]
+
+@history[#:changed "8.13.0.5" @elem{Added @racket[case-λ].}]
+}
 
 @defform[(#%plain-lambda formals body ...+)]{
 Like @racket[lambda], but without support for keyword or optional arguments.
@@ -2526,6 +2596,24 @@ in @math{O(log N)} time for @math{N} @racket[datum]s.
 (classify #\1)
 (classify #\!)
 ]}
+
+@subsection[#:tag "case/equal"]{Variants of @racket[case]}
+
+@note-lib-only[racket/case]
+
+@history[#:added "8.11.1.8"]
+
+@deftogether[(
+@defform[(case/equal val-expr case-clause ...)]
+@defform[(case/equal-always val-expr case-clause ...)]
+@defform[(case/eq val-expr case-clause ...)]
+@defform[(case/eqv val-expr case-clause ...)]
+)]{
+
+Like @racket[case], but using @racket[equal?], @racket[equal-always?],
+@racket[eq?], or @racket[eqv?] for comparing the result of
+@racket[val-expr] to the literals in the @racket[case-clause]s. The
+@racket[case/equal] form is equivalent to @racket[case].}
 
 @;------------------------------------------------------------------------
 @section[#:tag "define"]{Definitions: @racket[define], @racket[define-syntax], ...}

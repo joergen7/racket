@@ -70,7 +70,7 @@
           [(path-string? group/command)
            (values (and (subprocess-group-enabled) 'new) group/command command/args)]
           [(null? command/args)
-           (raise-argument-error who "path-string?" command)]
+           (raise-argument-error who "path-string?" group/command)]
           [(or (not group/command)
                (eq? group/command 'new)
                (subprocess? group/command))
@@ -88,7 +88,9 @@
       (define-values (exact? args)
         (cond
           [(and (pair? exact/args)
-                (eq? 'exact (car exact/args)))
+                (eq? 'exact (car exact/args))
+                (pair? (cdr exact/args))
+                (null? (cddr exact/args)))
            (values #t (cdr exact/args))]
           [else
            (values #f exact/args)]))
@@ -102,6 +104,10 @@
                               "(or/c path? string-no-nuls? bytes-no-nuls? 'exact)"
                               "(or/c path? string-no-nuls? bytes-no-nuls?)")
                arg))
+
+      (when (and exact? (not (eq? 'windows (system-type))))
+        (raise-arguments-error who "exact command line not supported on this platform"
+                               "exact command" (car args)))
 
       (define cust-mode (current-subprocess-custodian-mode))
       (define env-vars (current-environment-variables))

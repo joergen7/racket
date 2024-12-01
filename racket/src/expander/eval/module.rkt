@@ -98,9 +98,12 @@
          #hasheqv()))
 
    (define requires (decl 'requires))
+   (define recur-requires (decl 'recur-requires))
+   (define flattened-requires (decl 'flattened-requires))
    (define provides (decl 'provides))
    (define original-self (decl 'self-mpi))
    (define phase-to-link-modules (decl 'phase-to-link-modules))
+   (define module-use-resolution-cache (make-hasheq))
    (define portal-stxes (decl 'portal-stxes))
 
    (define create-root-expand-context-from-module ; might be used to create root-expand-context
@@ -110,7 +113,7 @@
      ;; If there's no `dh`, then it's important not to retain a reference to
      ;; `c`, which could cause the serialized form of syntax objects to
      ;; be retained after deserialization and reachable from the module cache;
-     ;; if it's there's a `dh`, though, then we won't be in the module cache
+     ;; if it's there's a `dh`, though, then it won't be in the module cache
      (if dh
          ;; Callback to declare submodules:
          (lambda (ns names declare-name pre?)
@@ -126,7 +129,7 @@
          ;; Dummy callback to avoid retaining anything:
          void))
 
-   ;; At this point, we've prepared everything anout the module that we
+   ;; At this point, we've prepared everything about the module that we
    ;; can while staying independent of a specific declaration or
    ;; specific instance. If we have a hash key for this module, we can
    ;; stash `declare-this-module` for potential reuse later.
@@ -135,6 +138,8 @@
        (define m (make-module #:source-name (current-module-declare-source)
                               #:self original-self
                               #:requires requires
+                              #:recur-requires recur-requires
+                              #:flattened-requires flattened-requires
                               #:provides provides
                               #:language-info language-info
                               #:realm realm
@@ -190,8 +195,7 @@
                                    (define get-syntax-literal! (instance-variable-value syntax-literals-instance get-syntax-literal!-id))
                                    (for ([(key pos) (in-hash phase-portal-stxes)])
                                      (when (symbol? key)
-                                       (define portal-stx (get-syntax-literal! pos))
-                                       (namespace-set-transformer! ns (sub1 phase-level) key (portal-syntax portal-stx)))))
+                                       (namespace-set-transformer! ns (sub1 phase-level) key (portal-syntax get-syntax-literal! pos)))))
                                  
                                  (define phase-linklet (hash-ref phases-h phase-level #f))                                 
                                  (when phase-linklet
@@ -204,7 +208,8 @@
                                         #:shift-to self
                                         #:phase-shift
                                         (phase+ (phase- phase-level (module-use-phase mu))
-                                                phase-shift))))
+                                                phase-shift)
+                                        #:resolution-cache module-use-resolution-cache)))
 
                                    (check-require-access phase-linklet #:skip-imports 2
                                                          module-uses import-module-instances insp
@@ -418,6 +423,8 @@
   (make-instance 'decl #f 'constant
                  'self-mpi (compiled-in-memory-original-self cim)
                  'requires (compiled-in-memory-requires cim)
+                 'recur-requires (compiled-in-memory-recur-requires cim)
+                 'flattened-requires (compiled-in-memory-flattened-requires cim)
                  'provides (compiled-in-memory-provides cim)
                  'phase-to-link-modules (compiled-in-memory-phase-to-link-module-uses cim)
                  'portal-stxes (compiled-in-memory-portal-stxes cim)))

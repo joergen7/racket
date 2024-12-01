@@ -1,6 +1,6 @@
 #lang racket/base
 
-(provide first second third fourth fifth sixth seventh eighth ninth tenth
+(provide first second third fourth fifth sixth seventh eighth ninth tenth eleventh twelfth thirteenth fourteenth fifteenth
 
          last-pair last rest
 
@@ -82,15 +82,20 @@
                                     "list contains too few elements"
                                     "list" l0)))
          (raise-argument-error 'name "list?" l0)))]))
-(define-lgetter second  2)
-(define-lgetter third   3)
-(define-lgetter fourth  4)
-(define-lgetter fifth   5)
-(define-lgetter sixth   6)
-(define-lgetter seventh 7)
-(define-lgetter eighth  8)
-(define-lgetter ninth   9)
-(define-lgetter tenth   10)
+(define-lgetter second      2)
+(define-lgetter third       3)
+(define-lgetter fourth      4)
+(define-lgetter fifth       5)
+(define-lgetter sixth       6)
+(define-lgetter seventh     7)
+(define-lgetter eighth      8)
+(define-lgetter ninth       9)
+(define-lgetter tenth      10)
+(define-lgetter eleventh   11)
+(define-lgetter twelfth    12)
+(define-lgetter thirteenth 13)
+(define-lgetter fourteenth 14)
+(define-lgetter fifteenth  15)
 
 (define (last-pair l)
   (if (pair? l)
@@ -271,7 +276,7 @@
   (split-at list (count-from-right 'splitf-at-right list pred)))
 
 ; list-prefix? : list? list? -> boolean?
-; Is l a prefix or r?
+; Is ls a prefix of rs?
 (define (list-prefix? ls rs [same? equal?])
   (unless (list? ls)
     (raise-argument-error 'list-prefix? "list?" 0 ls rs))
@@ -280,10 +285,11 @@
   (unless (and (procedure? same?)
                (procedure-arity-includes? same? 2))
     (raise-argument-error 'list-prefix? "(any/c any/c . -> . any/c)" 2 ls rs same?))
-  (or (null? ls)
-      (and (pair? rs)
-           (same? (car ls) (car rs))
-           (list-prefix? (cdr ls) (cdr rs)))))
+  (let loop ((ls ls) (rs rs))
+    (or (null? ls)
+        (and (pair? rs)
+             (same? (car ls) (car rs))
+             (loop (cdr ls) (cdr rs))))))
 
 ;; Eli: How about a version that removes the equal prefix from two lists
 ;; and returns the tails -- this way you can tell if they're equal, or
@@ -397,6 +403,7 @@
                   [(<= len 40) #f]
                   [(eq? =? eq?) (make-hasheq)]
                   [(eq? =? equal?) (make-hash)]
+                  [(eq? =? equal-always?) (make-hashalw)]
                   [else #f])])
     (case h
       [(#t) l]
@@ -405,7 +412,7 @@
        ;; and for equalities other than `eq?' or `equal?'  The length threshold
        ;; above (40) was determined by trying it out with lists of length n
        ;; holding (random n) numbers.
-       (let ([key (or key (λ(x) x))])
+       (let ([key (or key (λ (x) x))])
          (let-syntax ([loop (syntax-rules ()
                               [(_ search)
                                (let loop ([l l] [seen null])
@@ -418,6 +425,7 @@
            (cond [(eq? =? equal?) (loop member)]
                  [(eq? =? eq?)    (loop memq)]
                  [(eq? =? eqv?)   (loop memv)]
+                 [(eq? =? equal-always?) (loop memw)]
                  [else (loop (λ(x seen) (ormap (λ(y) (=? x y)) seen)))])))]
       [else
        ;; Use a hash for long lists with simple hash tables.
@@ -454,6 +462,8 @@
            (check-duplicates/t items key (make-hasheq) fail-k)]
           [(eq? same? eqv?)
            (check-duplicates/t items key (make-hasheqv) fail-k)]
+          [(eq? same? equal-always?)
+           (check-duplicates/t items key (make-hashalw) fail-k)]
           [else
            (unless (and (procedure? same?)
                         (procedure-arity-includes? same? 2))

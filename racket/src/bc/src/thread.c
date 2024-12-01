@@ -25,6 +25,7 @@
 #ifdef USE_STACKAVAIL
 # include <malloc.h>
 #endif
+#include <math.h>
 
 #ifndef SIGNMZTHREAD
 # define SIGMZTHREAD SIGUSR2
@@ -110,6 +111,8 @@ THREAD_LOCAL_DECL(static int num_major_garbage_collections);
 THREAD_LOCAL_DECL(static int num_minor_garbage_collections);
 THREAD_LOCAL_DECL(static intptr_t max_code_page_total);
 
+THREAD_LOCAL_DECL(static double last_sema_poll_msecs);
+
 #ifndef MZ_PRECISE_GC
 static intptr_t gc_pre_used_bytes;
 #endif
@@ -185,7 +188,7 @@ THREAD_LOCAL_DECL(struct Scheme_GC_Pre_Post_Callback_Desc *gc_prepost_callback_d
 ROSYM static Scheme_Object *read_symbol, *write_symbol, *execute_symbol, *delete_symbol, *exists_symbol;
 ROSYM static Scheme_Object *client_symbol, *server_symbol;
 ROSYM static Scheme_Object *major_symbol, *minor_symbol, *incremental_symbol;
-ROSYM static Scheme_Object *cumulative_symbol;
+ROSYM static Scheme_Object *cumulative_symbol, *peak_symbol;
 ROSYM static Scheme_Object *gc_symbol, *gc_major_symbol;
 ROSYM static Scheme_Object *racket_symbol;
 
@@ -465,10 +468,6 @@ SHARED_OK static Scheme_Custodian_Extractor *extractors;
 #define LONGJMP(p) scheme_longjmpup(&p->jmpup_buf)
 #define RESETJMP(p) scheme_reset_jmpup_buf(&p->jmpup_buf)
 
-#ifndef MZ_PRECISE_GC
-# define scheme_thread_hop_type scheme_thread_type
-#endif
-
 SHARED_OK Scheme_Object *initial_cmdline_vec;
 
 #if defined(MZ_USE_PLACES)
@@ -511,7 +510,9 @@ void scheme_init_thread(Scheme_Startup_Env *env)
   incremental_symbol  = scheme_intern_symbol("incremental");
 
   REGISTER_SO(cumulative_symbol);
+  REGISTER_SO(peak_symbol);
   cumulative_symbol = scheme_intern_symbol("cumulative");
+  peak_symbol = scheme_intern_symbol("peak");
 
   REGISTER_SO(gc_symbol);
   REGISTER_SO(gc_major_symbol);
@@ -577,7 +578,7 @@ void scheme_init_thread(Scheme_Startup_Env *env)
 
   ADD_PRIM_W_ARITY("parameter?"            , parameter_p           , 1, 1, env);
   ADD_PRIM_W_ARITY("make-parameter"        , make_parameter        , 1, 4, env);
-  ADD_PRIM_W_ARITY("make-derived-parameter", make_derived_parameter, 3, 3, env);
+  ADD_PRIM_W_ARITY("make-derived-parameter", make_derived_parameter, 3, 5, env);
   ADD_PRIM_W_ARITY("parameter-procedure=?" , parameter_procedure_eq, 2, 2, env);
   ADD_PRIM_W_ARITY("parameterization?"     , parameterization_p    , 1, 1, env);
 
@@ -801,7 +802,7 @@ static Scheme_Object *collect_garbage(int argc, Scheme_Object *argv[])
 static Scheme_Object *current_memory_use(int argc, Scheme_Object *args[])
 {
   Scheme_Object *arg = NULL;
-  int cumulative = 0;
+  int cumulative = 0, peak = 0;
   uintptr_t retval = 0;
 
   if (argc) {
@@ -812,9 +813,12 @@ static Scheme_Object *current_memory_use(int argc, Scheme_Object *args[])
     } else if (SAME_OBJ(args[0], cumulative_symbol)) {
       cumulative = 1;
       arg = NULL;
+    } else if (SAME_OBJ(args[0], peak_symbol)) {
+      peak = 1;
+      arg = NULL;
     } else {
       scheme_wrong_contract("current-memory-use", 
-                            "(or/c custodian? 'cumulative #f)", 
+                            "(or/c custodian? 'cumulative 'peak #f)", 
                             0, argc, args);
     }
   }
@@ -825,6 +829,8 @@ static Scheme_Object *current_memory_use(int argc, Scheme_Object *args[])
 #else
     retval = GC_get_total_bytes();
 #endif
+  } else if (peak) {
+    retval = max_gc_pre_used_bytes;
   } else {
 #ifdef MZ_PRECISE_GC
     retval = GC_get_memory_use(arg);
@@ -1161,7 +1167,7 @@ static void adjust_custodian_family(void *mgr, void *skip_move)
 	    Scheme_Object *o;
 	    o = xCUSTODIAN_FAM(r->boxes[i]);
 	    if (SAME_TYPE(SCHEME_TYPE(o), scheme_thread_hop_type)) {
-	      o = WEAKIFIED(((Scheme_Thread_Custodian_Hop *)o)->p);
+	      o = SCHEME_WEAK_BOX_VAL(((Scheme_Thread_Custodian_Hop *)o)->p);
 	      if (o)
 		GC_register_thread(o, parent);
 	    } else if (SAME_TYPE(SCHEME_TYPE(o), scheme_place_type)) {
@@ -1495,7 +1501,7 @@ Scheme_Thread *scheme_do_close_managed(Scheme_Custodian *m, Scheme_Exit_Closer_F
 	  /* We've added an indirection and made it weak. See mr_hop note above. */
 	  is_thread = 1;
           the_thread_hop = (Scheme_Thread_Custodian_Hop *)o;
-	  the_thread = (Scheme_Thread *)WEAKIFIED(the_thread_hop->p);
+	  the_thread = (Scheme_Thread *)SCHEME_WEAK_BOX_VAL(the_thread_hop->p);
 	} else {
 	  is_thread = 0;
 	  the_thread = NULL;
@@ -1705,7 +1711,7 @@ int scheme_custodian_is_shut_down(Scheme_Custodian* c)
 
 static Scheme_Object *extract_thread(Scheme_Object *o)
 {
-  return (Scheme_Object *)WEAKIFIED(((Scheme_Thread_Custodian_Hop *)o)->p);
+  return SCHEME_WEAK_BOX_VAL(((Scheme_Thread_Custodian_Hop *)o)->p);
 }
 
 void scheme_init_custodian_extractors()
@@ -2684,12 +2690,12 @@ static Scheme_Thread *make_thread(Scheme_Config *config,
   {
     Scheme_Thread_Custodian_Hop *hop;
     Scheme_Custodian_Reference *mref;
-    hop = MALLOC_ONE_WEAK_RT(Scheme_Thread_Custodian_Hop);
+    hop = MALLOC_ONE_RT(Scheme_Thread_Custodian_Hop);
     process->mr_hop = hop;
     hop->so.type = scheme_thread_hop_type;
     {
-      Scheme_Thread *wp;
-      wp = (Scheme_Thread *)WEAKIFY((Scheme_Object *)process);
+      Scheme_Object *wp;
+      wp = scheme_make_weak_box((Scheme_Object *)process);
       hop->p = wp;
     }
 
@@ -2697,10 +2703,6 @@ static Scheme_Thread *make_thread(Scheme_Config *config,
     process->mr_hop->mref = mref;
     process->mr_hop->extra_mrefs = scheme_null;
     process->mr_hop->dead_box = NULL;
-
-#ifndef MZ_PRECISE_GC
-    scheme_weak_reference((void **)(void *)&hop->p);
-#endif
   }
 
   return process;
@@ -3838,21 +3840,18 @@ Scheme_Object *scheme_call_as_nested_thread(int argc, Scheme_Object *argv[], voi
   {
     Scheme_Thread_Custodian_Hop *hop;
     Scheme_Custodian_Reference *mref;
-    hop = MALLOC_ONE_WEAK_RT(Scheme_Thread_Custodian_Hop);
+    hop = MALLOC_ONE_RT(Scheme_Thread_Custodian_Hop);
     np->mr_hop = hop;
     hop->so.type = scheme_thread_hop_type;
     {
-      Scheme_Thread *wp;
-      wp = (Scheme_Thread *)WEAKIFY((Scheme_Object *)np);
+      Scheme_Object *wp;
+      wp = scheme_make_weak_box((Scheme_Object *)np);
       hop->p = wp;
     }
     mref = scheme_add_managed(mgr, (Scheme_Object *)hop, NULL, NULL, 0);
     np->mr_hop->mref = mref;
     np->mr_hop->extra_mrefs = scheme_null;
     np->mr_hop->dead_box = NULL;
-#ifndef MZ_PRECISE_GC
-    scheme_weak_reference((void **)(void *)&hop->p);
-#endif
   }
 
   np->gc_prep_chain = gc_prep_thread_chain;
@@ -3898,11 +3897,7 @@ Scheme_Object *scheme_call_as_nested_thread(int argc, Scheme_Object *argv[], voi
     }
   }
   np->mr_hop->extra_mrefs = scheme_null;
-#ifdef MZ_PRECISE_GC
-  WEAKIFIED(np->mr_hop->p) = NULL;
-#else
-  scheme_unweak_reference((void **)(void *)&np->mr_hop->p);
-#endif
+  SCHEME_WEAK_BOX_VAL(np->mr_hop->p) = NULL;
   scheme_remove_all_finalization(np->mr_hop);
 
   if (np->prev)
@@ -4075,9 +4070,18 @@ static int check_fd_semaphores()
   int did = 0;
   void *p;
   Scheme_Object *sema;
+  double now_msecs;
 
   if (!scheme_semaphore_fd_set)
     return 0;
+
+#ifdef LIMIT_POLL_FREQUENCY_BY_MONOTONIC_TIME
+  /* limit how frequently we poll */
+  now_msecs = rktio_get_inexact_monotonic_milliseconds(scheme_rktio);
+  if (now_msecs <= ceil(last_sema_poll_msecs))
+    return 0;
+  last_sema_poll_msecs = now_msecs;
+#endif
 
   rktio_ltps_poll(scheme_rktio, scheme_semaphore_fd_set);
   
@@ -8065,7 +8069,8 @@ static Scheme_Object *make_parameter(int argc, Scheme_Object **argv)
 
 static Scheme_Object *make_derived_parameter(int argc, Scheme_Object **argv)
 {
-  Scheme_Object *p, *a[2], *realm = scheme_default_realm;
+  Scheme_Object *p, *a[2], *realm;
+  const char *name;
   ParamData *data;
 
   if (!SCHEME_PARAMETERP(argv[0]))
@@ -8073,6 +8078,19 @@ static Scheme_Object *make_derived_parameter(int argc, Scheme_Object **argv)
 
   scheme_check_proc_arity("make-derived-parameter", 1, 1, argc, argv);
   scheme_check_proc_arity("make-derived-parameter", 1, 2, argc, argv);
+  if (argc > 3) {
+    if (!SCHEME_SYMBOLP(argv[3]))
+      scheme_wrong_contract("make-derived-parameter?", "symbol?", 3, argc, argv);
+    name = scheme_symbol_name(argv[3]);
+  } else {
+    name = scheme_get_proc_name(argv[0], NULL, -1);
+  }
+  if (argc > 4) {
+    if (!SCHEME_SYMBOLP(argv[4]))
+      scheme_wrong_contract("make-derived-parameter?", "symbol?", 4, argc, argv);
+    realm = argv[4];
+  } else
+    realm = scheme_get_proc_realm(argv[0]);
 
   data = MALLOC_ONE_RT(ParamData);
 #ifdef MZTAG_REQUIRED
@@ -8086,7 +8104,7 @@ static Scheme_Object *make_derived_parameter(int argc, Scheme_Object **argv)
   a[0] = (Scheme_Object *)data;
   a[1] = realm;
   p = scheme_make_prim_closure_w_arity(do_param, 2, a, 
-                                       "parameter-procedure", 0, 1);
+                                       name, 0, 1);
   ((Scheme_Primitive_Proc *)p)->pp.flags |= SCHEME_PRIM_TYPE_PARAMETER;
 
   return p;

@@ -59,6 +59,9 @@
       [(string=? arch "rv64")
        (cons "RISCV64"
              "clearcache.c")]
+      [(string=? arch "la64")
+       (cons "LOONGARCH64"
+             "clearcache.c")]
       [(glob-match? "pb*" arch)
        (cons "PORTABLE_BYTECODE"
              "pb.c")]
@@ -69,7 +72,8 @@
   (define c-config-file
     (at-dir "config.h"))
   (define c-config-keys
-    '(disablecurses disablex11 enablelibffi alwaysUseBootFile preloadBootFiles))
+    '(disablecurses disablex11 enablelibffi alwaysUseBootFile preloadBootFiles relativeBootFiles
+                    InstallBin InstallLib))
 
   ;; sources for "kernel.o":
   (define kernel-src-files
@@ -79,7 +83,7 @@
            "number.c" "schsig.c" "io.c" "new-io.c" "print.c" "fasl.c" "vfasl.c"
            "stats.c" "foreign.c" "prim.c" "prim5.c" "flushcache.c"
            "schlib.c" "thread.c" "expeditor.c" "scheme.c" "compress-io.c"
-           "random.c" "ffi.c"
+           "random.c" "ffi.c" "self-exe.c"
            arch.c)))
   (define kernel-srcs
     ((add-extra-c-sources at-dir mboot)
@@ -89,7 +93,7 @@
          kernel-srcs))
 
   (define kernel-asm-files
-    (if (glob-match? "*nt" (or (lookup 'defaultm) m))
+    (if (glob-match? "*nt" (or (lookup 'flagsm) m))
 	(cond
           [(and msvc?
                 (string=? arch "a6"))
@@ -226,7 +230,8 @@
 
   (make-targets
    `([:target build (,exe ,petite-exe revision)
-              ,void]
+              ,void
+              :recur]
 
      [:target ,exe (,kernel-dep ,@main-objs ,@res-deps ,@preload-files)
               ,(lambda (path token)
@@ -419,9 +424,20 @@
                        (line (and (equal? (hash-ref config 'enablelibffi #f) "yes")
                                   "#define ENABLE_LIBFFI"))
                        (line (and (not (for-windows? config))
-                                  (let ([s (hash-ref config 'InstallLib #f)])
-                                    (and s
-                                         (~a "#define DEFAULT_HEAP_PATH \"" s "/csv%v/%m\"")))))
+                                  (or (and (equal? (hash-ref config 'relativeBootFiles #f) "yes")
+                                           (let* ([bin (hash-ref config 'InstallBin #f)]
+                                                  [lib (hash-ref config 'InstallLib #f)]
+                                                  [rel (or (and bin lib (find-relative-path bin lib))
+                                                           ".")]
+                                                  [x-rel (if (relative-path? rel)
+                                                             (build-raw-path "%x" rel)
+                                                             rel)])
+                                             (~a "#define DEFAULT_HEAP_PATH \"%x:"
+                                                 (build-raw-path x-rel "csv%v/%m")
+                                                 ":%x/../../boot/%m\"")))
+                                      (let ([s (hash-ref config 'InstallLib #f)])
+                                        (and s
+                                             (~a "#define DEFAULT_HEAP_PATH \"" s "/csv%v/%m\""))))))
                        (line (let ([alwaysUseBootFile
                                     (or (and (not (equal? (hash-ref config 'alwaysUseBootFile "") "")))
                                         (infer-always-use-boot-file preload-files))])
@@ -445,20 +461,23 @@
 
      [:target revision ()
               ,(lambda (token)
-                 (let loop ([r (path->complete-path (at-source "."))])
+	         (let loop ([r (path->complete-path (at-source "."))])
                    (cond
-                     [(directory-exists? (build-path r ".git"))
-                      ;; This step takes a while compared to other things in a no-change build
-                      (define p (shell "git describe --always --match=\"\" --abbrev=40 --dirty"
-                                       (hash 'stdout 'pipe)))
-                      (define rev (fd-read (hash-ref p 'stdout) eof))
-                      (process-wait (hash-ref p 'process))
-                      (fd-close (hash-ref p 'stdout))
-                      (display-to-file rev (at-mach "revision") :truncate)]
-                     [else
-                      (define l (split-path r))
-                      (when (car l)
-                        (loop (car l)))])))]
+                    [(stat (build-path r ".git") #t #t)
+                     ;; This step takes a while compared to other things in a no-change build
+                     (define p (shell "git describe --always --match=\"\" --abbrev=40 --dirty"
+                                 (hash 'stdout 'pipe)))
+                     (define rev (~a (fd-read (hash-ref p 'stdout) eof) "git\n"))
+                     (process-wait (hash-ref p 'process))
+                     (fd-close (hash-ref p 'stdout))
+                     (display-to-file rev (at-mach "revision") :truncate)]
+                    [else
+                     (define l (split-path r))
+                     (if (car l)
+                         (loop (car l))
+                         ;; The $Format$ string is expanded by `git archive` because of the
+                         ;; entry in ;; .gitattributes for build.zuo.
+                         (display-to-file "$Format:%H$\ngit\n" (at-mach "revision") :truncate))])))]
 
      ;; keep "_zuo.db" and "_zuo_tc.db" here instead of in "boot" and "bin" directories
      [:db-dir ,(at-dir ".")]
@@ -485,14 +504,14 @@
                                       " /DSCHEME_STATIC")
                                   " /Ox /W3 /DWIN32 /D_CRT_SECURE_NO_WARNINGS"
                                   " /Zi /FS /Fd" (string->shell (at-dir "scheme.pdb"))
-                                  (if (glob-match? "pb*" (hash-ref config 'm))
+                                  (if (glob-match? "pb*" (m->arch (hash-ref config 'm)))
                                       " /DFEATURE_WINDOWS"
                                       "")))]
             [config (hash-set config 'LDFLAGS (if (as-runtime-dll? config) "/MD" "/MT"))]
             [config (hash-set config 'LIBS "rpcrt4.lib ole32.lib advapi32.lib User32.lib")])
        config)]
-    [(and (eq? 'windows (system-type))
-          (glob-match? "pb*" (hash-ref config 'm)))
+    [(and (glob-match? "*nt" (hash-ref config 'flagsm ""))
+          (glob-match? "pb*" (m->arch (hash-ref config 'm))))
      (config-merge config 'CFLAGS "-DFEATURE_WINDOWS")]
     [else config]))
 
@@ -535,7 +554,7 @@
 (define (for-windows? config)
   (or (is-msvc? config)
       (glob-match? "*nt" (hash-ref config 'm))
-      (glob-match? "*nt" (or (hash-ref config 'defaultm #f) ""))))
+      (glob-match? "*nt" (or (hash-ref config 'flagsm #f) ""))))
 
 (define (lib-build-suffix config)
   (if (is-msvc? config)

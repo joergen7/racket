@@ -2332,3 +2332,116 @@
     s/syntax.ss s/x86.ss s/x86_64.ss
 - Unicode 14.0 support
     unicode/* s/5_4.ss mats/5_4.ms mats/6.ms
+- don't rely on signed integer overflow (UB) in symhash implementation
+    c/foreign.c
+- Propagate immutable versions of "", #(), #vu8() and #vfx() in cp0.
+    s/cp0.ss s/cpnanopass.ss
+- correct mislabeling of some functions as macros and vice versa in
+  docs + correct name of Slocked_objectp from Sunlocked_objectp
+    csug/foreign.stex
+- fix some missing quotes around shell variable expansion; add a helpful
+  message telling how to build under Rosetta2 when running on an arm64 OSX
+    configure
+- removed comments related to a completed TODO item from s/syntax.ss
+- Unicode 15.0 support
+    unicode/* mats/5_4.ms
+- update zlib to version 1.2.13
+- fix race condition in thread mat
+    mats/thread.ms
+- fix documentation of symbol-hashtable?
+    csug/objects.stex
+- fix flags in signature of remove, member and assoc
+  they can not be discarded in case they are comparing records
+  with a custom equal procedure that has side effects.
+    s/primdata.ss mats/5_2.ms release_notes/release_notes.stex
+- fix a character comparison bug in S_intern_gensym
+    c/intern.c mats/5_7.ms mats/root-experr-compile-0-f-f-f
+    mats/root-experr-compile-2-f-f-f
+- fix crash at optimize-level 2 and higher caused by the compiler generating an
+  invalid live-pointer mask when expanding certain primitive calls that store
+  raw data on the stack and whose operands contain calls.
+  Some primitives generate raw intermediate values. When these values are live
+  across a call, the compiler saves them on the stack but could mistakenly
+  include them in the live-pointer mask. A subsequent garbage collection could
+  crash if it attempted to process a raw value as a Scheme object based on the
+  live-pointer mask.
+    mats/bytevector.ms mats/ftype.ms mats/record.ms s/cpnanopass.ss
+    s/np-languages.ss
+- fix gensym->unique-string to leave symbol unchanged on failure
+    c/externs.h c/intern.c mats/5_7.ms s/5_7.ss s/prims.ss boot/*
+    mats/root-experr-compile-0-f-f-f mats/root-experr-compile-2-f-f-f
+- fix repair to invalid live-pointer mask, where a pass did not handle the
+  new raw-data form correctly
+    mats/fx.ms s/cpnanopass.ss
+- use Robert L. Smith's 1962 complex number division algorithm to avoid nans in
+  situations involving infinite denominators
+    s/library.ss s/5_3.ss mats/5_3.ms
+- avoid implicit fallthrough warnings
+    c/scheme.c c/schsig.c c/Mf-a6le c/Mf-a6osx c/Mf-arm32le c/Mf-i3le c/Mf-i3osx
+    c/Mf-ppc32le c/Mf-ta6le c/Mf-ta6osx c/Mf-ti3le c/Mf-ti3osx c/Mf-tppc32le
+- use simpler get-string-all in fresh-line mats where the expected result
+  from block-read relied on the input-port's buffer size
+    mats/6.ms mats/patch-interpret-0-f-f-f mats/patch-interpret-0-f-t-f
+    mats/patch-interpret-3-f-f-f mats/patch-interpret-3-f-t-f
+- add transcoded-port-buffer-size parameter to permit control over the size of
+  the string buffer and ioffsets fxvector, if any, for a transcoded port.
+  add make-codec-buffer to allow control over the internal codec bytevector
+  buffer for a transcoded port. extend mats to cover different buffer sizes.
+    csug/io.stex mats/io.ms mats/patch-compile-0-t-f-f
+    mats/patch-interpret-0-f-f-f mats/patch-interpret-0-f-t-f
+    mats/root-experr-compile-0-f-f-f mats/root-experr-compile-2-f-f-f
+    release_notes/release_notes.stex s/io.ss s/primdata.ss
+- avoid extra allocation and copying when we have a single block in the
+  append-blocks procedures used by get-bytevector-all, get-bytevector-n,
+  $get-string-all, and get-string-n
+    mats/io.ms release_notes/release_notes.stex s/io.ss
+- reduce allocation and copying for certain cases in bytevector->string
+    mats/io.ms release_notes/release_notes.stex s/io.ss
+- update zlib to version 1.3
+- repair collector handling of weak pairs when the max target generation
+  is greater than the minimum target generation
+    c/gc.c mats/4.ms
+- repair collector handling of ephemeron pairs that refer to objects in
+  younger generations
+    c/gc.c mats/4.ms
+
+9.6.0 changes:
+- updated version to 9.6.0
+    BUILDING NOTICE makefiles/Mf-install.in makefiles/Makefile-csug.in
+    scheme.1.in c/Makefile.a6nt c/Makefile.i3nt c/Makefile.ta6nt
+    c/Makefile.ti3nt mats/Mf-a6nt mats/Mf-i3nt mats/Mf-ta6nt
+    mats/Mf-ti3nt workarea c/scheme.rc s/7.ss s/cmacros.ss
+    release_notes/release_notes.stex csug/copyright.stex csug/csug.stex
+    bintar/Makefile rpm/Makefile pkg/Makefile wininstall/Makefile
+    wininstall/a6nt.wxs wininstall/i3nt.wxs wininstall/ta6nt.wxs
+    wininstall/ti3nt.wxs
+- removed Microsoft C Runtime library merge module redistribution as
+  recommended by Microsoft
+- specify version of WiX required to build the Windows installer
+
+9.6.2 changes:
+- The make install target of 9.6.0 was broken by the version string being 9.6.
+- updated version to 9.6.2
+    BUILDING NOTICE makefiles/Mf-install.in scheme.1.in c/Makefile.a6nt
+    c/Makefile.i3nt c/Makefile.ta6nt c/Makefile.ti3nt mats/Mf-a6nt
+    mats/Mf-i3nt mats/Mf-ta6nt mats/Mf-ti3nt workarea c/scheme.rc
+    s/cmacros.ss release_notes/release_notes.stex csug/copyright.stex
+    csug/csug.stex bintar/Makefile rpm/Makefile pkg/Makefile
+    wininstall/Makefile wininstall/a6nt.wxs wininstall/i3nt.wxs
+    wininstall/ta6nt.wxs wininstall/ti3nt.wxs
+- fix (library <library reference>) import syntax
+    mats/8.ms release_notes/release_notes.stex s/syntax.ss
+- add Sint32_t, Suint32_t, Sint64_t, Suint64_t types for cross-platform
+  code that uses scheme.h exports
+    boot/*/scheme.h c/number.c csug/foreign.stex
+    release_notes/release_notes.stex s/mkheader.ss
+- fix handling of most-negative-fixnum in Sinteger32 and Sinteger64
+    c/number.c mats/foreign1.c mats/foreign.ms release_notes/release_notes.stex
+- fix 32-bit C integer/unsigned to bignum conversion
+    c/number.c release_notes/release_notes.stex
+- add functions that try to convert from Scheme to C signed and unsigned
+  integers without throwing exceptions; use the new functions in Sscheme_start
+  and run_script
+    boot/*/scheme.h c/externs.h c/number.c c/scheme.c csug/foreign.stex
+    mats/foreign1.c mats/foreign.ms release_notes/release_notes.stex
+    s/mkheader.ss

@@ -2436,6 +2436,15 @@
 (test "(lambda (x) x)" (error-syntax->string-handler) '(lambda (x) x) #f)
 (test "(lambda..." (error-syntax->string-handler) '(lambda (x) x) 10)
 
+(test #t procedure? error-syntax->name-handler)
+(test 'lambda (error-syntax->name-handler) #'(lambda (x) x))
+(test #f (error-syntax->name-handler) #'((lambda (x) x)))
+(parameterize ([error-syntax->name-handler (lambda (stx)
+                                             'whatever)])
+  (err/rt-test (raise-syntax-error #f "oops" #'(bad syntax))
+               exn:fail:syntax?
+               #rx"whatever: "))
+
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Test prop:rename-transformer with procedure content
 
@@ -2879,6 +2888,20 @@
 (test '() syntax-bound-symbols #'anything 100)
 (test '() syntax-bound-symbols (datum->syntax #f 'nothing))
 (test '() syntax-bound-symbols ((make-syntax-introducer) (datum->syntax #f 'nothing)))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; syntax-bound-interned-scope-symbols
+
+(define-syntax (define-weird stx)
+  (syntax-case stx ()
+    [(_ id)
+     #`(define #,((make-interned-syntax-introducer 'racket/weird) #'id) "weird")]))
+
+(define-weird lambda)
+
+(test '(racket/weird) syntax-bound-interned-scope-symbols #'lambda)
+(test '() syntax-bound-interned-scope-symbols #'lambda 1)
+(test '() syntax-bound-interned-scope-symbols #'non-weird-lambda)
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; syntax-bound-phases

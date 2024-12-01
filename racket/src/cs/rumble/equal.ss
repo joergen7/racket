@@ -104,6 +104,7 @@
                                      (equal? a b ctx)))))))]
            [(stencil-vector? a)
             (and (stencil-vector? b)
+                 (not (or (eq? mode 'chaperone-of?) (eq? mode 'equal-always?)))
                  (fx= (stencil-vector-mask a) (stencil-vector-mask b))
                  (let ([len (stencil-vector-length a)]
                        [ctx (deeper-context ctx)])
@@ -169,15 +170,11 @@
                                            (|#%app| rec-equal? orig-a orig-b eql? (or (eq? mode 'equal?)
                                                                                       (eq? mode 'impersonator-of?)))
                                            (|#%app| rec-equal? orig-a orig-b eql?)))])))))])))]
-           [(and (or (eq? mode 'chaperone-of?) (eq? mode 'equal-always?))
-                 ;; Mutable strings and bytevectors must be `eq?` for `chaperone-of?` and `equal-always?`
-                 (or (mutable-string? a)
-                     (mutable-string? b)
-                     (mutable-bytevector? a)
-                     (mutable-bytevector? b)))
-            #f]
            [else
-            (#%equal? a b)])))))
+            (and (or (not (or (eq? mode 'chaperone-of?) (eq? mode 'equal-always?)))
+                     (and (immutable-string? a) (immutable-string? b))
+                     (and (immutable-bytevector? a) (immutable-bytevector? b)))
+                 (#%equal? a b))])))))
 
 (define (equal? a b) (do-equal? a b 'equal? #f))
 (define (impersonator-of? a b) (do-equal? a b 'impersonator-of? #f))
@@ -186,11 +183,11 @@
 
 (define/who (equal?/recur a b eql?)
   (check who (procedure-arity-includes/c 2) eql?)
-  (do-equal? a b 'equal? eql?))
+  (do-equal? a b 'equal? (lambda (x y) (|#%app| eql? x y))))
 
 (define/who (equal-always?/recur a b eql?)
   (check who (procedure-arity-includes/c 2) eql?)
-  (do-equal? a b 'equal-always? eql?))
+  (do-equal? a b 'equal-always? (lambda (x y) (|#%app| eql? x y))))
 
 (define (struct-common-equal+hash a b)
   (let ([av (struct-property-ref prop:equal+hash (#%$record-type-descriptor a) #f)])

@@ -660,8 +660,8 @@ static void s_ee_set_color(int color_id, IBOOL background) {
 # define CHTYPE int
 # include </usr/include/curses.h>
 # include </usr/include/term.h>
-#elif defined(NETBSD)
-# include <ncurses.h>
+#elif defined(__DragonFly__)
+# include <ncurses/curses.h>
 # include <ncurses/term.h>
 #else
 # include <curses.h>
@@ -677,11 +677,11 @@ static void s_ee_set_color(int color_id, IBOOL background) {
 # include <unistd.h>
 # include <time.h>
 #endif
-#if !defined(__GLIBC__) && !defined(__OpenBSD__) && !defined(__NetBSD__) && !defined(__linux__) && !defined(__EMSCRIPTEN__) && !defined(NO_USELOCALE)
+#if !defined(__GLIBC__) && !defined(__COSMOPOLITAN__) && !defined(__OpenBSD__) && !defined(__NetBSD__) && !defined(__linux__) && !defined(__EMSCRIPTEN__) && !defined(NO_USELOCALE)
 # include <xlocale.h>
 #endif
 
-#if defined(__linux__) && !defined(_XOPEN_SOURCE)
+#if (defined(__gnu_hurd__) || defined(__linux__)) && !defined(_XOPEN_SOURCE)
 extern int wcwidth(wchar_t);
 #endif
 

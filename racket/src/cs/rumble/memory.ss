@@ -44,6 +44,7 @@
 (define gc-counter 1)
 (define log-collect-generation-radix 2)
 (define collect-generation-radix-mask (sub1 (bitwise-arithmetic-shift 1 log-collect-generation-radix)))
+(define peak-mem (bytes-allocated))
 
 ;; Some allocation patterns create a lot of overhead (i.e., wasted
 ;; pages in the allocator), so we need to detect that and force a GC.
@@ -69,8 +70,9 @@
   (let ([this-counter (if g (bitwise-arithmetic-shift-left 1 (* log-collect-generation-radix g)) gc-counter)]
         [pre-allocated (bytes-allocated)]
         [pre-allocated+overhead (current-memory-bytes)]
-        [pre-time (real-time)] 
+        [pre-time (current-inexact-milliseconds)]
         [pre-cpu-time (cpu-time)])
+    (set! peak-mem (max peak-mem pre-allocated))
     (if (> (add1 this-counter) (bitwise-arithmetic-shift-left 1 (* log-collect-generation-radix (sub1 (collect-maximum-generation)))))
         (set! gc-counter 1)
         (set! gc-counter (add1 this-counter)))
@@ -136,7 +138,7 @@
           (set! request-incremental? #f))
         (let ([post-allocated (bytes-allocated)]
               [post-allocated+overhead (current-memory-bytes)]
-              [post-time (real-time)]
+              [post-time (current-inexact-milliseconds)]
               [post-cpu-time (cpu-time)])
           (when (= gen (collect-maximum-generation))
             ;; Trigger a major GC when memory use is a certain factor of current use.
@@ -165,7 +167,7 @@
           (garbage-collect-notify gen
                                   pre-allocated pre-allocated+overhead pre-time pre-cpu-time
                                   post-allocated post-allocated+overhead post-time post-cpu-time
-                                  (real-time) (cpu-time)))
+                                  (current-inexact-milliseconds) (cpu-time)))
         (when (and (= req-gen (collect-maximum-generation))
                    (currently-in-engine?))
           ;; This `set-timer` doesn't necessarily penalize the right thread,
@@ -208,6 +210,7 @@
      [(not mode) (bytes-allocated)]
      [(eq? mode 'cumulative) (with-interrupts-disabled
                               (+ (bytes-deallocated) (bytes-allocated)))]
+     [(eq? mode 'peak) peak-mem]
      ;; must be a custodian; hook is reposnsible for complaining if not
      [else (custodian-memory-use mode (bytes-allocated))])]))
 
@@ -230,8 +233,9 @@
       ;; Watch out for radiply growing memory use that isn't captured
       ;; fast enough by regularly scheduled event checking because it's
       ;; allocated in large chunks
-      (when (>= (bytes-allocated) trigger-major-gc-allocated)
-        (set-timer 1)))))
+      (when (>= (bytes-allocated 0) trigger-major-gc-allocated)
+        (when (eqv? (place-thread-category) PLACE-MAIN-THREAD)
+          (set-timer 1))))))
 
 (define (set-incremental-collection-enabled! on?)
   (set! disable-incremental? (not on?)))

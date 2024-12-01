@@ -33,9 +33,9 @@
          (maybe-install-free=id! trans-val id phase))]
       [else
        (namespace-unset-transformer! ns phase sym)]))
-   
+
    top-level-require!-id
-   (lambda (stx ns)
+   (lambda (stx ns syms)
      (define reqs (cdr (syntax->list stx)))
      (parse-and-perform-requires! #:run? #t
                                   #:visit? #f
@@ -51,8 +51,12 @@
                                   #:initial-require? #t
                                   #:add-defined-portal
                                   (lambda (id phase portal-stx orig-s)
-                                    (define sym (syntax-e id))
+                                    (define sym (if (pair? syms)
+                                                    (begin0
+                                                      (car syms)
+                                                      (set! syms (cdr syms)))
+                                                    (syntax-e id)))
                                     (when phase
-                                      (define t (portal-syntax portal-stx))
+                                      (define t (portal-syntax portal-stx #f))
                                       (namespace-set-transformer! ns phase sym t))
                                     sym)))))

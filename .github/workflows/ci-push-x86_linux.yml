@@ -1,6 +1,9 @@
 name: CI Linux x86
 
-on: [push]
+on:
+  push:
+    branches:
+      - master
 
 jobs:
 
@@ -19,7 +22,7 @@ jobs:
         cify: [nocify]
     
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
       with:
         fetch-depth: 100
     - name: Setup cify if enabled
@@ -54,7 +57,7 @@ jobs:
     - name: Tarballing
       working-directory: /usr/local
       run: tar -cvjf /tmp/racketcgc-debian10-${{ matrix.cify }}-x64_git${{ github.sha }}.tar.bz2 racketcgc
-    - uses: actions/upload-artifact@v2
+    - uses: actions/upload-artifact@v4
       with:
         name: racketcgc-debian10-${{ matrix.cify }}-x64_git${{ github.sha }}
         path: /tmp/racketcgc-debian10-${{ matrix.cify }}-x64_git${{ github.sha }}.tar.bz2
@@ -84,7 +87,7 @@ jobs:
             cc: gcc # clang has a problem with future tests timing out
   
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
       with:
         fetch-depth: 100
     - name: Setup cify if enabled
@@ -105,7 +108,7 @@ jobs:
     - name: Setup efp if disabled
       if: matrix.efp == 'noefp'
       run: echo "EFP_OPTIONS=--disable-extflonums --disable-places --disable-futures" >> $GITHUB_ENV
-    - uses: actions/download-artifact@v2
+    - uses: actions/download-artifact@v4
       with:
         name: racketcgc-debian10-nocify-x64_git${{ github.sha }}
         path: /tmp
@@ -141,7 +144,7 @@ jobs:
     - name: Tarballing
       working-directory: /usr/local
       run: tar -cvjf /tmp/racket3m-debian10-${{ matrix.cify }}-${{ matrix.jit }}-${{ matrix.efp }}-x64_git${{ github.sha}}.tar.bz2 racket3m
-    - uses: actions/upload-artifact@v2
+    - uses: actions/upload-artifact@v4
       with:
         name: racket3m-debian10-${{ matrix.cify }}-${{ matrix.jit }}-${{ matrix.efp }}-x64_git${{ github.sha }}
         path: /tmp/racket3m-debian10-${{ matrix.cify }}-${{ matrix.jit }}-${{ matrix.efp }}-x64_git${{ github.sha }}.tar.bz2
@@ -158,16 +161,16 @@ jobs:
       matrix:
         cc: [gcc, clang]
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
       with:
         fetch-depth: 100
-    - uses: actions/download-artifact@v2
+    - uses: actions/download-artifact@v4
       with:
         name: racketcgc-debian10-nocify-x64_git${{ github.sha }}
         path: /tmp
     - name: Untar
       working-directory: /usr/local
-      run: tar -xvjf /tmp/racketcgc-debian10-nocify-x64_git${{ github.sha}}.tar.bz2
+      run: tar -xvjf /tmp/racketcgc-debian10-nocify-x64_git${{ github.sha }}.tar.bz2
     - name: Configuring Racket CS
       working-directory: ./racket/src
       env:
@@ -192,11 +195,11 @@ jobs:
       run: make -j  $((cpus+1)) install
     - name: Tarballing
       working-directory: /usr/local
-      run: tar -cvjf /tmp/racketcs-debian10-x64_git${{ github.sha}}.tar.bz2 racketcs
-    - uses: actions/upload-artifact@v2
+      run: tar -cvjf /tmp/racketcs-debian10-x64-${{ matrix.cc }}_git${{ github.sha }}.tar.bz2 racketcs
+    - uses: actions/upload-artifact@v4
       with:
-        name: racketcs-debian10-x64_git${{ github.sha }}
-        path: /tmp/racketcs-debian10-x64_git${{ github.sha }}.tar.bz2
+        name: racketcs-debian10-x64-${{ matrix.cc }}_git${{ github.sha }}
+        path: /tmp/racketcs-debian10-x64-${{ matrix.cc }}_git${{ github.sha }}.tar.bz2
 
   # Tests
   # Unfortunately Actions does not support atm yaml anchors
@@ -217,8 +220,8 @@ jobs:
         cify: [nocify]
 
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/download-artifact@v2
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
           name: racketcgc-debian10-${{ matrix.cify }}-x64_git${{ github.sha }}
           path: /tmp
@@ -300,8 +303,8 @@ jobs:
             cc: gcc
 
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/download-artifact@v2
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
           name: racket3m-debian10-${{ matrix.cify }}-${{ matrix.jit }}-${{ matrix.efp }}-x64_git${{ github.sha }}
           path: /tmp
@@ -365,15 +368,20 @@ jobs:
 
     needs: build-racketcs
 
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc]
+
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/download-artifact@v2
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: racketcs-debian10-x64_git${{ github.sha }}
+          name: racketcs-debian10-x64-${{ matrix.cc }}_git${{ github.sha }}
           path: /tmp
       - name: Untar
         working-directory: /usr/local
-        run: tar -xvjf /tmp/racketcs-debian10-x64_git${{ github.sha }}.tar.bz2
+        run: tar -xvjf /tmp/racketcs-debian10-x64-${{ matrix.cc }}_git${{ github.sha }}.tar.bz2
       - name: Extend PATH with Racket executable
         run: echo "/usr/local/racketcs/bin" >> $GITHUB_PATH
       - name: Check for Racket
@@ -431,7 +439,7 @@ jobs:
     if: always()
 
     steps:
-      - uses: technote-space/workflow-conclusion-action@v2
+      - uses: technote-space/workflow-conclusion-action@v3
       - name: Send Slack notification
         uses: 8398a7/action-slack@v3
         if: github.repository == 'racket/racket'

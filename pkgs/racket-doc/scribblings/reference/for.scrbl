@@ -2,7 +2,8 @@
 @(require "mz.rkt"
           (for-label syntax/for-body
                      syntax/parse
-                     syntax/parse/define))
+                     syntax/parse/define
+                     racket/for-clause))
 
 @title[#:tag "for"]{Iterations and Comprehensions: @racket[for], @racket[for/list], ...}
 
@@ -413,23 +414,18 @@ terminates, if a @racket[result-expr] is provided then the result of the
 ]
 
 The binding and evaluation order of @racket[accum-id]s and
-@racket[init-expr]s do not completely follow the textual,
-left-to-right order relative to the @racket[for-clause]s. Instead, the
-sequence expressions in @racket[for-clause]s that determine the
-outermost iteration are evaluated first, then the @racket[init-expr]s
-are evaluated and the @racket[accum-id]s are bound, and finally the
-outermost iteration's identifiers are bound. One consequence is that
-the @racket[accum-id]s are not bound in @racket[for-clause]s for the
-outermost initialization. At the same time, when a @racket[accum-id]
-is used as a @racket[for-clause] binding for the outermost iteration,
-the @racket[for-clause] binding shadows the @racket[accum-id] binding
-in the loop body (which is what you would expect syntactically).
-A fresh variable for each @racket[accum-id] (at a
-fresh location) is bound in each nested iteration that is created by a
-later group for @racket[for-clause]s (after a @racket[#:when] or
-@racket[#:unless], for example).
+@racket[init-expr]s follow the textual, left-to-right order relative
+to the @racket[for-clause]s, except that (for historical reasons)
+@racket[accum-id]s are not available in the @racket[for-clause]s for
+the outermost iteration. The lifetimes of variables are not quite the
+same as the lexical nesting, however: the variable referenced by a
+@racket[accum-id] has a fresh location in each iteration.
 
-@history[#:changed "6.11.0.1" @elem{Added the @racket[#:result] form.}]
+@history[#:changed "6.11.0.1" @elem{Added the @racket[#:result] form.}
+         #:changed "8.11.1.3" @elem{Changed evaluation order to match textual left-to-right order,
+                                    including evaluating @racket[init-expr]s before the first
+                                    @racket[for-clause]'s right-hand side and fixing shadowing of
+                                    @racket[accum-id].}]
 }
 
 @(define for/foldr-eval ((make-eval-factory '(racket/promise racket/sequence racket/stream))))
@@ -787,13 +783,16 @@ instead of @racket[syntax-protect].
 ]}
 
 @defform[(:do-in ([(outer-id ...) outer-expr] ...)
-                 outer-check
+                 outer-defn-or-expr
                  ([loop-id loop-expr] ...)
                  pos-guard
                  ([(inner-id ...) inner-expr] ...)
+                 maybe-inner-defn-or-expr
                  pre-guard
                  post-guard
-                 (loop-arg ...))]{
+                 (loop-arg ...))
+         #:grammar
+         ([maybe-inner-defn/expr (code:line) (code:line inner-defn-or-expr)])]{
 
 A form that can only be used as a @racket[_seq-expr] in a
 @racket[_for-clause] of @racket[for] (or one of its variants).
@@ -803,10 +802,11 @@ spliced into the iteration essentially as follows:
 
 @racketblock[
 (let-values ([(outer-id ...) outer-expr] ...)
-  outer-check
+  outer-defn-or-expr
   (let loop ([loop-id loop-expr] ...)
     (if pos-guard
         (let-values ([(inner-id ...) inner-expr] ...)
+          inner-defn-or-expr
           (if pre-guard
               (let _body-bindings
                    (if post-guard
@@ -819,7 +819,8 @@ spliced into the iteration essentially as follows:
 where @racket[_body-bindings] and @racket[_done-expr] are from the
 context of the @racket[:do-in] use. The identifiers bound by the
 @racket[for] clause are typically part of the @racket[([(inner-id ...)
-inner-expr] ...)] section.
+inner-expr] ...)] section. When @racket[inner-defn-or-expr] is not
+provided @racket[(begin)] is used in its place.
 
 Beware that @racket[_body-bindings] and @racket[_done-expr] can
 contain arbitrary expressions, potentially including @racket[set!] on
@@ -832,7 +833,10 @@ arguments to support iterations in parallel with the @racket[:do-in]
 form, and the other pieces are similarly accompanied by pieces from
 parallel iterations.
 
-For an example of @racket[:do-in], see @racket[define-sequence-syntax].}
+For an example of @racket[:do-in], see @racket[define-sequence-syntax].
+
+@history[#:changed "8.10.0.3" @elem{Added support for non-empty
+                                    @racket[maybe-inner-defn-or-expr].}]}
 
 @defproc[(for-clause-syntax-protect [stx syntax?]) syntax?]{
 
@@ -867,6 +871,18 @@ sequence of forms, and the forms are spliced in place of the
 ]
 
 @history[#:added "8.4.0.3"]}
+
+@;------------------------------------------------------------------------
+@section{Iteration Expansion}
+
+@note-lib-only[racket/for-clause]
+
+@defproc[(syntax-local-splicing-clause-introduce [stx syntax?]) syntax?]{
+
+Analogous to @racket[syntax-local-introduce], but for use in an
+expander bound with @racket[define-splicing-for-clause-syntax].
+
+@history[#:added "8.11.1.4"]}
 
 @;------------------------------------------------------------------------
 @section{Do Loops}

@@ -15,7 +15,8 @@
          "extra-inspector.rkt"
          "compiled-in-memory.rkt")
 
-(provide compiled-expression-recompile)
+(provide compiled-expression-recompile
+         compiled-expression-add-target-machine)
 
 (define (compiled-expression-recompile c)
   (unless (compiled-expression? c)
@@ -134,14 +135,20 @@
 
   (define mpis (make-module-path-index-table))
   ;; Add current mpis in order, so existing references will stay correct
-  (for ([mpi (in-vector (instance-variable-value data-instance mpi-vector-id))])
-    (add-module-path-index! mpis mpi))
+  (for ([mpi (in-vector (instance-variable-value data-instance mpi-vector-id))]
+        [i (in-naturals)])
+    (unless (eqv? (add-module-path-index!/pos mpis mpi) i)
+      (raise-arguments-error 'compiled-expression-recompile
+                             "invalid or duplicate entry in MPI vector"
+                             "entry" mpi)))
 
   (define self (decl 'self-mpi))
   (define phase-to-link-modules (decl 'phase-to-link-modules))
   (define portal-stxes (decl 'portal-stxes))
 
   (define unsafe? (hash-ref orig-h 'unsafe? #f))
+  (define module-prompt? (hash-ref orig-h 'module-prompt? #t))
+  (define unlimited-compile? (hash-ref orig-h 'unlimited-compile? #f))
   (define realm (hash-ref orig-h 'realm 'racket))
 
   (define (find-submodule mod-name phase)
@@ -152,7 +159,8 @@
     (define (root-of l) (if (pair? l) (car l) l))
     (cond
       [(equal? (root-of find-l) (root-of self-l))
-       (define r (get-submodule-recompiled (if (pair? find-l) (cdr find-l) '())))
+       (define submod (if (pair? find-l) (cdr find-l) '()))
+       (define r (get-submodule-recompiled submod))
        (when (eq? r 'in-process)
          (raise-arguments-error 'compiled-expression-recompile
                                 "cycle in linklet imports"))
@@ -160,8 +168,8 @@
        (define linklet
          (or (hash-ref (linklet-bundle->hash b) phase #f)
              (raise-arguments-error 'compiled-expression-recompile
-                                    "cannot find submodule at phase"
-                                    "submodule" mod-name
+                                    "cannot find (sub)module at phase"
+                                    "module" (unquoted-printing-string (format "~a" mod-name))
                                     "phase" phase)))
        (module-linklet-info linklet
                             (hash-ref (recompiled-phase-to-link-module-uses r) phase #f)
@@ -184,13 +192,15 @@
                                 #:compile-linklet (if (correlated-linklet? body-linklet)
                                                       compile-linklet
                                                       recompile-linklet)
+                                #:body-info (hasheq 'phase phase)
                                 #:body-imports `([,get-syntax-literal!-id]
                                                  [,set-transformer!-id])
                                 #:body-import-instances (list empty-syntax-literals-instance
                                                               empty-module-body-instance)
                                 #:get-module-linklet-info find-submodule
                                 #:serializable? #t
-                                #:module-prompt? #t
+                                #:module-prompt? module-prompt?
+                                #:unlimited-compile? unlimited-compile?
                                 #:module-use*s module-use*s
                                 #:optimize-linklet? #t
                                 #:unsafe? unsafe?
@@ -216,6 +226,8 @@
   (define declaration-linklet
     (compile-linklet (generate-module-declaration-linklet mpis self 
                                                           (decl 'requires)
+                                                          (decl 'recur-requires)
+                                                          (decl 'flattened-requires)
                                                           (decl 'provides)
                                                           phase-to-link-module-uses-expr
                                                           portal-stxes)
@@ -230,3 +242,44 @@
   (recompiled new-bundle
               phase-to-link-module-uses
               self))
+
+;; ----------------------------------------
+
+(define (compiled-expression-add-target-machine c from-c)
+  (unless (compiled-expression? c)
+    (raise-argument-error 'compiled-expression-recompile "compiled-expression?" c))
+  (unless (compiled-expression? from-c)
+    (raise-argument-error 'compiled-expression-recompile "compiled-expression?" from-c))
+  (define (looks-wrong)
+    (raise-arguments-error 'compiled-expression-recompile
+                           (string-append
+                            "compiled expressions are not compatible;\n"
+                            " they appear to be from compiling different modules")))
+  ;; Like `compiled-expression-recompile`, abandon any compiled in-memory information,
+  ;; since the intended use case is with serialization
+  (define (get-linklet c)
+    (if (or (linklet-bundle? c)
+            (linklet-directory? c))
+        c
+        (compiled-in-memory-linklet-directory c)))
+  (let ([c (get-linklet c)]
+        [from-c (get-linklet from-c)])
+    (define bundles (extract-linklet-bundles c '() #hash()))
+    (define from-bundles (extract-linklet-bundles from-c '() #hash()))
+    (unless (= (hash-count bundles) (hash-count from-bundles)) (looks-wrong))
+    (define new-bundles
+      (for/hash ([k (in-hash-keys bundles)])
+        (define b (hash-ref bundles k))
+        (define from-b (hash-ref from-bundles k #f))
+        (unless from-b (looks-wrong))
+        (define h (linklet-bundle->hash b))
+        (define from-h (linklet-bundle->hash from-b))
+        (define new-b
+          (hash->linklet-bundle
+           (for/fold ([h h]) ([(phase body-linklet) (in-hash h)]
+                              #:when (exact-integer? phase))
+             (define from-body-linklet (hash-ref from-h phase #f))
+             (unless from-body-linklet (looks-wrong))
+             (hash-set h phase (linklet-add-target-machine-info body-linklet from-body-linklet)))))
+        (values k (recompiled new-b #f #f))))
+    (replace-linklet-bundles c '() new-bundles)))

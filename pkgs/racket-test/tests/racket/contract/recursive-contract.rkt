@@ -94,6 +94,28 @@
       ((contract (-> c any/c) values 'p 'n) '(1 . 2)))
    '(1 . 2))
 
+  (contract-syntax-error-test
+   'recursive-contract15
+   #'(recursive-contract
+      any/c
+      #:flat
+      #:list-contract? #t))
+
+  (test/neg-blame
+   'recursive-contract-in-negative-position-wrt-itself.1
+   '(let ()
+      (define dyn2/c (recursive-contract (-> dyn2/c #t)))
+      (define f2 (contract dyn2/c (λ (f) #t) 'pos 'neg))
+      (f2 #f)))
+
+  (test/spec-passed
+   'recursive-contract-in-negative-position-wrt-itself.2
+   '(let ()
+      (define dyn2/c (recursive-contract (-> dyn2/c #t)))
+      (define f2 (contract dyn2/c (λ (f) #t) 'pos 'neg))
+      (f2 f2)
+      (f2 f2)
+      (f2 f2)))
   
   (test/spec-passed/result
    'memoize-applied-blame

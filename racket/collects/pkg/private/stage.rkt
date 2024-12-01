@@ -43,7 +43,8 @@
          github-client_secret
          github-client_id)
 
-(struct install-info (name orig-pkg directory git-directory clean? checksum module-paths additional-installs))
+(struct install-info (name orig-pkg directory git-directory clean? checksum module-paths additional-installs)
+  #:prefab)
 
 (define (communication-type type)
   (if (and (eq? type 'github)
@@ -164,8 +165,12 @@
                         #:force-strip? force-strip?)]
    [(eq? type 'clone)
     (define pkg-url (string->url pkg))
-    (define-values (transport host port repo branch path)
+    (define-values (transport host port repo branch-or-commit path)
       (split-git-or-hub-url pkg-url))
+    (define branch (if (or (eq? branch-or-commit 'head)
+                           (looks-like-commit? branch-or-commit))
+                       'head
+                       branch-or-commit))
     (define pkg-no-query (real-git-url pkg-url host port repo))
     (define clone-dir (or given-at-dir
                           (current-directory)))
@@ -175,10 +180,21 @@
     (define orig-pkg (desc->orig-pkg 'clone pkg given-at-dir))
 
     (define checksum
-      (or given-checksum
-          (remote-package-checksum orig-pkg download-printf pkg-name
-                                   #:catalog-lookup-cache catalog-lookup-cache
-                                   #:remote-checksum-cache remote-checksum-cache)))
+      (cond
+        [(and (eq? branch-or-commit 'head)
+              given-checksum)
+         given-checksum]
+        [else
+         (define found-checksum
+           (remote-package-checksum orig-pkg download-printf pkg-name
+                                    #:catalog-lookup-cache catalog-lookup-cache
+                                    #:remote-checksum-cache remote-checksum-cache))
+         ;; If `found-checksum` matches `branch-or-commit`, then it must
+         ;; be a commit, and so we're pinned to that commit
+         (if (equal? found-checksum branch-or-commit)
+             branch-or-commit
+             (or given-checksum
+                 found-checksum))]))
 
     ;; If the clone directory already exists, and if it already has
     ;; the target commit, then we use that directory. It may have
@@ -246,7 +262,7 @@
                     [else (list branch)])))
          (lift-git-directory-content tmp-dir path)]
         [else
-         (download-printf "Using clone directory directly for metadata\n")])
+         (download-printf "Using ~s clone directory directly for metadata\n" pkg-name)])
 
        (begin0
         (update-install-info-checksum
@@ -699,10 +715,20 @@
       (check-checksum given-checksum checksum "unexpected" pkg #f)
       (check-checksum checksum (install-info-checksum info) "incorrect" pkg #f))
     (define-values (new-name new-type) (package-source->name+type source #f))
-    (define repo-url (and (or (eq? new-type 'git)
-                              (eq? new-type 'git-url)
-                              (eq? new-type 'github))
-                          source))
+    (define (git-type? new-type)
+      (or (eq? new-type 'git)
+          (eq? new-type 'git-url)
+          (eq? new-type 'github)))
+    (define repo-url (or (and (git-type? new-type)
+                              source)
+                         (let* ([i (get-pkg-info (install-info-directory info)
+                                                 metadata-ns)]
+                                [source (and i
+                                             (i 'package-original-source (lambda () #f)))])
+                           (and source
+                                (let-values ([(name type) (package-source->name+type source #f)])
+                                  (and (git-type? type)
+                                       source))))))
     (case new-type
       [(link static-link clone)
        ;; The `source` must have been something like a `file://`
@@ -745,10 +771,12 @@
 
 ;; ----------------------------------------
 
-(define (package-url->checksum pkg-url-str [query empty]
+(define (package-url->checksum pkg-url-str
+                               [query empty]
                                #:type [given-type #f]
                                #:download-printf [download-printf void]
-                               #:pkg-name [pkg-name "package"])
+                               #:pkg-name [pkg-name "package"]
+                               #:cache [cache #f])
   (define pkg-url
     (string->url pkg-url-str))
   (define type (if (eq? given-type 'clone)
@@ -767,29 +795,40 @@
       (lambda ()
         (call-with-network-retries
          (lambda ()
-           ;; Supplying `#:dest-dir #f` means that we just resolve `branch`
-           ;; to an ID:
-           (git-checkout host #:port port repo
-                         #:dest-dir #f
-                         #:ref branch
-                         #:status-printf
-                         (lambda (fmt . args)
-                           (define (strip-ending-newline s)
-                             (regexp-replace #rx"\n$" s ""))
-                           (log-pkg-debug
-                            (strip-ending-newline (apply format fmt args))))
-                         #:initial-error
-                         (lambda ()
-                           (raise
-                            ;; This is a git error so that 
-                            ;; call-with-git-checkout-credentials will retry 
-                            (exn:fail:git
-                             (~a "pkg: Git checkout initial protocol failed;\n"
-                                 " the given URL might not refer to a Git repository\n"
-                                 "  given URL: "
-                                 pkg-url-str)
-                             (current-continuation-marks))))
-                         #:transport transport)))))]
+           (define key (vector host port repo branch))
+           (cond
+             [(and cache
+                   (hash-ref cache key #f))
+              => (lambda (checksum)
+                   checksum)]
+             [else
+              ;; Supplying `#:dest-dir #f` means that we just resolve `branch`
+              ;; to an ID:
+              (define checksum
+                (git-checkout host #:port port repo
+                              #:dest-dir #f
+                              #:ref branch
+                              #:status-printf
+                              (lambda (fmt . args)
+                                (define (strip-ending-newline s)
+                                  (regexp-replace #rx"\n$" s ""))
+                                (log-pkg-debug
+                                 (strip-ending-newline (apply format fmt args))))
+                              #:initial-error
+                              (lambda ()
+                                (raise
+                                 ;; This is a git error so that
+                                 ;; call-with-git-checkout-credentials will retry
+                                 (exn:fail:git
+                                  (~a "pkg: Git checkout initial protocol failed;\n"
+                                      " the given URL might not refer to a Git repository\n"
+                                      "  given URL: "
+                                      pkg-url-str)
+                                  (current-continuation-marks))))
+                              #:transport transport))
+              (when cache
+                (hash-set! cache key checksum))
+              checksum])))))]
     [(github)
      (match-define (list* user repo url-branch path)
        (split-github-url pkg-url))
@@ -843,11 +882,21 @@
            branch))]
     [else
      (define u (string-append pkg-url-str ".CHECKSUM"))
-     (download-printf "Downloading checksum for ~a\n" pkg-name)
-     (log-pkg-debug "Downloading checksum as ~a" u)
-     (call/input-url+200 (string->url u)
-                         port->string
-                         #:who 'download-checksum)]))
+     (define key u)
+     (cond
+       [(and cache
+             (hash-ref cache key #f))
+        => (lambda (checksum)
+             checksum)]
+       [else
+        (download-printf "Downloading checksum for ~a\n" pkg-name)
+        (log-pkg-debug "Downloading checksum as ~a" u)
+        (define checksum
+          (call/input-url+200 (string->url u)
+                              port->string
+                              #:who 'download-checksum))
+        (when cache (hash-set! cache key checksum))
+        checksum])]))
 
 (define (check-checksum given-checksum checksum what pkg-src cached-url)
   (when (and given-checksum

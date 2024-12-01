@@ -45,7 +45,8 @@
 (define sources-date
   (for/fold ([d 0]) ([dir (in-list (list here-dir
                                          nano-dir
-                                         (build-path scheme-dir "s")))])
+                                         (build-path scheme-dir "s")
+                                         (build-path scheme-dir "unicode")))])
     (status (format "Use ~a" dir))
     (for/fold ([d d]) ([f (in-list (directory-list dir))]
                        #:when (regexp-match? #rx"[.](?:rkt|ss|sls|def)$" f))
@@ -271,6 +272,12 @@
   (load-ss (build-path scheme-dir "s/enum.ss"))
   (eval '(define $annotation-options (make-enumeration '(debug profile))))
   (eval '(define $make-annotation-options (enum-set-constructor $annotation-options)))
+  (eval '(define $file-options (make-enumeration '(no-create no-fail no-truncate compressed replace exclusive append
+                                                             perm-set-user-id perm-set-group-id perm-sticky
+                                                             perm-no-user-read perm-no-user-write perm-user-execute
+                                                             perm-no-group-read perm-no-group-write perm-group-execute
+                                                             perm-no-other-read perm-no-other-write perm-other-execute))))
+  (eval '(define $make-file-options (enum-set-constructor $file-options)))
   (eval
    '(define-syntax-rule (library-requirements-options id ...)
       (with-syntax ([members ($enum-set-members ($make-library-requirements-options (datum (id ...))))])

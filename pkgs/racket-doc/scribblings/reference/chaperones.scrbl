@@ -164,7 +164,12 @@ reachability of @racket[v] (in the sense of garbage collection; see
 @racket[v] is an @tech{impersonator}. That is, the value @racket[v]
 will be considered reachable as long as the result ephemeron is
 reachable in addition to any value that @racket[v] impersonates
-(including itself).}
+(including itself).
+
+In the terminology of @tech{ephemerons}, @racket[v] is the
+value of the ephemeron and all of the values that @racket[v]
+impersonates are keys.
+}
 
 @defproc[(procedure-impersonator*? [v any/c]) boolean?]{
 
@@ -793,7 +798,8 @@ an extra argument as with @racket[impersonate-procedure*].
                            [orig-proc (or/c struct-accessor-procedure?
                                             struct-mutator-procedure?
                                             struct-type-property-accessor-procedure?
-                                            (one-of/c struct-info))]
+                                            (lambda (proc)
+                                              (eq? proc struct-info)))]
                            [redirect-proc (or/c procedure? #f)] ... ...
                            [prop impersonator-property?]
                            [prop-val any/c] ... ...)
@@ -861,7 +867,7 @@ of the original value, and @racket[set-proc] must produce the value
 that is given or a chaperone of the value. The @racket[set-proc] will
 not be used if @racket[vec] is immutable.}
 
-@defproc[(chaperone-vector* [vec (and/c vector? (not/c immutable?))]
+@defproc[(chaperone-vector* [vec vector?]
                             [ref-proc (or/c (vector? vector? exact-nonnegative-integer? any/c . -> . any/c) #f)]
                             [set-proc (or/c (vector? vector? exact-nonnegative-integer? any/c . -> . any/c) #f)]
                             [prop impersonator-property?]

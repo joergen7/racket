@@ -2722,6 +2722,39 @@
     '(666 66.6 -1 .25))
   (#%$address-in-heap? (#%$object-address cons 0))
   (not (#%$address-in-heap? 0))
+  (or (not #%$compiler-is-loaded?)
+      (#%$suppress-primitive-inlining)
+      (< (optimize-level) 3)
+      ;; check for live-pointer mask issue
+      (let ()
+        (define bait (list -1 -1))
+        (define addr (#%$object-address bait 0))
+        (define typemod #x8) ;; TODO is there a clean way to get this?
+        (define type-mask (- typemod 1))
+        (define wrong-tag-bits (logand type-mask (#%$object-address values 0)))
+        (define A)
+        (define B)
+        ;; prevent cp0 from simplifying the primitive call operands
+        (set! A (lambda () (collect 0) A))
+        (set! B
+          (lambda ()
+            ;; We return a fixnum here, but object-address shifts it right and
+            ;; stores the resulting raw value on the stack where it is live
+            ;; across the call to A. If expand-primitives marks it as raw then
+            ;; we omit it from the live-pointer mask and the collector will
+            ;; leave it alone. If not, we've arranged for the raw value to look
+            ;; like a closure though it actually points to a list.
+            ;;
+            ;; This catches the issue on a6le since the object address is a
+            ;; fixnum and we can construct a value that passes the in-heap
+            ;; check. It does not catch the issue on i3le since the object
+            ;; address is not a fixnum and the result we construct here does not
+            ;; fool the in-heap check.
+            (logand (most-positive-fixnum)
+              (bitwise-copy-bit-field addr 0 (integer-length type-mask) wrong-tag-bits))))
+        ;; crashes if raw value from B is marked as a live pointer
+        (#3%$object-address (A) (B))
+        #t))
 )
 
 (mat record-inheritance
@@ -4046,26 +4079,29 @@
         (let ([record? #%$sealed-record?])
           (list (record? 3 Dtd) (record? a Dtd) (record? b Dtd) (record? c Dtd) (record? d Dtd) (record? e Dtd)))
         '(#f #f #f #f #t #f))))
-    (begin
-      (define (get-supertype-uid) '#{supertype a3utgl1aoz8jzrg100-0})
-      (define (get-subtype-uid) '#{subtype a3utgl1aoz8jzrg100-1})
-      (define $keep-rtd (make-record-type-descriptor 'supertype #f (get-supertype-uid) #f #f (cons 1 1)))
-      (define $keep-rtd2 (make-record-type-descriptor 'subtype $keep-rtd (get-subtype-uid) #f #f (cons 1 1)))
-      (let ()
-        (define rtd (make-record-type-descriptor 'supertype #f (get-supertype-uid) #f #f (cons 1 1)))
-        (define rtd2 (make-record-type-descriptor 'subtype rtd (get-subtype-uid) #f #f (cons 1 1)))
-        (define val ((record-constructor rtd2) 0 1))
-        (record? val rtd)))
-    (eval `(let ()
-             (define rtd (make-record-type-descriptor 'supertype #f (get-supertype-uid) #f #f (cons 1 1)))
-             (define rtd2 (make-record-type-descriptor 'subtype rtd (get-subtype-uid) #f #f (cons 1 1)))
-             (define val ',(read (open-string-input-port "#[#{supertype a3utgl1aoz8jzrg100-0} 0]")))
-             (record? val rtd)))
-    (eval `(let ()
-             (define rtd (make-record-type-descriptor 'supertype #f (get-supertype-uid) #f #f (cons 1 1)))
-             (define rtd2 (make-record-type-descriptor 'subtype rtd (get-subtype-uid) #f #f (cons 1 1)))
-             (define val ',(read (open-string-input-port "#[#{subtype a3utgl1aoz8jzrg100-1} 0 1]")))
-             (record? val rtd)))
+  (begin
+    (define (get-supertype-uid) '#{supertype a3utgl1aoz8jzrg100-0})
+    (define (get-subtype-uid) '#{subtype a3utgl1aoz8jzrg100-1})
+    (define $keep-rtd (make-record-type-descriptor 'supertype #f (get-supertype-uid) #f #f (cons 1 1)))
+    (define $keep-rtd2 (make-record-type-descriptor 'subtype $keep-rtd (get-subtype-uid) #f #f (cons 1 1)))
+    (let ()
+      (define rtd (make-record-type-descriptor 'supertype #f (get-supertype-uid) #f #f (cons 1 1)))
+      (define rtd2 (make-record-type-descriptor 'subtype rtd (get-subtype-uid) #f #f (cons 1 1)))
+      (define val ((record-constructor rtd2) 0 1))
+      (record? val rtd)))
+  (eval `(let ()
+           (define rtd (make-record-type-descriptor 'supertype #f (get-supertype-uid) #f #f (cons 1 1)))
+           (define rtd2 (make-record-type-descriptor 'subtype rtd (get-subtype-uid) #f #f (cons 1 1)))
+           (define val ',(read (open-string-input-port "#[#{supertype a3utgl1aoz8jzrg100-0} 0]")))
+           (record? val rtd)))
+  (eval `(let ()
+           (define rtd (make-record-type-descriptor 'supertype #f (get-supertype-uid) #f #f (cons 1 1)))
+           (define rtd2 (make-record-type-descriptor 'subtype rtd (get-subtype-uid) #f #f (cons 1 1)))
+           (define val ',(read (open-string-input-port "#[#{subtype a3utgl1aoz8jzrg100-1} 0 1]")))
+           (record? val rtd)))
+ (let ([ip (open-input-string "#f")])
+   ;; check that expand-primitives respects applicative order for record?
+   (eq? 'bailed (call/cc (lambda (k) (#3%record? (read ip) (k 'bailed))))))
 )
 
 (mat record-type-mismatch
@@ -9013,6 +9049,76 @@
         (foo-x (make-foo 3.0 y))))
     #t)
   (equal? ($foo 17) 3.0)
+  ;; two regression tests as extra confirmation that `begin` rotation and let-binding
+  ;; dropping work together ok
+  (equivalent-expansion?
+   (parameterize ([optimize-level 2] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+     (expand/optimize
+      '(lambda (instance)
+         (define-record-type instance-variable-reference
+           (fields inst kind))
+         (define (variable-reference-constant? v)
+           (eq? (instance-variable-reference-kind v) 'constant))
+         (lambda (x_1 y_2 f_3)
+           (begin
+             (set! x_1 5)
+             (let ([app_6 (variable-reference-constant?
+                           (letrec* ([z_4 (let ([z (lambda () z_4)]) z)])
+                             (begin
+                               (f_3 z_4)
+                               (make-instance-variable-reference
+                                instance
+                                'mutable))))])
+               (list #f #t app_6
+                     (variable-reference-constant?
+                      (letrec* ([z_5 (let ([z (lambda () z_5)]) intentionally-free-x)])
+                        (begin
+                          (f_3 z_5)
+                          (make-instance-variable-reference
+                           instance
+                           'constant)))))))))))
+   '(lambda (instance)
+      (let ([rtd (#2%$make-record-type-descriptor #!base-rtd 'instance-variable-reference #f #f #f #f
+                                                  '#((immutable inst) (immutable kind)) 'define-record-type)])
+        (lambda (x_1 y_2 f_3)
+          (letrec ([z_4 (lambda () z_4)])
+            (f_3 z_4)
+            (let ([z_5 intentionally-free-x])
+              (f_3 z_5)
+              (#2%list #f #t #f #t)))))))
+  (equivalent-expansion?
+   (parameterize ([optimize-level 3] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
+     (expand/optimize
+      '(let ()
+         (define-record variable-reference
+           (inst var-or-info))
+         (define (variable-reference-constant? v)
+           (eq? (variable-reference-var-or-info v) 'constant))
+         (lambda (instance-variable-reference)
+           (lambda (x_1 y_2 f_3)
+             (begin
+               (set! x_1 5)
+               (let ([app_6 (variable-reference-constant?
+                             (letrec* ([z_4 (lambda () z_4)])
+                               (begin
+                                 (f_3 z_4)
+                                 (make-variable-reference
+                                  instance-variable-reference
+                                  'mutable))))])
+                 (list app_4 app_5 #f #t app_6
+                       (variable-reference-constant?
+                        (letrec* ([z_5 (lambda () z_5)])
+                          (begin
+                            (f_3 z_5)
+                            (make-variable-reference
+                             instance-variable-reference
+                             'constant))))))))))))
+   '(lambda (instance-variable-reference)
+      (lambda (x_1 y_2 f_3)
+        (letrec ([z_4 (lambda () z_4)])
+          (f_3 z_4)
+          (letrec ([z_5 (lambda () z_5)])
+            (#3%list app_4 app_5 #f #t #f (begin (f_3 z_5) #t)))))))
  )
 
 (mat cp0-rtd-inspection-optimizations

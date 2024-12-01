@@ -523,22 +523,31 @@
   (provide v))
 (test 1 dynamic-require ''uses-internal-definition-context-around-id 'v)
 
-;; Make sure `syntax-local-make-definition-context` can be called
+;; Make sure `syntax-local-make-definition-context{,-introducer}` can be called
 ;; at unusual times, where the scope that is otherwise captured
 ;; for `quote-syntax` isn't or can't be recorded
-(let-syntax ([x (syntax-local-make-definition-context)])
+(let-syntax ([x (syntax-local-make-definition-context)]
+             [y (syntax-local-make-definition-context-introducer 'intdef-outside)]
+             [z (syntax-local-make-definition-context-introducer)])
   (void))
-(module makes-definition-context-at-compile-time-begin racket
+(module makes-definition-context-at-compile-time-begin racket/base
+  (require (for-syntax racket/base))
   (begin-for-syntax
-    (syntax-local-make-definition-context)))
+    (syntax-local-make-definition-context)
+    (syntax-local-make-definition-context-introducer 'intdef-outside)
+    (syntax-local-make-definition-context-introducer)))
 (require 'makes-definition-context-at-compile-time-begin)
 
 
 (module create-definition-context-during-visit racket/base
   (require (for-syntax racket/base))
-  (provide (for-syntax ds))
-  ;; won't be stipped for `quote-syntax`
-  (define-for-syntax ds (syntax-local-make-definition-context)))
+  (provide (for-syntax ds
+                       outside-intro
+                       inside-intro))
+  ;; won't be pruned for `quote-syntax`
+  (define-for-syntax ds (syntax-local-make-definition-context))
+  (define-for-syntax outside-intro (syntax-local-make-definition-context-introducer 'intdef-outside))
+  (define-for-syntax inside-intro (syntax-local-make-definition-context-introducer)))
 
 (module create-definition-context-during-expand racket/base
   (require (for-syntax racket/base)
@@ -546,24 +555,40 @@
   (provide results
            get-results)
 
-  ;; will be stipped for `quote-syntax`
+  ;; will be pruned for `quote-syntax`
   (define-for-syntax ds2 (syntax-local-make-definition-context))
+  (define-for-syntax outside-intro2 (syntax-local-make-definition-context-introducer 'intdef-outside))
+  (define-for-syntax inside-intro2 (syntax-local-make-definition-context-introducer))
 
   (define-syntax (m stx)
     (syntax-case stx ()
       [(_ body)
-       (internal-definition-context-introduce ds #'body)]))
+       (outside-intro
+        (inside-intro
+         (internal-definition-context-introduce ds #'body 'add)
+         'add)
+        'add)]))
 
   (define-syntax (m2 stx)
     (syntax-case stx ()
       [(_ body)
-       (internal-definition-context-introduce ds2 #'body)]))
+       (outside-intro2
+        (inside-intro2
+         (internal-definition-context-introduce ds2 #'body 'add)
+         'add)
+        'add)]))
 
   (define-syntax (m3 stx)
     (syntax-case stx ()
       [(_ body)
-       (let ([ds3 (syntax-local-make-definition-context)])
-         (internal-definition-context-introduce ds3 #'body))]))
+       (let ([ds3 (syntax-local-make-definition-context)]
+             [outside-intro3 (syntax-local-make-definition-context-introducer 'intdef-outside)]
+             [inside-intro3 (syntax-local-make-definition-context-introducer)])
+         (outside-intro3
+          (inside-intro3
+           (internal-definition-context-introduce ds3 #'body 'add)
+           'add)
+          'add))]))
 
   (define results
     (list
@@ -844,6 +869,49 @@
   (let ()
     (lift)
     (void)))
+
+;; make sure top-level portals with distinct scopes are distinct
+(parameterize ([current-namespace (make-base-namespace)])
+  (define intro (make-syntax-introducer))
+  (define id (namespace-syntax-introduce (datum->syntax #f 'alpha)))
+  (eval #`(#%require (portal #,id 1)))
+  (eval #`(#%require (portal #,(intro id) 2)))
+  (define (extract s)
+    (syntax-case s ()
+      [v (syntax-e #'v)]))
+  (test 1 extract (identifier-binding-portal-syntax id))
+  (test 2 extract (identifier-binding-portal-syntax (intro id))))
+
+;; make sure provide at label phase is ok for a local portal binding
+;; and that we can look up the binding while expanding
+(module provide-portal-binding-at-label-phase '#%kernel
+  (#%require (for-syntax racket/base)
+             (for-meta #f (portal bread-and-butter (bread butter))))
+  (#%provide (for-meta #f bread-and-butter))
+  (begin-for-syntax
+    (identifier-binding-portal-syntax #'bread-and-butter #f)))
+
+;; check that `for-label` portal doesn't double-shift to the label phase
+(module has-for-label-portal-syntax racket/base
+  (#%require
+   (for-label
+    racket/promise
+    (portal x delay)))
+
+  (unless (identifier-binding-portal-syntax #'x #f)
+    (error "portl binding not found"))
+
+  (unless (equal?
+           (hash-ref (syntax-debug-info #'delay #f) 'context)
+           (hash-ref (syntax-debug-info (identifier-binding-portal-syntax #'x #f) #f) 'context))
+    (error "portal binding contexts differ"))
+
+  (unless (free-identifier=? (identifier-binding-portal-syntax #'x #f)
+                             #'delay
+                             #f)
+    (error "portal binding mismatch")))
+
+(test (void) dynamic-require ''has-for-label-portal-syntax #f)
 
 ;; ----------------------------------------
 
@@ -3217,6 +3285,103 @@
        (syntax-local-bind-syntaxes (list y-id) (datum->syntax x-id '(+ 1 (deadbeef-x))) ctx))))
  exn:fail:syntax?
  #rx"deadbeef-x: identifier used out of context")
+
+;; ----------------------------------------
+;; regression test for local-expand and out-of-context variables
+
+(err/rt-test
+ (eval
+  '(module m racket/base
+     (require (for-syntax racket/base))
+     (define-syntax (foo stx)
+       (define id (datum->syntax #f 'id))
+       (local-expand
+        #`(let ([#,id "ok"])
+            (let-syntax ([other #,id])
+              'done))
+        'expression
+        '()))
+     (foo)))
+ exn:fail:syntax?
+ #rx"id: identifier used out of context")
+
+;; ----------------------------------------
+;; check for `syntax-original?` of `module+`
+
+(for ([stx (list #'(module m racket/base (module+ m))
+                 #'(module m racket/base (module+ m) 0)
+                 #'(module m racket/base (module+ m 1))
+                 #'(module m racket/base (module+ m 1) (module+ m 2))
+                 #'(module m racket/base (module+ m 1) (module+ m 2) 0))])
+  (test #t 'module+original?
+        (let loop ([stx (expand stx)])
+          (cond
+            [(pair? stx)
+             (or (loop (car stx))
+                 (loop (cdr stx)))]
+            [(identifier? stx)
+             (and (syntax-original? stx)
+                  (eq? (syntax-e stx) 'module+))]
+            [(syntax? stx)
+             (or (loop (syntax-e stx))
+                 (loop (syntax-property stx 'origin)))]
+            [else #f]))))
+
+
+;; ----------------------------------------
+;; check that conversion of `defines` to nested `let-synatx`
+;; re-expands correctly
+
+(module reexpand-should-not-be-confused-by-internal-definition-to-nested-lets racket/base
+  (require (for-syntax racket/base))
+
+  (define-syntax (re-expand stx)
+    (syntax-case stx ()
+      [(_ e)
+       (local-expand #'e 'expression null)]))
+
+  (#%expression
+   (re-expand
+    (let ()
+      (define-syntax-rule (m y)
+        (begin
+          (define x 'a)
+          (define y 'b)
+          (println x)))
+      (m x)
+      (println x)))))
+
+(module reexpand-should-not-be-confused-by-internal-definition-to-nested-letrec racket/base
+  (require (for-syntax racket/base))
+
+  (define-syntax (re-expand stx)
+    (syntax-case stx ()
+      [(_ e)
+       (local-expand #'e 'expression null)]))
+
+  (#%expression
+   (re-expand
+    (let ()
+      (define (call) 'ok)
+      (define (step) (return))
+      (define (return) 'done)
+      step))))
+
+(module reexpand-should-not-be-confused-by-keyword-arguments-either racket/base
+  (require (for-syntax racket/base))
+
+  (define-syntax (re-expand stx)
+    (syntax-case stx ()
+      [(_ e)
+       (local-expand #'e 'expression null)]))
+
+  (#%expression
+   (re-expand
+    (let ()
+      (define (call) 'ok)
+      (define (step) (return #:arg 1))
+      (define (return #:arg x) 'done)
+      step))))
 
 ;; ----------------------------------------
 

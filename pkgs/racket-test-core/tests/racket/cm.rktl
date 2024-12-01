@@ -46,12 +46,26 @@
                     (sleep 1)) ;; timestamps have a 1-second granularity on most filesystems
                   (pause)
                   (let ([to-touch (list-ref recomp 0)]
-                        [to-make (list-ref recomp 1)])
+                        [to-make (list-ref recomp 1)]
+                        [to-be-updated (list-ref recomp 2)]
+                        [touch-mode (if ((length recomp) . > . 3)
+                                        (list-ref recomp 3)
+                                        touch-mode)])
                     (for-each (lambda (f)
                                 (printf "touching ~a\n" f)
-                                (with-output-to-file (build-path dir f)
-                                  #:exists 'append
-                                  (lambda () (display " ")))
+                                (cond
+                                  [(equal? touch-mode 'touch-source)
+                                   (let ([path (build-path dir f)])
+                                     (file-or-directory-modify-seconds
+                                      path
+                                      (current-seconds)
+                                      (lambda ()
+                                        (close-output-port (open-output-file path #:exists 'append)))))]
+                                  [else
+                                   (with-output-to-file (build-path dir f)
+                                     #:exists 'append
+                                     (lambda ()
+                                       (display " ")))])
                                 (when (eq? touch-mode 'touch-zo)
                                   ;; Make sure a new typestamp on the bytecode file doesn't
                                   ;; prevent a recompile
@@ -61,17 +75,19 @@
                                     (file-or-directory-modify-seconds d (current-seconds))
                                     (hash-set! timestamps f (file-or-directory-modify-seconds d)))))
                               to-touch)
-                    (for-each (lambda (f)
-                                (let* ([d (build-path dir compiled-dir (path-add-suffix f #".zo"))]
-                                       [ts (file-or-directory-modify-seconds d #f (lambda () #f))])
-                                  (when ts
-                                    (printf "mangling .zo for ~a\n" f)
-                                    (with-output-to-file d
-                                      #:exists 'truncate
-                                      (lambda () (display "#~bad")))
-                                    (file-or-directory-modify-seconds d ts))))
-                              (caddr recomp))
-                    (when (eq? touch-mode 'touch-zo)
+                    (unless (equal? touch-mode 'touch-source)
+                      (for-each (lambda (f)
+                                  (let* ([d (build-path dir compiled-dir (path-add-suffix f #".zo"))]
+                                         [ts (file-or-directory-modify-seconds d #f (lambda () #f))])
+                                    (when ts
+                                      (printf "mangling .zo for ~a\n" f)
+                                      (with-output-to-file d
+                                        #:exists 'truncate
+                                        (lambda () (display "#~bad")))
+                                      (file-or-directory-modify-seconds d ts))))
+                                to-be-updated))
+                    (when (or (eq? touch-mode 'touch-zo)
+                              (eq? touch-mode 'touch-source))
                       (pause))
                     (for-each (lambda (f)
                                 (printf "re-making ~a\n" f)
@@ -86,7 +102,7 @@
                                          #f
                                          (lambda () -inf.0))]
                                        [updated? (lambda (a b) a)])
-                                  (test (and (member f (caddr recomp)) #t)
+                                  (test (and (member f to-be-updated) #t)
                                         updated?
                                         (new-ts . > . ts)
                                         f)
@@ -94,15 +110,15 @@
                               (map car files))))
                 recomps))))
 
-(try '(("a.rkt" "(module a scheme/base (require \"b.rkt\" \"d.rkt\" \"g.rkt\"))" #t)
-       ("b.rkt" "(module b scheme/base (require scheme/include) (include \"c.sch\"))" #t)
+(try '(("a.rkt" "(module a racket/base (require \"b.rkt\" \"d.rkt\" \"g.rkt\"))" #t)
+       ("b.rkt" "(module b racket/base (require racket/include) (include \"c.sch\"))" #t)
        ("d.rkt" "#reader \"e.rkt\" 10" #t)
        ("c.sch" "5" #f)
        ("e.rkt" "(module e syntax/module-reader \"f.rkt\")" #t)
-       ("f.rkt" "(module f scheme/base (provide (all-from-out scheme/base)))" #t)
-       ("g.rkt" "(module g scheme/base (require (for-syntax scheme/base scheme/include \"i.rkt\")) (define-syntax (f stx) (include \"h.sch\")))" #t)
+       ("f.rkt" "(module f racket/base (provide (all-from-out racket/base)))" #t)
+       ("g.rkt" "(module g racket/base (require (for-syntax racket/base racket/include \"i.rkt\")) (define-syntax (f stx) (include \"h.sch\")))" #t)
        ("h.sch" "(quote-syntax 12)" #f)
-       ("i.rkt" "(module i scheme/base)" #t)
+       ("i.rkt" "(module i racket/base)" #t)
        ("j.rkt" "(module j racket/base (module+ main (require \"b.rkt\")))" #t))
      '([("a.rkt") ("a.rkt") ("a.rkt")]
        [("b.rkt") ("a.rkt" "j.rkt") ("a.rkt" "b.rkt" "j.rkt")]
@@ -115,7 +131,12 @@
        [("e.rkt") ("e.rkt") ("e.rkt")]
        [() ("a.rkt") ("a.rkt" "d.rkt")]
        [("i.rkt") ("a.rkt") ("a.rkt" "g.rkt" "i.rkt")]
-       [("h.sch") ("a.rkt") ("a.rkt" "g.rkt")]))
+       [("h.sch") ("a.rkt") ("a.rkt" "g.rkt")]
+       [("a.rkt" "b.rkt" "d.rkt" "c.sch" "e.rkt" "f.rkt" "g.rkt" "h.sch" "i.rkt" "j.rkt")
+        ("a.rkt")
+        ("a.rkt" "b.rkt" "d.rkt" "e.rkt" "f.rkt" "g.rkt" "i.rkt")
+        touch-source]
+       [() ("j.rkt") ("j.rkt") touch-source]))
 
 ;; test that deleting a relevant file makes compilation fail:
 (define (try-remove rmv chk)
@@ -146,8 +167,8 @@
                        (cons (file-or-directory-modify-seconds x)
                              "")]
                       [else #f])))])
-  (try '(("a.rkt" "(module a scheme/base (require \"b.rkt\"))" #f)
-         ("b.rkt" "(module b scheme/base)" #f))
+  (try '(("a.rkt" "(module a racket/base (require \"b.rkt\"))" #f)
+         ("b.rkt" "(module b racket/base)" #f))
        '([("b.rkt") ("a.rkt") ("a.rkt")])))
 
 ;; test current-path->mode

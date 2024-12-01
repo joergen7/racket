@@ -558,7 +558,7 @@
     (apply-continuation c proc)]
    [else
     (check who (procedure-arity-includes/c 0) proc)
-    (apply-continuation c (lambda () (proc)))]))
+    (apply-continuation c (lambda () (|#%app| proc)))]))
 
 ;; `args` is either a list or a procedure for which `#%procedure?` is true
 (define (apply-continuation c args)
@@ -1206,7 +1206,7 @@
     [(key proc) (call-with-immediate-continuation-mark key proc #f)]
     [(key proc default-v)
      (check who (procedure-arity-includes/c 1) proc)
-     (call-with-immediate-continuation-mark/inline key (lambda (arg) (proc arg)) default-v)]))
+     (call-with-immediate-continuation-mark/inline key (lambda (arg) (|#%app| proc arg)) default-v)]))
 
 (define/who continuation-mark-set-first
   (case-lambda
@@ -2077,7 +2077,9 @@
   (raise
    (|#%app|
     exn:fail:contract:continuation
-    (string-append (symbol->string who) ": " msg)
+    (error-message->adjusted-string
+     who primitive-realm
+     msg primitive-realm)
     (current-continuation-marks))))
 
 ;; ----------------------------------------

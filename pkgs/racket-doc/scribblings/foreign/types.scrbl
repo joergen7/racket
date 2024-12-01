@@ -18,6 +18,13 @@
 @(define ffi-eval (make-base-eval))
 @(ffi-eval '(require ffi/unsafe))
 
+@(begin
+   (define-syntax-rule (define-static_fun id)
+      (begin
+       (require (for-label ffi/unsafe/static))
+       (define id @racket[_fun])))
+    (define-static_fun static_fun))
+
 @title[#:tag "types" #:style 'toc]{C Types}
 
 @deftech{C types} are the main concept of the @tech{FFI}, either
@@ -320,7 +327,7 @@ strings), conversion for the foreign side creates a copy that is
 managed by the garbage collector.
 
 Beware that changing the current directory via
-@racket[current-directory] does not change the OS-level current
+@racket[current-directory] does n<ot change the OS-level current
 directory as seen by foreign library functions. Paths normally should
 be converted to absolute form using @racket[path->complete-path]
 (which uses the @racket[current-directory] parameter) before passing
@@ -534,7 +541,8 @@ the later case, the result is the @racket[ctype]).}
 A type constructor that creates a new function type, which is
 specified by the given @racket[input-types] list and @racket[output-type].
 Usually, the @racket[_fun] syntax (described below) should be used
-instead, since it manages a wide range of complicated cases.
+instead, since it manages a wide range of complicated cases and may enable
+static code generation.
 
 The resulting type can be used to reference foreign functions (usually
 @racket[ffi-obj]s, but any pointer object can be referenced with this type),
@@ -677,7 +685,7 @@ the generated type:
 
 @itemize[
 
-@item{The @racket[keep] argument provides control over reachbility by
+@item{The @racket[keep] argument provides control over reachability by
       the garbage collector of the underlying value that foreign code
       see as a plain C function.  Additional care must be taken in
       case the foreign code might retain the callback function, in
@@ -736,7 +744,7 @@ the generated type:
        it can return different results to the foreign caller.
 
        The callback value's reachability (and its interaction with
-       @racket[keep] is based on the original function for the
+       @racket[keep]) is based on the original function for the
        callback, not the result of @racket[wrapper].}
 
  @item{If @racket[atomic?] is true or when using the @CS[] implementation of
@@ -761,7 +769,12 @@ the generated type:
        because Racket threads do not capture C-stack context. Even on
        the @BC[] implementation of Racket, atomic mode is
        typically needed for callbacks, because capturing by copying a
-       portion of the C stack is often incompatible with C libraries.}
+       portion of the C stack is often incompatible with C libraries.
+
+       If a callback in atomic mode sends a break to the current
+       thread, then not only is the break delayed as usual for
+       @tech{atomic mode}, it delivery might be delayed further
+       than return from a foreign call that led to the callback.}
 
  @item{If a @racket[async-apply] is provided as a procedure or box, then a Racket
        @tech{callback} procedure with the generated procedure type can
@@ -849,12 +862,13 @@ the generated type:
                               (code:line ->> output-expr)])]{
 
 Creates a new function type.  The @racket[_fun] form is a convenient
-syntax for the @racket[_cprocedure] type constructor. In its simplest
-form, only the input @racket[type-expr]s and the output @racket[type-expr] are
-specified, and each types is a simple expression, which creates a
-straightforward function type.
+syntax for the @racket[_cprocedure] type constructor, and it can enable
+more static generation of @tech{callout} and @tech{callback} code; see @static_fun from
+@racketmodname[ffi/unsafe/static] for more information.
 
-For example,
+In the simplest form of @racket[_fun], only the input @racket[type-expr]s and the output @racket[type-expr] are
+specified, and each types is a simple expression, which creates a
+straightforward function type. For example,
 
 @racketblock[
 (_fun _string _int ->> _int)
@@ -1086,11 +1100,16 @@ Examples:
 }
 
 
-@defform/subs[#:literals (i o io)
+@defform/subs[#:literals (i o io
+                          atomic raw atomic nonatomic tagged
+                          atomic-interior interior
+                          zeroed-atomic zeroed-atomic-interior
+                          stubborn uncollectable eternal)
               (_ptr mode type-expr maybe-malloc-mode)
               ([mode i o io]
                [maybe-malloc-mode (code:line) #f raw atomic nonatomic tagged
                                   atomic-interior interior
+                                  zeroed-atomic zeroed-atomic-interior
                                   stubborn uncollectable eternal])]{
 
 Creates a C pointer type, where @racket[mode] indicates input or
@@ -1146,7 +1165,9 @@ allocated using @racket[(malloc type-expr)] if
 @history[#:changed "7.7.0.6" @elem{The modes @racket[i], @racket[o],
                                    and @racket[io] match as symbols
                                    instead of free identifiers.}
-         #:changed "8.0.0.13" @elem{Added @racket[malloc-mode].}]}
+         #:changed "8.0.0.13" @elem{Added @racket[maybe-malloc-mode].}
+         #:changed "8.14.0.4" @elem{Added the @racket[zeroed-atomic] and
+                                    @racket[zeroed-atomic-interior] allocation modes.}]}
 
 
 @defform[(_box type maybe-malloc-mode)]{
@@ -1168,6 +1189,7 @@ Example:
 
 @defform/subs[#:literals (atomic raw atomic nonatomic tagged
                           atomic-interior interior
+                          zeroed-atomic zeroed-atomic-interior
                           stubborn uncollectable eternal)
               (_list mode type maybe-len maybe-mode)
               ([mode i o io]
@@ -1177,6 +1199,7 @@ Example:
                            atomic
                            raw atomic nonatomic tagged
                            atomic-interior interior
+                           zeroed-atomic zeroed-atomic-interior
                            stubborn uncollectable eternal])]{
 
 A @tech{custom function type} that is similar to @racket[_ptr], except
@@ -1213,10 +1236,12 @@ return two values, the vector and the boolean.
       -> (values vec res))
 ]
 
-@history[#:changed "7.7.0.2" @elem{Added @racket[maybe-mode].}]
+@history[#:changed "7.7.0.2" @elem{Added @racket[maybe-mode].}
          #:changed "7.7.0.6" @elem{The modes @racket[i], @racket[o],
                                    and @racket[io] match as symbols
-                                   instead of free identifiers.}]}
+                                   instead of free identifiers.}
+         #:changed "8.14.0.4" @elem{Added the @racket[zeroed-atomic]
+                                    @racket[zeroed-atomic-interior] allocation modes.}]}
 
 @defform[(_vector mode type maybe-len maybe-mode)]{
 
@@ -1305,9 +1330,10 @@ results.
 @defproc[(make-cstruct-type [types (non-empty-listof ctype?)]
                             [abi (or/c #f 'default 'stdcall 'sysv) #f]
                             [alignment (or/c #f 1 2 4 8 16) #f]
-                            [malloc-mode (one-of/c 'raw 'atomic 'nonatomic 'tagged
-                                                    'atomic-interior 'interior
-                                                    'stubborn 'uncollectable 'eternal)
+                            [malloc-mode (or/c 'raw 'atomic 'nonatomic 'tagged
+                                               'atomic-interior 'interior
+                                               'zeroed-atomic 'zeroed-atomic-interior
+                                               'stubborn 'uncollectable 'eternal)
                                          'atomic])
          ctype?]{
 
@@ -1330,14 +1356,17 @@ allocation mode is @emph{not} used for an argument to a
 @tech{callback}, because temporary space allocated on the C stack
 (possibly by the calling convention) is used in that case.
 
-@history[#:changed "7.3.0.8" @elem{Added the @racket[malloc-mode] argument.}]}
+@history[#:changed "7.3.0.8" @elem{Added the @racket[malloc-mode] argument.}
+         #:changed "8.14.0.4" @elem{Added the @racket['zeroed-atomic]
+                                    @racket['zeroed-atomic-interior] allocation modes.}]}
 
 
 @defproc[(_list-struct [#:alignment alignment (or/c #f 1 2 4 8 16) #f] 
                        [#:malloc-mode malloc-mode
-                                      (one-of/c 'raw 'atomic 'nonatomic 'tagged
-                                                'atomic-interior 'interior
-                                                'stubborn 'uncollectable 'eternal)
+                                      (or/c 'raw 'atomic 'nonatomic 'tagged
+                                            'atomic-interior 'interior
+                                            'zeroed-atomic 'zeroed-atomic-interior
+                                            'stubborn 'uncollectable 'eternal)
                                       'atomic]
                        [type ctype?] ...+)
          ctype?]{
@@ -1350,7 +1379,9 @@ structs must be allocated using @racket[malloc] with @racket[malloc-mode]; the c
 the allocated space, so it is inefficient. Use @racket[define-cstruct]
 below for a more efficient approach.
 
-@history[#:changed "6.0.0.6" @elem{Added @racket[#:malloc-mode].}]}
+@history[#:changed "6.0.0.6" @elem{Added @racket[#:malloc-mode].}]
+         #:changed "8.14.0.4" @elem{Added the @racket['zeroed-atomic]
+                                    @racket['zeroed-atomic-interior] allocation modes.}}
 
 
 @defform[(define-cstruct id/sup ([field-id type-expr field-option ...] ...)
@@ -1365,9 +1396,10 @@ below for a more efficient approach.
                               #:define-unsafe)]
          #:contracts ([offset-expr exact-integer?]
                       [alignment-expr (or/c #f 1 2 4 8 16)]
-                      [malloc-mode-expr (one-of/c 'raw 'atomic 'nonatomic 'tagged
-                                                  'atomic-interior 'interior
-                                                  'stubborn 'uncollectable 'eternal)]
+                      [malloc-mode-expr (or/c 'raw 'atomic 'nonatomic 'tagged
+                                              'atomic-interior 'interior
+                                              'zeroed-atomic 'zeroed-atomic-interior
+                                              'stubborn 'uncollectable 'eternal)]
                       [prop-expr struct-type-property?])]{
 
 Defines a new C struct type, but unlike @racket[_list-struct], the
@@ -1625,7 +1657,9 @@ expects arguments for both the super fields and the new ones:
 
 @history[#:changed "6.0.0.6" @elem{Added @racket[#:malloc-mode].}
 #:changed "6.1.1.8" @elem{Added @racket[#:offset] for fields.}
-#:changed "6.3.0.13" @elem{Added @racket[#:define-unsafe].}]}
+#:changed "6.3.0.13" @elem{Added @racket[#:define-unsafe].}
+#:changed "8.14.0.4" @elem{Added the @racket['zeroed-atomic]
+                           @racket['zeroed-atomic-interior] allocation modes.}]}
 
 @defproc[(compute-offsets [types (listof ctype?)]
                           [alignment (or/c #f 1 2 4 8 16) #f]

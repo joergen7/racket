@@ -138,7 +138,35 @@
    (symbol? '2@3+4i)
 ; check for float read bug introduced into 3.0:
    (< -.039 -.038413 -.038)
- )
+; non-empty mantissa widths
+   (eqv? #e0.1|1 1/8)
+   (eqv?   0.1|1 0.125)
+   (eqv? 77|1 64.0)
+   (eqv? 12|0 0.0)
+   (eqv? #e12|0 0)
+   (eqv? 9|3 8.0)
+   (eqv? -10|3 -10.0)
+   (eqv? #e99999999999999983222784|54 99999999999999983222784)
+   (eqv? #e99999999999999983222784|53 99999999999999991611392)
+   (eqv? #e99999999999999983222783|54 99999999999999983222784)
+   (eqv? #e99999999999999983222783|53 99999999999999974834176)
+   (eqv? 1000 (integer-length (numerator #e1.2345678901234567891012345|1000)))
+   (eqv? 1000 (integer-length (denominator #e1.2345678901234567891012345|1000)))
+   (eqv? 10000 (integer-length (numerator #e1.2345678901234567891012345|10000)))
+   (eqv? 10000 (integer-length (denominator #e1.2345678901234567891012345|10000)))
+; don't run out of memory unnecessarily
+   (eqv? #e1234567|100000000000000000 1234567)
+   (eqv? #i1.234567|100000000000000000 1.234567)
+   (eqv?   1.234567|100000000000000000 1.234567)
+   (eqv?   1.234567e300|100000000000000000 1.234567e300)
+   (eqv? 0.1|100000000000000000 0.1|100)
+   (eqv? 0.3|100000000000000000 0.3|53)
+   (not (eqv? 0.3|52 0.3|53)) ; confirm boundary
+   (eqv? 0.3e300|100000000000000000 0.3e300|50)
+   (not (eqv? 0.3e300|50 0.3e300|49))
+   (eqv? #e0.3e300|1000000000000000 #e0.3e300)
+   (eqv? #e0.3e300|696 #e0.3e300)
+   (not (eqv? #e0.3e300|695 #e0.3e300)))
 
 (mat string->number
   ; error cases
@@ -1763,6 +1791,7 @@
     (eqv? (* 2 3 4) 24)
     (eqv? (* 2 3 4 5) 120)
     (eqv? (* 2/3 3/4 4/5 5/6) 1/3)
+    (eqv? (* -4503599627370496 512) -2305843009213693952)
     (cfl~= (* 1.0+2.0i 3.0+4.0i) -5.0+10.0i)
     (cfl~= (* 1.0+2.0i 3.0) 3.0+6.0i)
     (cfl~= (* -2.0 3.0+4.0i) -6.0-8.0i)
@@ -1853,6 +1882,15 @@
     (cfl~= (/ -8.0+6.0i +2.0i) 3.0+4.0i)
     (cfl~= (/ +26.0i 3.0+2.0i) 4.0+6.0i)
     (eqv? (/ 0 3.0+2.0i) 0)
+    (cfl~= (/ 1.0+0.0i +inf.0-1.0i) 0.0+0.0i)
+    (cfl~= (/ 1.0+0.0i 1.0-inf.0i) 0.0+0.0i)
+    (cfl~= (/ 1.0 +inf.0-1.0i) 0.0+0.0i)
+    (cfl~= (/ 1.0 1.0-inf.0i) 0.0+0.0i)
+    (cfl~= (/ +inf.0-1.0i) 0.0+0.0i)
+    (cfl~= (/ 1.0-inf.0i) 0.0+0.0i)
+    (eqv? (/ -5/2+5i 1/2+i) 3+4i)
+    (cfl~= (/ -5/2+5i 0.5+1.0i) 3.0+4.0i)
+    (cfl~= (/ -2.5+5.0i 1/2+i) 3.0+4.0i)
     (let ([v '#(100 32.23 22/33 44-79i 2.9+8.7i)])
        (let f ([i 0])
           (or (= i (vector-length v))
@@ -2799,20 +2837,30 @@
     (= 0.970453319804345 (pseudo-random-generator-next! prgen))
     (= 0.41754101818626094 (pseudo-random-generator-next! prgen))
     (= 0.13061439482676662 (pseudo-random-generator-next! prgen))
-    (let ([hits (make-vector 10)])
-      (let loop ([i 1000])
-        (unless (zero? i)
-          (let* ([n (pseudo-random-generator-next! prgen (expt 10 1000))]
-                 [k (quotient n (expt 10 999))])
-            (vector-set! hits k (add1 (vector-ref hits k)))
-            (loop (sub1 i)))))
-      ;; We expect about 100 hits in each bin. Having less than 50 or
-      ;; more than 150 should be so etxremely unlikely that we can rely on
-      ;; it not happning:
-      (let loop ([i (vector-length hits)])
-        (or (= i 0)
-            (and (< 50 (vector-ref hits (sub1 i)) 150)
-                 (loop (sub1 i))))))
+    (let nloop ([ns (list (expt 2 31)
+                          (expt 2 32)
+                          (expt 2 33)
+                          (expt 2 64)
+                          (expt 10 1000))])
+      (or (null? ns)
+          (and
+           (let* ([M 64]
+                  [hits (make-vector M)])
+             (let loop ([i (* M 100)])
+               (unless (zero? i)
+                 (let* ([n (pseudo-random-generator-next! prgen (car ns))]
+                        [k (quotient n (quotient (car ns) M))])
+                   (when (>= n (car ns)) (error 'random "too big"))
+                   (vector-set! hits k (add1 (vector-ref hits k)))
+                   (loop (sub1 i)))))
+             ;; We expect about 100 hits in each bin. Having less than 50 or
+             ;; more than 150 should be so extremely unlikely that we can rely on
+             ;; it not happening:
+             (let loop ([i (vector-length hits)])
+               (or (= i 0)
+                   (and (< 50 (vector-ref hits (sub1 i)) 150)
+                        (loop (sub1 i))))))
+           (nloop (cdr ns)))))
  )
       
 
@@ -2967,6 +3015,7 @@
     (~= (sqrt -5-12i) (sqrt -5.0-12.0i))
     (~= (sqrt 1e38) (sqrt #e1e38))
     (~= (sqrt -1.0-0.0i) 0.0-1.0i)
+    (~= (sqrt -10+1i) 0.15791710027873843+3.1662182190367814i)
  )
 
 (mat isqrt
@@ -3114,6 +3163,7 @@
     (fl~= (atan 10.0 -10.0) (angle -10.0+10.0i))
     (fl~= (atan 10 -10.0) (atan 10.0 -10.0))
     (fl~= (atan 10 -10.0) (atan 10.0 -10))
+    (cfl~= (atan +inf.0+0.0i) (atan +inf.0))
  )
 
 (mat sinh
@@ -3212,6 +3262,8 @@
     (let ([z 2.3-3.2i])
        (let ([c (cosh z)] [s (sinh z)])
           (cfl~= (- (* c c) (* s s)) 1.0)))
+    (cfl~= (atanh 0.0+inf.0i) (atanh +inf.0))
+    (nan? (real-part (atanh +inf.0+inf.0i)))
  )
 
 (mat ash

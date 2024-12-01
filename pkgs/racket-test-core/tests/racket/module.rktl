@@ -300,6 +300,76 @@
     (test '(mma ma pma a) values l)
     (void)))
 
+(module provides-variable-m-at-phase-1 racket/base
+  (require (for-syntax racket/base))
+  (provide (for-syntax m))
+  (define-for-syntax m 10))
+
+(module uses-m-at-phase-1-shifted-to-0 racket/base
+  (require (for-template 'provides-variable-m-at-phase-1))
+  (provide n)
+  (define n #'m))
+
+(err/rt-test/once
+ (let ([orig (current-namespace)])
+   (parameterize ([current-namespace (make-base-namespace)])
+     (namespace-attach-module orig ''uses-m-at-phase-1-shifted-to-0)))
+ exn:fail?
+ #rx"module not instantiated .in the source namespace.")
+
+(test #t syntax? (dynamic-require ''uses-m-at-phase-1-shifted-to-0 'n))
+
+(test 10
+      'eval-in-attached
+      (let ([orig (current-namespace)])
+        (parameterize ([current-namespace (make-base-namespace)])
+          (namespace-attach-module orig ''uses-m-at-phase-1-shifted-to-0)
+          (define stx (dynamic-require ''uses-m-at-phase-1-shifted-to-0 'n))
+          ;; Using `eval` works only when `provides-variable-m-at-phase-1`
+          ;; is correctly attached as instantiated in this namespace
+          (eval stx))))
+
+(module uses-m-at-label-phase racket/base
+  (require (for-label 'provides-variable-m-at-phase-1)))
+(test #t void? (dynamic-require ''uses-m-at-label-phase #f))
+(let ([orig (current-namespace)])
+  (parameterize ([current-namespace (make-base-namespace)])
+    (namespace-attach-module orig ''uses-m-at-label-phase)))
+
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Check on-demand instantiation of available cross-phase specific module
+
+(let ()
+  (define m1
+    (compile
+     '(module defines-prop-as-cross-phase-persistent-module '#%kernel
+        (#%declare #:cross-phase-persistent)
+        (#%provide serializable-struct?)
+        (define-values (prop:serializable serializable-struct? serializable-info)
+          (make-struct-type-property 'serializable #f)))))
+  (eval m1)
+
+  (define m2
+    (compile
+     '(module uses-cross-phase-persistent racket/base
+        (require 'defines-prop-as-cross-phase-persistent-module)
+        (provide ok?)
+        (define (ok? x) (or (serializable-struct? x) (eq? x 'ok))))))
+  (eval m2)
+
+  (define m3
+    (compile
+     '(module uses-cross-phase-persistent-for-syntax racket/base
+        (require (for-syntax 'uses-cross-phase-persistent)))))
+
+  (let ([orig (current-namespace)])
+    (parameterize ([current-namespace (make-base-namespace)])
+      (eval m1)
+      (eval m2)
+      (eval m3)
+      (eval (expand '(require 'uses-cross-phase-persistent-for-syntax))))))
+
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Check redundant import and re-provide
 
@@ -517,6 +587,24 @@
 
   (void))
 
+;; make sure `provide` isn't confused by a rename transformer
+
+(module should-be-an-ok-provide-for-space racket/base
+  (require (for-syntax racket/base))
+  (define-syntax (go stx)
+    #`(begin
+        (provide (for-space example_space x))
+        (define x 'ok)
+        (define-syntax #,((make-interned-syntax-introducer 'example_space) #'x)
+          (make-rename-transformer (quote-syntax x)))))
+  (go))
+
+;; make sure `for-space #f` works
+
+(module should-be-an-ok-provide-for-default-space racket/base
+  (provide (for-space #f x))
+  (define x "ok"))
+
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Test proper bindings for `#%module-begin'
 
@@ -669,18 +757,28 @@
 (test #t module-path? "a/_/b")
 (test #t module-path? "a/0123456789+-_/b.---")
 (test #t module-path? "a/0123456789+-_/b.-%2e")
+(test #t module-path? "./foo.rkt")
 (test #t module-path? "../foo.rkt")
 (test #t module-path? "x/../foo.rkt")
 (test #t module-path? "x/./foo.rkt")
 (test #t module-path? "x/.")
 (test #t module-path? "x/..")
+(test #t module-path? "x/./y")
+(test #t module-path? "x/../y")
 (test #f module-path? "@")
 (test #f module-path? "\0")
 (test #f module-path? "x@")
 (test #f module-path? "x\0")
 (test #f module-path? "@x")
 (test #f module-path? "\0x")
-
+(test #f module-path? "x.z/y")
+(test #f module-path? "x./y")
+(test #f module-path? "x.../y")
+(test #f module-path? "x...z/y")
+(test #f module-path? "a/x.z/y")
+(test #f module-path? "a/x./y")
+(test #f module-path? "a/x.../y")
+(test #f module-path? "a/x...z/y")
 
 (test #t module-path? (collection-file-path "module.rktl" "tests" "racket"))
 (test #t module-path? (string->path "x"))
@@ -700,10 +798,19 @@
 (test #f module-path? 'a/../hello)
 (test #f module-path? 'b/./hello)
 (test #f module-path? 'b/*/hello)
+(test #f module-path? 'hello.)
+(test #f module-path? 'hello..)
+(test #f module-path? 'hello...)
+(test #f module-path? '|.|)
+(test #f module-path? '..)
+(test #f module-path? '...)
 
 (test #t module-path? '(lib "hello"))
 (test #f module-path? '(lib "hello/"))
 (test #f module-path? '(lib "hello/../b"))
+(test #f module-path? '(lib "hello/./b"))
+(test #f module-path? '(lib "hello/x.y/b"))
+(test #f module-path? '(lib "hello/x./b"))
 (test #t module-path? '(lib "hello/a"))
 (test #t module-path? '(lib "hello/a.rkt"))
 (test #f module-path? '(lib "hello.bb/a.rkt"))
@@ -816,16 +923,16 @@
 ;; Check 'module-language, `module-compiled-language-info', and `module->language-info'
 
 (let ([mk (lambda (val)
-            (compile (syntax-property #'(module m scheme/base)
+            (compile (syntax-property #'(module m racket/base)
                                       'module-language
                                       val)))])
   (test #f 'info (module-compiled-language-info (mk 10)))
-  (test '#(scheme x "whatever") 'info (module-compiled-language-info (mk '#(scheme x "whatever"))))
+  (test '#(racket x "whatever") 'info (module-compiled-language-info (mk '#(racket x "whatever"))))
   (let ([ns (make-base-namespace)])
     (parameterize ([current-namespace ns])
       (eval mk ns)
-      (eval (mk '#(scheme x "whatever")))
-      (test '#(scheme x "whatever") module->language-info ''m)
+      (eval (mk '#(racket x "whatever")))
+      (test '#(racket x "whatever") module->language-info ''m)
       (let ([path (build-path (collection-path "tests" "racket")
                               "langm.rkt")])
         (parameterize ([read-accept-reader #t]
@@ -2804,6 +2911,47 @@ case of module-leve bindings; it doesn't cover local bindings.
 (err/rt-test (module-compiled-exports (compile '(module m racket/kernel)) 'not-a-valid-verbosity)
              #rx"not-a-valid-verbosity")
 
+(parameterize ([current-namespace (make-base-namespace)])
+  (define ce
+    (compile '(module m racket/base
+                (provide x)
+                (define x 10))))
+  (define other-ce
+    (compile '(module m racket/base
+                (provide x)
+                (define x 10))))
+  (test #t 'compiled-expression-add-target-machine
+        (compiled-expression? (compiled-expression-add-target-machine ce other-ce))))
+
+;; Hack: check `compiled-expression-add-target-machine` by copying
+;; cross-module info for the same platform from on module to a
+;; different module, and where an exported variable is a constant (but
+;; different ones). This works because `compiled-expression-add-target-machine`
+;; doesn't try too hard to make sure that the given compiled
+;; expressions started out the same.
+(when (eq? 'chez-scheme (system-type 'vm))
+  (parameterize ([current-namespace (make-base-namespace)])
+    (define new-ce
+      (parameterize ([current-namespace (make-base-namespace)])
+        (define ce
+          (compile '(module m racket/base
+                      (provide x)
+                      (define x 10))))
+        (define other-ce
+          (compile '(module m racket/base
+                      (provide x)
+                      (define x 8))))
+        (compiled-expression-add-target-machine ce other-ce)))
+    (eval new-ce)
+    (eval
+     (parameterize ([current-namespace (make-base-namespace)])
+       (eval new-ce)
+       (compile '(module n racket/base
+                   (require 'm)
+                   (define y x)
+                   (provide y)))))
+    (test 8 dynamic-require ''n 'y)))
+
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (let ([check
@@ -4089,6 +4237,127 @@ case of module-leve bindings; it doesn't cover local bindings.
       (dynamic-require ''#%kernel 'call-with-values)
       (lambda () 'cwv-ok)
       (chaperone-procedure (lambda (v) v) (lambda (v) v)))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; regression test aimed at instantiation via shifting up and back down
+
+(let ()
+  (define ns (make-base-namespace))
+  (define ns2 (make-base-namespace))
+
+  (define d
+    (parameterize ([current-namespace ns])
+      (eval '(module zo racket/base
+               (require (for-template racket/base))))
+      (define d
+        (compile '(module d racket/base
+                    (require 'zo
+                             racket/phase+space)
+                    phase+space)))
+      (eval d)
+      (dynamic-require ''d #f)
+      d))
+
+  (parameterize ([current-namespace ns2])
+    (namespace-attach-module ns ''zo)
+    (eval d)
+    (dynamic-require ''d #f)))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; make sure that definitions with interned scopes are accessible
+;; via `module->namespace`, even if no syntax object is in the module
+
+(parameterize ([current-namespace (make-base-namespace)])
+  (eval '(module ex racket/base
+           (require (for-syntax racket/base))
+           (define-syntax (def stx)
+             (syntax-case stx ()
+               [(_ id)
+                #`(define #,((make-interned-syntax-introducer 'racket/example) #'id) 5)]))
+           (define-syntax (ref stx)
+             (syntax-case stx ()
+               [(_ id)
+                ((make-interned-syntax-introducer 'racket/example) #'id)]))
+           (provide def ref)))
+  (eval '(module m racket/base
+           (require 'ex)
+           (def x)))
+  (namespace-require ''m)
+  (eval '(ref x) (module->namespace ''m)))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; check that `namespace-require` detects conflicting import corerctly,
+;; and in particular that it isn't misled by bindings in different spaces
+;; or by existing bindings in a namespace
+
+(let ()
+  (define m '(module provides-at-multiple-phases-and-spaces racket/base
+               (require (for-syntax racket/base)
+                        (for-meta 2 racket/base))
+               (provide (for-space test/demo1 x)
+                        (for-space test/demo2 x)
+                        (for-syntax
+                         (for-space test/demo1 x)
+                         (for-space test/demo2 x)))
+               (define-syntax (def-at stx)
+                 (syntax-case stx ()
+                   [(_ space id rhs)
+                    #`(define #,((make-interned-syntax-introducer (syntax-e #'space)) #'id)
+                        rhs)]))
+               (def-at test/demo1 x 1)
+               (def-at test/demo2 x 2)
+               (begin-for-syntax
+                 (define-syntax (def-at stx)
+                   (syntax-case stx ()
+                     [(_ space id rhs)
+                      #`(define #,((make-interned-syntax-introducer (syntax-e #'space)) #'id)
+                          rhs)]))
+                 (def-at test/demo1 x 1)
+                 (def-at test/demo2 x 2))))
+
+    (let ([ns (make-base-namespace)])
+      (parameterize ([current-namespace ns])
+        (eval m)
+        (err/rt-test/once (namespace-require '(for-label 'provides-at-multiple-phases-and-spaces))
+                          exn:fail:syntax?
+                          #rx"identifier already required for label")))
+
+    (let ([ns (make-base-namespace)])
+      (parameterize ([current-namespace ns])
+        (eval m)
+        (namespace-require '(just-meta 0 (for-label 'provides-at-multiple-phases-and-spaces)))
+        ;; should replace existing with no error:
+        (namespace-require '(just-meta 1 (for-label 'provides-at-multiple-phases-and-spaces))))))
+
+(let ()
+  (define mx '(module provides-at-multiple-phases-and-spaces-mixed racket/base
+                (require (for-syntax racket/base)
+                         (for-meta 2 racket/base))
+                (provide (for-space test/demo1 x)
+                         (for-space test/demo2 y)
+                         (for-syntax
+                          (for-space test/demo1 y)
+                          (for-space test/demo2 x)))
+                (define-syntax (def-at stx)
+                  (syntax-case stx ()
+                    [(_ space id rhs)
+                     #`(define #,((make-interned-syntax-introducer (syntax-e #'space)) #'id)
+                         rhs)]))
+                (def-at test/demo1 x 1)
+                (def-at test/demo2 y 2)
+                (begin-for-syntax
+                  (define-syntax (def-at stx)
+                    (syntax-case stx ()
+                      [(_ space id rhs)
+                       #`(define #,((make-interned-syntax-introducer (syntax-e #'space)) #'id)
+                           rhs)]))
+                  (def-at test/demo1 y 1)
+                  (def-at test/demo2 x 2))))
+  (let ([ns (make-base-namespace)])
+    (parameterize ([current-namespace ns])
+      (eval mx)
+      ;; make sure `x`s and `y`s and different spaces are not mixed up
+      (namespace-require '(for-label 'provides-at-multiple-phases-and-spaces-mixed)))))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

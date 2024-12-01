@@ -106,6 +106,16 @@
         (let ([t (time-difference stop start)])
           (<= (abs (- (+ (time-second t) (* (time-nanosecond t) 1e-9)) target))
               0.2))))
+    (define-syntax $retry-for-timing
+      ;; timing tests can go wrong, especially on a share machine like
+      ;; one for CI, so try a few times to reduce the chance of
+      ;; failure due to a real-time delay
+      (lambda (stx)
+        (syntax-case stx ()
+          [(_ e) #'(let loop ([n 5])
+                     (or e
+                         (and (> n 0)
+                              (loop (- n 1)))))])))
     (andmap procedure? (list $threads $fib $thread-check $time-in-range?)))
   ($thread-check)
   (not (= (let ([n #f])
@@ -118,90 +128,90 @@
        (let f () (if n n (begin ($yield) (f)))))
      (get-process-id))
   ($thread-check)
-  (equal?
-    (let ()
-      (define fat+
-        (lambda (x y)
-          (if (zero? y)
-              x
-              (fat+ (1+ x) (1- y)))))
-      (define fatfib
-        (lambda (x)
-          (if (< x 2)
-              1
-              (fat+ (fatfib (1- x)) (fatfib (1- (1- x)))))))
-      (define iota
-        (case-lambda
-          [(n) (iota 0 n)]
-          [(i n)
-           (if (= n 0)
-               '()
-               (cons i (iota (+ i 1) (- n 1))))]))
-      (define-syntax parallel-list
-        (syntax-rules ()
-          [(_ x ...)
-           (let ([v (make-vector (length '(x ...)) #f)]
-                 [m (make-mutex)]
-                 [c (make-condition)]
-                 [n (length '(x ...))])
-             (map (lambda (p i) (p i))
-               (list (lambda (i)
-                       (fork-thread
-                        (lambda ()
-                          (vector-set! v i x)
-                          (with-mutex m
-                            (set! n (- n 1))
-                            (when (= n 0)
-                              (condition-signal c))))))
-                     ...)
-               (iota (length '(x ...))))
-             (and (with-mutex m
-                    (condition-wait c m (make-time 'time-duration 0 60)))
-                  (vector->list v)))]))
+  (let ()
+    (define fat+
+      (lambda (x y)
+        (if (zero? y)
+            x
+            (fat+ (1+ x) (1- y)))))
+    (define fatfib
+      (lambda (x)
+        (if (< x 2)
+            1
+            (fat+ (fatfib (1- x)) (fatfib (1- (1- x)))))))
+    (define-syntax parallel-list
+      (syntax-rules ()
+        [(_ x ...)
+         (let ([v (make-vector (length '(x ...)) #f)]
+               [m (make-mutex)]
+               [c (make-condition)]
+               [n (length '(x ...))])
+           (and
+            (with-mutex m
+              (map (lambda (p i) (p i))
+                (list (lambda (i)
+                        (fork-thread
+                         (lambda ()
+                           (vector-set! v i x)
+                           (with-mutex m
+                             (set! n (- n 1))
+                             (when (= n 0)
+                               (condition-signal c))))))
+                  ...)
+                (iota (length '(x ...))))
+              (condition-wait c m (make-time 'time-duration 0 60)))
+            (vector->list v)))]))
+    (define result
       (parallel-list (fatfib 26) (fatfib 27) (fatfib 28)
         (fatfib 29) (fatfib 30) (fatfib 31)))
-    '(196418 317811 514229 832040 1346269 2178309))
+    (or (equal? result '(196418 317811 514229 832040 1346269 2178309))
+        (errorf #f "result=~s" result)))
   ($thread-check)
-  (let ([m (make-mutex)] [c (make-condition)])
-    (with-mutex m
-      (let* ([start (current-time)]
-             [r (condition-wait c m (make-time 'time-duration 250000000 1))]
-             [stop (current-time)])
-        (and (not r)
-             ($time-in-range? start stop 1.25)))))
-  (let ([m (make-mutex)] [c (make-condition)])
-    (with-mutex m
-      (let* ([start (current-time)]
-             [r (condition-wait c m
-                  (add-duration start (make-time 'time-duration 250000000 1)))]
-             [stop (current-time)])
-        (and (not r)
-             ($time-in-range? start stop 1.25)))))
-  (let ([m (make-mutex)] [c (make-condition)])
-    (with-mutex m
-      (let* ([start (current-time)]
-             [r (condition-wait c m (make-time 'time-duration 0 -1))]
-             [stop (current-time)])
-        (and (not r)
-             ($time-in-range? start stop 0.0)))))
-  (let ([m (make-mutex)] [c (make-condition)])
-    (with-mutex m
-      (let* ([start (current-time)]
-             [r (condition-wait c m
-                  (add-duration start (make-time 'time-duration 0 -1)))]
-             [stop (current-time)])
-        (and (not r)
-             ($time-in-range? start stop 0.0)))))
-  (let ([m (make-mutex)] [c (make-condition)])
-    (with-mutex m
-      (fork-thread
-       (lambda ()
-         (with-mutex m (sleep (make-time 'time-duration 250000000 0)))))
-      (let* ([start (current-time)]
-             [r (condition-wait c m (make-time 'time-duration 100000000 0))]
-             [stop (current-time)])
-        (and (not r)
-             ($time-in-range? start stop 0.25)))))
+  ($retry-for-timing
+   (let ([m (make-mutex)] [c (make-condition)])
+     (with-mutex m
+       (let* ([start (current-time)]
+              [r (condition-wait c m (make-time 'time-duration 250000000 1))]
+              [stop (current-time)])
+         (and (not r)
+              ($time-in-range? start stop 1.25))))))
+  ($retry-for-timing
+   (let ([m (make-mutex)] [c (make-condition)])
+     (with-mutex m
+       (let* ([start (current-time)]
+              [r (condition-wait c m
+                   (add-duration start (make-time 'time-duration 250000000 1)))]
+              [stop (current-time)])
+         (and (not r)
+              ($time-in-range? start stop 1.25))))))
+  ($retry-for-timing
+   (let ([m (make-mutex)] [c (make-condition)])
+     (with-mutex m
+       (let* ([start (current-time)]
+              [r (condition-wait c m (make-time 'time-duration 0 -1))]
+              [stop (current-time)])
+         (and (not r)
+              ($time-in-range? start stop 0.0))))))
+  ($retry-for-timing
+   (let ([m (make-mutex)] [c (make-condition)])
+     (with-mutex m
+       (let* ([start (current-time)]
+              [r (condition-wait c m
+                   (add-duration start (make-time 'time-duration 0 -1)))]
+              [stop (current-time)])
+         (and (not r)
+              ($time-in-range? start stop 0.0))))))
+  ($retry-for-timing
+   (let ([m (make-mutex)] [c (make-condition)])
+     (with-mutex m
+       (fork-thread
+        (lambda ()
+          (with-mutex m (sleep (make-time 'time-duration 250000000 0)))))
+       (let* ([start (current-time)]
+              [r (condition-wait c m (make-time 'time-duration 100000000 0))]
+              [stop (current-time)])
+         (and (not r)
+              ($time-in-range? start stop 0.25))))))
   (let ([count 300] [live 0] [live-m (make-mutex)])
     (parameterize ([collect-request-handler
                     (lambda ()
@@ -1625,6 +1635,62 @@
           [else
            (mutex-release m)]))
       ok?))
+)
+
+(mat parallel-gc-regression
+  (equal?
+   ;; Create threads that refer to data owned by other threads, and try to
+   ;; mix things up to see if we can provoke a problem in parallel collection.
+   (parameterize ([collect-request-handler
+                   (lambda ()
+                     (let ([g (collect-maximum-generation)])
+                       (collect (- g 1) (min 1 (- g 1)) (- g 1))))])
+     (let loop ([j 50])
+       (unless (= j 0)
+         (let* ([N 8]
+                [DEPTH 24]
+                [common (make-vector N)])
+
+           (define (spin i)
+             (define (fib n)
+               (cond
+                 [(= n 0) #t]
+                 [(= n 1) #f]
+                 [else (cons (fib (- n 1)) (fib (- n 2)))]))
+             (vector-set! common i (fib DEPTH))
+             (when (= i (sub1 N))
+               (collect-rendezvous)))
+
+           (define (work i)
+             (lambda ()
+               (thread-preserve-ownership!)
+               (set-virtual-register! 0 (make-vector 128))
+               (vector-set! (virtual-register 0) 0 (make-eq-hashtable))
+               (map (lambda (j)
+                      (let ([r (random N)])
+                        (vector-set! common r (make-vector 10 ))))
+                    '(1 2 3))
+               (map (lambda (j)
+                      (let ([r (random N)])
+                        (set-virtual-register! j (vector-ref common r))))
+                    '(1 2 3))
+               (spin i)
+               (unless (hashtable? (vector-ref (virtual-register 0) 0))
+                 (error 'oops "something went wrong"))))
+
+           (define ths
+             (let loop ([i 0])
+               (cond
+                 [(= i N) '()]
+                 [else
+                  (let ([th (fork-thread (work i))])
+                    (vector-set! common i th)
+                    (cons th (loop (add1 i))))])))
+
+           (for-each thread-join ths)
+
+           (loop (sub1 j))))))
+   (void))
 )
 
 (mat wait-for-threads

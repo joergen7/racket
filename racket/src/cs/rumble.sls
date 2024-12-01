@@ -1,6 +1,7 @@
 (library (rumble)
   (export version
           banner
+          set-build-stamp! ; not exported to Racket
 
           null eof void void?
 
@@ -84,6 +85,7 @@
           error-print-width
           error-value->string-handler
           error-syntax->string-handler
+          error-syntax->name-handler
           error-print-context-length
           exception-handler-key
           uncaught-exception-handler
@@ -96,6 +98,7 @@
           linklet-instantiate-key ; not exported to Racket
           set-error-display-eprintf! ; not exported to Racket
           set-log-system-message! ; not exported to Racket
+          set-error-value->string! ; not exported to Racket
 
           current-inspector
           make-inspector
@@ -285,8 +288,10 @@
           eq-hash-code
           eqv-hash-code
           equal-hash-code
+          equal-hash-code/recur
           equal-secondary-hash-code
           equal-always-hash-code
+          equal-always-hash-code/recur
           equal-always-secondary-hash-code
 
           hash hasheqv hasheq hashalw
@@ -314,6 +319,8 @@
           unsafe-hash-seal!    ; not exported to racket
 
           hash? hash-eq? hash-equal? hash-eqv? hash-equal-always? hash-strong? hash-weak? hash-ephemeron?
+          immutable-hash?
+          (rename [-mutable-hash? mutable-hash?])
           hash-count
           hash-keys-subset?
           eq-hashtable->hash   ; not exported to racket
@@ -324,6 +331,7 @@
 
           impersonate-hash
           chaperone-hash
+          unsafe-impersonate-hash
 
           true-object?
 
@@ -333,7 +341,7 @@
           make-bytes make-shared-bytes
           bytes-ref bytes-set!
           bytes->list list->bytes
-          bytes->immutable-bytes
+          bytes->immutable-bytes immutable-bytes? mutable-bytes?
           bytes-copy! bytes-copy bytes-fill!
           bytes=? bytes<? bytes>?
           bytes-append
@@ -342,6 +350,7 @@
           make-string
           string-copy!
           substring
+          immutable-string? mutable-string?
 
           char-blank?
           char-iso-control?
@@ -368,21 +377,28 @@
                   [|#%ormap| ormap])
 
           vector?
-          mutable-vector?
+          immutable-vector? mutable-vector?
           make-vector
           (rename [inline:vector-length vector-length]
                   [inline:vector-ref vector-ref]
                   [inline:vector-set! vector-set!])
           vector-copy
           vector-copy!
-          vector-immutable
+          vector-set/copy
+          vector-append
+          (rename [inline:vector-immutable vector-immutable])
           vector->values
           vector-fill!
           vector->immutable-vector
           vector->list
+	  vector-extend
           vector*-length
           vector*-ref
           vector*-set!
+          vector*-copy
+          vector*-append
+          vector*-set/copy
+	  vector*-extend
 
           impersonate-vector
           impersonate-vector*
@@ -396,6 +412,7 @@
                   [inline:set-box! set-box!])
           unbox* set-box*!
           make-weak-box weak-box? weak-box-value
+          immutable-box? mutable-box?
           impersonate-box
           chaperone-box
           unbox/check-undefined    ; not exported to Racket
@@ -422,6 +439,7 @@
           real->double-flonum
           real->single-flonum
           arithmetic-shift
+          expt
           bitwise-ior
           bitwise-xor
           bitwise-and
@@ -440,6 +458,7 @@
           fxrshift
           fxlshift
           fxlshift/wraparound
+          fxrshift/logical
           fl->fx
           ->fl
           fl->exact-integer
@@ -567,6 +586,7 @@
           unsafe-fxxor
           unsafe-fxnot
           unsafe-fxrshift
+          unsafe-fxrshift/logical
           unsafe-fxlshift
           unsafe-fx+/wraparound
           unsafe-fx-/wraparound
@@ -622,6 +642,7 @@
           unsafe-flsqrt
           unsafe-flexpt
 
+          unsafe-flbit-field
           unsafe-flrandom
 
           extfl* extfl+ extfl- ->extfl
@@ -666,6 +687,7 @@
           compiler-sizeof cpointer-gcable? cpointer-tag cpointer?
           ctype-alignof ctype-basetype ctype-c->scheme ctype-scheme->c ctype-sizeof ctype?
           end-stubborn-change extflvector->cpointer
+          assert-ctype-representation ffi-maybe-call-and-callback-core
           ffi-call ffi-call-maker ffi-callback ffi-callback-maker ffi-callback?
           ffi-lib-name ffi-lib? ffi-obj ffi-obj-lib ffi-lib-unload
           ffi-obj-name  ffi-obj? flvector->cpointer free free-immobile-cell lookup-errno
@@ -695,6 +717,8 @@
           ptr-ref/double ptr-set!/double  ; not exported to Racket
           ptr-ref/float ptr-set!/float    ; not exported to Racket
 
+          ffi-static-call-and-callback-core ; not exported to Racket
+
           (rename [inline:unsafe-unbox unsafe-unbox]
                   [inline:unsafe-set-box! unsafe-set-box!])
           unsafe-unbox*
@@ -708,11 +732,17 @@
 
           (rename [inline:unsafe-vector-ref unsafe-vector-ref]
                   [inline:unsafe-vector-set! unsafe-vector-set!]
-                  [inline:unsafe-vector-length unsafe-vector-length])
+                  [inline:unsafe-vector-length unsafe-vector-length]
+                  [inline:unsafe-vector-copy unsafe-vector-copy]
+                  [inline:unsafe-vector-set/copy unsafe-vector-set/copy])
+          unsafe-vector-append
           unsafe-vector*-ref
           unsafe-vector*-set!
           unsafe-vector*-cas!
           unsafe-vector*-length
+          unsafe-vector*-copy
+          unsafe-vector*-set/copy
+          unsafe-vector*-append
 
           unsafe-fxvector-length
           unsafe-fxvector-ref
@@ -743,6 +773,7 @@
           unsafe-struct*-ref
           unsafe-struct*-set!
           unsafe-struct*-cas!
+          unsafe-struct*-type
           unsafe-struct?        ; not exported to racket
           unsafe-sealed-struct? ; not exported to racket
           unsafe-struct         ; not exported to racket

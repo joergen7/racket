@@ -5,6 +5,7 @@
 #################################################################
 
 AC_INIT([embed-boot.rkt])
+
 AC_CONFIG_HEADERS([cs_config.h])
 
 AC_CONFIG_AUX_DIR(../../lt)
@@ -199,6 +200,8 @@ m4_include(../ac/sdk_ios.m4)
 
 AC_PROG_CC
 
+m4_include(../ac/add_c_flags.m4)
+
 m4_include(../ac/is_gcc.m4)
 
 # If using gcc, we want all warnings:
@@ -270,9 +273,8 @@ case "$host_os" in
     MACH_OS=nb
     LIBS="${LIBS} -lm -lpthread"
     LINK_DYNAMIC="-rdynamic"
-    add_iconv_lib="/usr/lib/i18n/libiconv_std.a"
-    skip_curses_check=yes
-    add_curses_lib="/usr/pkg/lib/libncurses.a"
+    skip_iconv_check=yes
+    add_curses_lib="-lterminfo"
     default_post_linker="paxctl +m"
     ;;
   irix*)
@@ -308,6 +310,7 @@ case "$host_os" in
     MACH_OS=nt
     LIBS="${LIBS} -lshell32 -luser32 -lole32 -lrpcrt4 -luuid -lws2_32 -ladvapi32 -lwinmm"
     MINGW="t"
+    # keep "winfig.bat" consistent with the compression default:
     compress_boot_files_by_default=yes
     if `which ${host}-windres > /dev/null` ; then
       WINDRES="${host}-windres"
@@ -322,6 +325,9 @@ case "$host_os" in
   darwin*)
     PREFLAGS="$PREFLAGS -DOS_X"
     MACH_OS=osx
+    if test "${enable_ios}" != "" ; then
+      MACH_OS=ios
+    fi
     LIBS="${LIBS} -framework CoreFoundation"
     LDFLAGS="${LDFLAGS} -Wl,-headerpad_max_install_names"
     SIGNED_EXE="t"
@@ -430,6 +436,10 @@ case "$MACH_HOST_CPU" in
     MACH="${thread_prefix}rv64${MACH_OS}"
     pb_machine_name="${thread_prefix}pb64l"
     ;;
+  loongarch64*)
+    MACH="${thread_prefix}la64${MACH_OS}"
+    pb_machine_name="${thread_prefix}pb64l"
+    ;;
 esac
 
 if test "${MACH}" = "" ; then
@@ -528,6 +538,9 @@ if test "${build_os}_${build_cpu}" != "${host_os}_${host_cpu}" ; then
       ;;
     riscv64*)
       BUILD_MACH="${BUILD_THREAD_PREFIX}rv64${BUILD_OS}"
+      ;;
+    loongarch64*)
+      BUILD_MACH="${BUILD_THREAD_PREFIX}la64${BUILD_OS}"
       ;;
     *)
       echo "unknown build CPU"
@@ -930,3 +943,5 @@ makefiles="Makefile"
 AC_OUTPUT($makefiles)
 
 cp ${srcdir}/buildmain.zuo main.zuo
+
+show_path_results

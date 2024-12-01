@@ -2110,6 +2110,21 @@
 (test #"" regexp-replace* #"[a-z]" #"abc" #"")
 (test "" regexp-replace* "[a-z]" "abc" "")
 
+;; check that backtrack requirement is updated when text `.` is converted to
+;; an any-UTF-8 pattern
+(test '("theorem abc" #f)
+      regexp-match (pregexp "theorem ((?!theorem).)*abc") "theorem abc {α : Type}")
+(test '("theorem abc" #f)
+      regexp-match (pregexp "theorem ((?!theorem).)*abc") "theorem abc {a : Type}")
+(test '("theorem abc" #f)
+      regexp-match (pregexp "theorem ((?<!theorem).)*abc") "theorem abc {α : Type}")
+(test '("theorem abc" #f)
+      regexp-match (pregexp "theorem ((?<!theorem).)*abc") "theorem abc {a : Type}")
+(test '("theorem abc")
+      regexp-match (pregexp "theorem (?(?<!theorem).|.)*abc") "theorem abc {α : Type}")
+(test '("theorem abc")
+      regexp-match (pregexp "theorem (?(?<!theorem).|.)*abc") "theorem abc {a : Type}")
+
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (test "aaa" regexp-replace* "(x)" "aaa"
@@ -2118,6 +2133,24 @@
 
 (err/rt-test (regexp-replace* "(a)" "aaa" (lambda (x) x))
              exn:fail:contract:arity?)
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Check that empty ranges don't match
+
+(test #f regexp-match #rx"[^\0-\U10FFFF]" "\0")
+(test #f regexp-match #rx"[^\0-\U10FFFF]" "a")
+(test #f regexp-match #rx"[^\0-\U10FFFF]" "")
+(test #f regexp-match #rx#"[^\0-\xFF]" #"\0")
+(test #f regexp-match #rx#"[^\0-\xFF]" #"a")
+(test #f regexp-match #rx#"[^\0-\xFF]" #"")
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Check for empty cases in conditional
+
+(test '("xxs" "x") regexp-match #rx"(x)*(?(1)s|)" "xxs")
+(test '("" #f) regexp-match #rx"(x)*(?(1)s|)" "")
+(test '("xx" "x") regexp-match #rx"(x)*(?(1)|=)" "xx")
+(test '("=" #f) regexp-match #rx"(x)*(?(1)|=)" "=")
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

@@ -60,7 +60,7 @@ or both byte regexps.
 
 A literal or printed @tech{regexp value} starts with @litchar{#rx} or
 @litchar{#px}. @see-read-print["regexp"]{regular expressions} Regexp
-values produced by the default reader are @tech{interned} in 
+values produced by the default reader are @tech{interned} in
 @racket[read-syntax] mode.
 
 On the @tech[#:doc '(lib "scribblings/guide/guide.scrbl")]{BC} variant of Racket,
@@ -210,7 +210,7 @@ otherwise.}
 
 @defproc*[([(regexp [str string?]) regexp?]
            [(regexp [str string?]
-                    [handler (or/c #f (string? -> any))])
+                    [handler (or/c #f (string? . -> . any))])
             any])]{
 
 Takes a string representation of a regular expression (using the
@@ -240,7 +240,7 @@ the source string for a @tech{regexp value}.
 
 @defproc*[([(pregexp [str string?]) pregexp?]
            [(pregexp [str string?]
-                     [handler (or/c #f (string? -> any))])
+                     [handler (or/c #f (string? . -> . any))])
             any])]{
 
 Like @racket[regexp], except that it uses a slightly different syntax
@@ -258,7 +258,7 @@ Like @racket[regexp], except that it uses a slightly different syntax
 
 @defproc*[([(byte-regexp [bstr bytes?]) byte-regexp?]
            [(byte-regexp [bstr bytes?]
-                         [handler (or/c #f (bytes? -> any))])
+                         [handler (or/c #f (bytes? . -> . any))])
             any])]{
 
 Takes a byte-string representation of a regular expression (using the
@@ -266,7 +266,7 @@ syntax in @secref["regexp-syntax"]) and compiles it into a
 byte-@tech{regexp value}.
 
 If @racket[handler] is provided, it is called and its result is returned
-if @racket[str] is not a valid representation of a regular expression.
+if @racket[bstr] is not a valid representation of a regular expression.
 
 The @racket[object-name] procedure
 returns the source byte string for a @tech{regexp value}.
@@ -282,7 +282,7 @@ returns the source byte string for a @tech{regexp value}.
 
 @defproc*[([(byte-pregexp [bstr bytes?]) byte-pregexp?]
            [(byte-pregexp [bstr bytes?]
-                          [handler (or/c #f (bytes? -> any))])
+                          [handler (or/c #f (bytes? . -> . any))])
             any])]{
 
 Like @racket[byte-regexp], except that it uses a slightly different
@@ -304,13 +304,22 @@ Produces a string or byte string suitable for use with @racket[regexp]
 to match the literal sequence of characters in @racket[str] or
 sequence of bytes in @racket[bstr]. If @racket[case-sensitive?] is
 true (the default), the resulting regexp matches letters in
-@racket[str] or @racket[bytes] case-sensitively, otherwise it matches
+@racket[str] or @racket[bstr] case-sensitively, otherwise it matches
 case-insensitively.
 
 @examples[
 (regexp-match "." "apple.scm")
 (regexp-match (regexp-quote ".") "apple.scm")
 ]}
+
+@defproc*[([(pregexp-quote [str string?] [case-sensitive? any/c #t]) string?]
+           [(pregexp-quote [bstr bytes?] [case-sensitive? any/c #t]) bytes?])]{
+
+Like @racket[regexp-quote], but intended for use with @racket[pregexp].
+Escapes all non-alphanumeric, non-underscore characters in the input.
+
+@history[#:added "8.11.1.9"]
+}
 
 @defproc[(regexp-max-lookbehind [pattern (or/c regexp? byte-regexp?)])
          exact-nonnegative-integer?]{
@@ -321,12 +330,18 @@ example, the pattern @litchar{(?<=abc)d} consults three bytes
 preceding a matching @litchar{d}, while @litchar{e(?<=a..)d} consults
 two bytes before a matching @litchar{ed}. A @litchar{^} pattern may
 consult a preceding byte to determine whether the current position is
-the start of the input or of a line.}
+the start of the input or of a line.
+
+@examples[
+(regexp-max-lookbehind #rx#"(?<=abc)d")
+(regexp-max-lookbehind #rx#"e(?<=a..)d")
+(regexp-max-lookbehind #rx"^")
+]}
 
 @;------------------------------------------------------------------------
 @section{Regexp Matching}
 
-@defproc[(regexp-match [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-match [pattern (or/c regexp? byte-regexp? string? bytes?)]
                        [input (or/c string? bytes? path? input-port?)]
                        [start-pos exact-nonnegative-integer? 0]
                        [end-pos (or/c exact-nonnegative-integer? #f) #f]
@@ -441,7 +456,7 @@ bytes. To avoid such interleaving, use @racket[regexp-match-peek]
 ]}
 
 
-@defproc[(regexp-match* [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-match* [pattern (or/c regexp? byte-regexp? string? bytes?)]
                         [input (or/c string? bytes? path? input-port?)]
                         [start-pos exact-nonnegative-integer? 0]
                         [end-pos (or/c exact-nonnegative-integer? #f) #f]
@@ -512,7 +527,7 @@ return @emph{only} the separators, making such uses equivalent to
 ]}
 
 
-@defproc[(regexp-try-match [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-try-match [pattern (or/c regexp? byte-regexp? string? bytes?)]
                            [input input-port?]
                            [start-pos exact-nonnegative-integer? 0]
                            [end-pos (or/c exact-nonnegative-integer? #f) #f]
@@ -531,7 +546,7 @@ peeked (and therefore pulled into memory) before the match succeeds or
 fails.}
 
 
-@defproc[(regexp-match-positions [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-match-positions [pattern (or/c regexp? byte-regexp? string? bytes?)]
                                  [input (or/c string? bytes? path? input-port?)]
                                  [start-pos exact-nonnegative-integer? 0]
                                  [end-pos (or/c exact-nonnegative-integer? #f) #f]
@@ -587,7 +602,7 @@ a tail of @racket[input-prefix].
 (regexp-match-positions #rx"(?<=(.))." "a" 0 #f #f (string->bytes/utf-8 "\u3BB"))
 ]}
 
-@defproc[(regexp-match-positions* [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-match-positions* [pattern (or/c regexp? byte-regexp? string? bytes?)]
                                   [input (or/c string? bytes? path? input-port?)]
                                   [start-pos exact-nonnegative-integer? 0]
                                   [end-pos (or/c exact-nonnegative-integer? #f) #f]
@@ -614,7 +629,7 @@ inferred from the resulting matches.
 }
 
 
-@defproc[(regexp-match? [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-match? [pattern (or/c regexp? byte-regexp? string? bytes?)]
                         [input (or/c string? bytes? path? input-port?)]
                         [start-pos exact-nonnegative-integer? 0]
                         [end-pos (or/c exact-nonnegative-integer? #f) #f]
@@ -631,7 +646,7 @@ match succeeds, @racket[#f] otherwise.
 ]}
 
 
-@defproc[(regexp-match-exact? [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-match-exact? [pattern (or/c regexp? byte-regexp? string? bytes?)]
                               [input (or/c string? bytes? path?)])
           boolean?]{
 
@@ -665,7 +680,7 @@ lower precedence than alternation; the regular expression without it,
 ]}
 
 
-@defproc[(regexp-match-peek [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-match-peek [pattern (or/c regexp? byte-regexp? string? bytes?)]
                             [input input-port?]
                             [start-pos exact-nonnegative-integer? 0]
                             [end-pos (or/c exact-nonnegative-integer? #f) #f]
@@ -695,7 +710,7 @@ information if another process meanwhile reads from
 ]}
 
 
-@defproc[(regexp-match-peek-positions [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-match-peek-positions [pattern (or/c regexp? byte-regexp? string? bytes?)]
                             [input input-port?]
                             [start-pos exact-nonnegative-integer? 0]
                             [end-pos (or/c exact-nonnegative-integer? #f) #f]
@@ -713,7 +728,7 @@ bytes from @racket[input] instead of reading them, and with a
 @racket[progress] argument like @racket[regexp-match-peek].}
 
 
-@defproc[(regexp-match-peek-immediate [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-match-peek-immediate [pattern (or/c regexp? byte-regexp? string? bytes?)]
                             [input input-port?]
                             [start-pos exact-nonnegative-integer? 0]
                             [end-pos (or/c exact-nonnegative-integer? #f) #f]
@@ -728,7 +743,7 @@ match fails if not-yet-available characters might be used to match
 @racket[pattern].}
 
 
-@defproc[(regexp-match-peek-positions-immediate [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-match-peek-positions-immediate [pattern (or/c regexp? byte-regexp? string? bytes?)]
                             [input input-port?]
                             [start-pos exact-nonnegative-integer? 0]
                             [end-pos (or/c exact-nonnegative-integer? #f) #f]
@@ -748,7 +763,7 @@ used to match @racket[pattern].}
 
 
 @defproc[(regexp-match-peek-positions*
-                            [pattern (or/c string? bytes? regexp? byte-regexp?)]
+                            [pattern (or/c regexp? byte-regexp? string? bytes?)]
                             [input input-port?]
                             [start-pos exact-nonnegative-integer? 0]
                             [end-pos (or/c exact-nonnegative-integer? #f) #f]
@@ -764,7 +779,7 @@ used to match @racket[pattern].}
 Like @racket[regexp-match-peek-positions], but returns multiple matches like
 @racket[regexp-match-positions*].}
 
-@defproc[(regexp-match/end [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-match/end [pattern (or/c regexp? byte-regexp? string? bytes?)]
                        [input (or/c string? bytes? path? input-port?)]
                        [start-pos exact-nonnegative-integer? 0]
                        [end-pos (or/c exact-nonnegative-integer? #f) #f]
@@ -789,7 +804,7 @@ the first match. In that case, use @racket[regexp-max-lookbehind]
 to determine an appropriate value for @racket[count].}
 
 @deftogether[(
-@defproc[(regexp-match-positions/end [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-match-positions/end [pattern (or/c regexp? byte-regexp? string? bytes?)]
                                   [input (or/c string? bytes? path? input-port?)]
                                   [start-pos exact-nonnegative-integer? 0]
                                   [end-pos (or/c exact-nonnegative-integer? #f) #f]
@@ -798,7 +813,7 @@ to determine an appropriate value for @racket[count].}
          (values (listof (cons/c exact-nonnegative-integer?
                                  exact-nonnegative-integer?))
                  (or/c #f bytes?))]
-@defproc[(regexp-match-peek-positions/end [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-match-peek-positions/end [pattern (or/c regexp? byte-regexp? string? bytes?)]
                             [input input-port?]
                             [start-pos exact-nonnegative-integer? 0]
                             [end-pos (or/c exact-nonnegative-integer? #f) #f]
@@ -813,7 +828,7 @@ to determine an appropriate value for @racket[count].}
                                       #f)))
                 #f)
           (or/c #f bytes?))]
-@defproc[(regexp-match-peek-positions-immediate/end [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-match-peek-positions-immediate/end [pattern (or/c regexp? byte-regexp? string? bytes?)]
                             [input input-port?]
                             [start-pos exact-nonnegative-integer? 0]
                             [end-pos (or/c exact-nonnegative-integer? #f) #f]
@@ -836,7 +851,7 @@ like @racket[regexp-match/end].}
 @;------------------------------------------------------------------------
 @section{Regexp Splitting}
 
-@defproc[(regexp-split [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-split [pattern (or/c regexp? byte-regexp? string? bytes?)]
                        [input (or/c string? bytes? input-port?)]
                        [start-pos exact-nonnegative-integer? 0]
                        [end-pos (or/c exact-nonnegative-integer? #f) #f]
@@ -877,11 +892,11 @@ an end-of-file if @racket[input] is an input port).
 @;------------------------------------------------------------------------
 @section{Regexp Substitution}
 
-@defproc[(regexp-replace [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-replace [pattern (or/c regexp? byte-regexp? string? bytes?)]
                          [input (or/c string? bytes?)]
                          [insert (or/c string? bytes?
-                                       ((string?) () #:rest (listof string?) . ->* . string?)
-                                       ((bytes?) () #:rest (listof bytes?) . ->* . bytes?))]
+                                       (string? string? ... . -> . string?)
+                                       (bytes? bytes? ... . -> . bytes?))]
                          [input-prefix bytes? #""])
          (if (and (or (string? pattern) (regexp? pattern))
                   (string? input))
@@ -945,11 +960,11 @@ before the @litchar{\}. For example, the Racket constant
 (display (regexp-replace #rx"x" "12x4x6" "\\\\"))
 ]}
 
-@defproc[(regexp-replace* [pattern (or/c string? bytes? regexp? byte-regexp?)]
+@defproc[(regexp-replace* [pattern (or/c regexp? byte-regexp? string? bytes?)]
                           [input (or/c string? bytes?)]
                           [insert (or/c string? bytes?
-                                        ((string?) () #:rest (listof string?) . ->* . string?)
-                                        ((bytes?) () #:rest (listof bytes?) . ->* . bytes?))]
+                                        (string? string? ... . -> . string?)
+                                        (bytes? bytes? ... . -> . bytes?))]
                           [start-pos exact-nonnegative-integer? 0]
                           [end-pos (or/c exact-nonnegative-integer? #f) #f]
                           [input-prefix bytes? #""])
@@ -987,10 +1002,10 @@ string or the stream up to an end-of-file.
 @defproc[(regexp-replaces [input (or/c string? bytes?)]
                           [replacements
                            (listof
-                            (list/c (or/c string? bytes? regexp? byte-regexp?)
+                            (list/c (or/c regexp? byte-regexp? string? bytes?)
                                     (or/c string? bytes?
-                                        ((string?) () #:rest (listof string?) . ->* . string?)
-                                        ((bytes?) () #:rest (listof bytes?) . ->* . bytes?))))])
+                                        (string? string? ... . -> . string?)
+                                        (bytes? bytes? ... . -> . bytes?))))])
          (or/c string? bytes?)]{
 
 Performs a chain of @racket[regexp-replace*] operations, where each

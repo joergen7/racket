@@ -275,6 +275,7 @@
   (test-name '(between/c 1 10) (between/c 1 10))
   (test-name '(string-len/c 3) (string-len/c 3))
   (test-name 'natural-number/c natural-number/c)
+  (test-name '(complex/c even? odd?) (complex/c even? odd?))
   (test-name #f false/c)
   (test-name #t #t)
   (test-name #\a #\a)
@@ -321,6 +322,8 @@
   (test-name '(list*of any/c char?) (list*of any/c char?))
   (test-name '(list*of (-> boolean? boolean?) char?) (list*of (-> boolean? boolean?) char?))
 
+  (test-name '(treelist/c integer?) (treelist/c integer?))
+  (test-name '(mutable-treelist/c boolean?) (mutable-treelist/c boolean?))
 
   (test-name '(vectorof boolean?) (vectorof boolean?))
   (test-name '(vectorof any/c) (vectorof any/c))
@@ -525,6 +528,9 @@
                           [c (a) boolean?]
                           [d (a c) integer?]
                           #:inv (a c) (if c (even? a) (odd? a)))))
+
+  (contract-eval #:test-case-name "object-name.or/c"
+                 `(,test '|(or/c 'ogg 'mp3)| object-name (or/c 'ogg 'mp3)))
 
   ;; NOT YET RELEASED
   #;

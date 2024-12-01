@@ -1127,27 +1127,38 @@
                             (let loop ()
                               (unless (check)
                                 (sleep (make-time 'time-duration 10000 0))
-                                (loop))))])
+                                (loop))))]
+             ;; to make sure a thread parameter's content is not counted:
+             [new-param (make-thread-parameter (make-bytevector (* 3 N)))])
         (mutex-acquire m)
-        (let ([th (fork-thread
-                   (lambda ()
-                     (let ([bstr (make-bytevector N)])
-                       (set-box! ready 'go)
-                       ;; Block so that thread becomes deactivated
-                       (mutex-acquire m)
-                       (mutex-release m)
-                       ;; bstr is retained in the thread's continuation until here
-                       (set-box! saved (bytevector-u8-ref bstr 0))
-                       (pause-until (lambda () (box-cas! ready 'finish 'done)))
-                       ;; Block so that thread becomes deactivated, again
-                       (mutex-acquire m)
-                       (mutex-release m))))])
+        (let* ([th-code
+                ;; we'll measure the difference between data reachable by this
+                ;; code versus data reachable from the thread
+                (lambda ()
+                  (let ([bstr (make-bytevector N)])
+                    (set-box! ready 'go)
+                    ;; Block so that thread becomes deactivated
+                    (mutex-acquire m)
+                    (mutex-release m)
+                    ;; bstr is retained in the thread's continuation until here
+                    (set-box! saved (bytevector-u8-ref bstr 0))
+                    (pause-until (lambda () (box-cas! ready 'finish 'done)))
+                    ;; Block so that thread becomes deactivated, again
+                    (mutex-acquire m)
+                    (mutex-release m)))]
+               [th (fork-thread th-code)])
           ;; Wait for thread to start
           (pause-until (lambda () (eq? 'go (unbox ready))))
           ;; Wait for thread to become inactive, blocked on the mutex
           (pause-until (lambda () (= 1 (#%$top-level-value '$active-threads))))
           ;; Get thread's size, which should include bstr
-          (let ([pre-sizes (compute-size-increments (list th))])
+          (let ([pre-sizes (compute-size-increments (list th-code
+                                                          th
+                                                          ;; don't count parameters towards the thread's
+                                                          ;; size; in particular, the `$tt-fat` parameter
+                                                          ;; from a "thread.ms" test can have random symbols,
+                                                          ;; some of which may be bound to large values
+                                                          (#%$tc-field 'parameters (#%$thread-tc th))))])
             (mutex-release m)
             ;; Wait for bytevector to be discarded in the thread
             (pause-until (lambda () (unbox saved)))
@@ -1157,18 +1168,24 @@
             (pause-until (lambda () (eq? 'done (unbox ready))))
             (pause-until (lambda () (= 1 (#%$top-level-value '$active-threads))))
             ;; Get thread's size, which shouldn't include bstr
-            (let ([post-sizes (compute-size-increments (list th))])
+            (let ([post-sizes (compute-size-increments (list th-code
+                                                             th
+                                                             (#%$tc-field 'parameters (#%$thread-tc th))))])
+              (printf "SIZES ~s\n" (list pre-sizes N post-sizes))
               (mutex-release m)
               ;; Wait for thread to exit
               (thread-join th)
               ;; Make sure `compute-size-increments` doesn't crash on a
               ;; terminated thread:
               (compute-size-increments (list th))
+              ;; drop extra bytevector from the current thread:
+              (new-param #f)
               ;; Main result: detected size of `bstr` in the thread
               ;; while it was part of the continuation
               (or (eq? (current-eval) interpret) ; interpreter continuation is not precise enough
-                  (and (> (car pre-sizes) N)
-                       (< (car post-sizes) N))))))))
+                  (and (> (cadr pre-sizes) N)
+                       (< (cadr post-sizes) N))
+                  (errorf 'compute-size-increments "failed ~s ~s ~s" pre-sizes N post-sizes)))))))
   )
 
 (mat collect+compute-size-increments
@@ -1460,6 +1477,9 @@
   (eq? (eval '(let ((x 3)) x) (ieee-environment)) 3)
   (eq? (eval '(let ((x 3)) x) (null-environment 5)) 3)
 
+  (eq? (eval '(< 3 5) (scheme-report-environment 5)) #true)
+  (eq? (eval '(< 3 5) (ieee-environment)) #true)
+
   (eq? (eval '(let ((p (delay 3))) (force p))) 3)
   (eq? (eval '(let ((p (delay 3))) (force p)) (interaction-environment)) 3)
   (eq? (eval '(let ((p (delay 3))) (force p)) (scheme-report-environment 5)) 3)
@@ -1470,6 +1490,10 @@
   (error? (eval '(sort < '(3 2 4)) (scheme-report-environment 5)))
   (error? (eval '(sort < '(3 2 4)) (ieee-environment)))
   (error? (eval '(sort < '(3 2 4)) (null-environment 5)))
+
+  (error? (eval '(< 3) (scheme-report-environment 5)))
+  (error? (eval '(< 3) (ieee-environment)))
+
 )
 
 (mat eval2
@@ -2640,7 +2664,7 @@
              (define peano->n length)
              (define (peano-sub1 n)
                (if (null? n)
-                   (error 'peano-sub "cannot subtract 1 from 0")
+                   (errorf 'peano-sub "cannot subtract 1 from 0")
                    (cdr n)))
              (define peano-zero '())
              (define (peano-add1 n) (#%cons 'succ n))
@@ -2667,7 +2691,10 @@
 
   ((lambda (x)
      (and (time<? (make-time 'time-duration 0 0) x)
-          (or (time<? x (make-time 'time-duration 0 20))
+          ;; on a modern machine, we expect a time on the
+          ;; order of 1s, but allow a lof ot variation or
+          ;; a slow machine with up to 50s:
+          (or (time<? x (make-time 'time-duration 0 50))
               (#%$enable-check-heap))))
    (begin
      ($cc-fib 30)
@@ -4665,7 +4692,7 @@
 )
 
 (unless (memq (machine-type) '(arm32le tarm32le arm64le tarm64le arm64osx tarm64osx ; timestamp counter tends to be priviledged on Arm
-				       arm64nt tarm64nt
+                                       arm64ios tarm64ios arm64nt tarm64nt
                                        pb pb32l pb32b pb64l pb64b tpb tpb32l tpb32b tpb64l tpb64b)) ; doesn't increment for pb
   (mat $read-time-stamp-counter
 
@@ -5410,21 +5437,21 @@
                        (unless (null? objs)
                          (let ([v (car objs)])
                            (unless (= (#%$fxaddress v) (car addrs))
-                             (error 'immobile "address changed: ~s" v))
+                             (errorf 'immobile "address changed: ~s" v))
                            (cond
                              [(box? v)
                               (unless (eq? (unbox v) (cdr objs))
-                                (error 'immobile "bad box content"))]
+                                (errorf 'immobile "bad box content"))]
                              [(vector? v)
                               (let loop ([j 0])
                                 (unless (= j (vector-length v))
                                   (unless (eq? (cdr objs) (vector-ref v j))
-                                    (error 'immobile "bad vector content"))
+                                    (errorf 'immobile "bad vector content"))
                                   (loop (add1 j))))]
                              [(bytevector? v)
                               (void)]
                              [else
-                              (error 'immobile "bad object: ~s" v)]))
+                              (errorf 'immobile "bad object: ~s" v)]))
                          (check (cdr objs) (cdr addrs))))
                      (loop (sub1 i) objs addrs)))]))))
          (thread-loop (sub1 t))))

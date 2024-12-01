@@ -117,13 +117,12 @@ extern void S_phantom_bytevector_adjust(ptr ph, uptr new_sz);
 extern void S_fasl_init(void);
 extern ptr S_fasl_read(INT fd, IFASLCODE situation, ptr path, ptr externals);
 extern ptr S_bv_fasl_read(ptr bv, int ty, uptr offset, uptr len, ptr path, ptr externals);
-extern ptr S_boot_read(INT fd, const char *path);
+extern ptr S_boot_read(faslFile f, const char *path);
 extern char *S_format_scheme_version(uptr n);
 extern char *S_lookup_machine_type(uptr n);
 extern void S_set_code_obj(char *who, IFASLCODE typ, ptr p, iptr n,
                            ptr x, iptr o);
 extern ptr S_get_code_obj(IFASLCODE typ, ptr p, iptr n, iptr o);
-extern int S_fasl_stream_read(void *stream, octet *dest, iptr n);
 extern int S_fasl_intern_rtd(ptr *x);
 #ifdef X86_64
 extern void x86_64_set_popcount_present(ptr code);
@@ -131,9 +130,16 @@ extern void x86_64_set_popcount_present(ptr code);
 #ifdef PORTABLE_BYTECODE_SWAPENDIAN
 extern void S_swap_dounderflow_header_endian(ptr code);
 #endif
+extern void S_fasl_init_fd(fileFaslFile ffo, ptr path, INT fd,
+                           int buffer_mode, uptr size);
+extern void S_fasl_init_bytes(faslFile ffo, ptr path, void *data, iptr len);
+extern void S_fasl_init_bv(faslFile ffo, ptr path, ptr bv);
+extern int S_fasl_bytein(faslFile f);
+extern uptr S_fasl_uptrin(faslFile f, INT *bytes_consumed);
+extern void S_fasl_bytesin(octet *s, iptr n, faslFile f);
 
 /* vfasl.c */
-extern ptr S_vfasl(ptr bv, void *stream, iptr offset, iptr len);
+extern ptr S_vfasl(ptr bv, faslFile stream, iptr offset, iptr len);
 extern ptr S_vfasl_to(ptr v);
 
 /* flushcache.c */
@@ -198,7 +204,7 @@ extern ptr S_intern(const unsigned char *s);
 extern ptr S_intern_sc(const string_char *s, iptr n, ptr name_str);
 extern ptr S_intern3(const string_char *pname, iptr plen, const string_char *uname, iptr ulen, ptr pname_str, ptr uame_str);
 extern ptr S_intern4(ptr sym);
-extern void S_intern_gensym(ptr g);
+extern void S_intern_gensym(ptr sym, ptr sym_name);
 extern void S_retrofit_nonprocedure_code(void);
 extern ptr S_mkstring(const string_char *s, iptr n);
 extern I32 S_symbol_hash32(ptr str);
@@ -279,7 +285,7 @@ extern void S_thread_init(void);
 extern ptr S_create_thread_object(const char *who, ptr p_tc);
 #ifdef PTHREADS
 extern ptr S_fork_thread(ptr thunk);
-extern scheme_mutex_t *S_make_mutex(void);
+extern ptr S_make_mutex(void);
 extern void S_mutex_free(scheme_mutex_t *m);
 extern void S_mutex_acquire(scheme_mutex_t *m);
 extern INT S_mutex_tryacquire(scheme_mutex_t *m);
@@ -298,7 +304,6 @@ extern void S_generic_invoke(ptr tc, ptr code);
 /* number.c */
 extern void S_number_init(void);
 extern ptr S_normalize_bignum(ptr x);
-extern IBOOL S_integer_valuep(ptr x);
 extern iptr S_integer_value(const char *who, ptr x);
 extern I64 S_int64_value(char *who, ptr x);
 extern IBOOL S_big_eq(ptr x, ptr y);
@@ -446,6 +451,7 @@ extern ptr *S_get_call_arena(ptr tc);
 /* windows.c */
 extern INT S_getpagesize(void);
 extern ptr S_LastErrorString(void);
+extern HMODULE *S_enum_process_modules(void);
 extern void *S_ntdlopen(const char *path);
 extern void *S_ntdlsym(void *h, const char *s);
 extern ptr S_ntdlerror(void);
@@ -478,6 +484,9 @@ IBOOL S_random_state_check(double x10, double x11, double x12,
 extern void S_ffi_call(ptr types, ptr proc, ptr *stack);
 extern ptr S_ffi_closure(ptr types, ptr proc);
 #endif
+
+/* self-exe.c */
+extern char *S_get_process_executable_path(const char *execpath);
 
 /* statics.c */
 extern void scheme_statics(void);

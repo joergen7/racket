@@ -271,6 +271,9 @@ WINDRES=windres
 DLLTOOL=dlltool
 
 PREFLAGS="$CPPFLAGS"
+if test "$CPPFLAGS_ADD" != "" ; then
+   PREFLAGS="$PREFLAGS $CPPFLAGS_ADD"
+fi
 COPY_NEW_CFLAGS_TO_CPPFLAGS=yes
 
 OWN_LIBFFI="ON"
@@ -434,6 +437,8 @@ if test "$ARFLAGS" = '' ; then
 fi
 SUB_CONFIGURE_EXTRAS="${SUB_CONFIGURE_EXTRAS} AR_FLAGS="'"'"${ARFLAGS}"'"'
 
+m4_include(../ac/add_c_flags.m4)
+
 is_gmake=`make -v no-such-target-we-hope 2>&1 | grep "GNU Make"`
 
 m4_include(../ac/is_gcc.m4)
@@ -546,8 +551,8 @@ case "$host_os" in
     ;;
   netbsd*)
     LIBS="$LIBS -rdynamic"
-    skip_curses_check=yes
-    add_curses_lib="/usr/pkg/lib/libncurses.a"
+    skip_iconv_check=yes
+    add_curses_lib="-lterminfo"
     default_post_linker="paxctl +m"
     ;;
   irix*)
@@ -612,6 +617,7 @@ case "$host_os" in
     skip_curses_check=yes
     MZOPTIONS="$MZOPTIONS -fno-omit-frame-pointer" # to make JIT backtraces work
     MINGW="t"
+    WXVARIANT="wx_win"
     MZINSTALLTARGET=mingw-install
     MZINSTALLBINDIR="${MZINSTALLBINDIR}/.."
     EXE_SUFFIX=".exe"
@@ -1492,3 +1498,5 @@ AC_OUTPUT($makefiles)
 # cd rktio; eval "${abssrcdir}/../rktio/configure ${keep_configure_args} ${SUB_CONFIGURE_EXTRAS}"
 
 cp ${srcdir}/buildmain.zuo main.zuo
+
+show_path_results

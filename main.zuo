@@ -133,7 +133,10 @@
        (shell/wait "git checkout -q" branch
                    (hash 'dir pb-dir))]
       [(eq? step 'build)
-       (define scheme (find-executable-path "scheme"))
+       (define scheme (let ([s (lookup 'SCHEME)])
+                        (if (equal? s "")
+                            (find-executable-path "scheme")
+                            s)))
        (cond
          [scheme
           (define reboot (dynamic-require "racket/src/ChezScheme/s/reboot.zuo" 'reboot))
@@ -162,7 +165,7 @@
     (define prefix (hash-ref options 'prefix #f))
     (define targets
       (configured-targets-at (hash
-                              'configure (if (eq? 'windows (system-type))
+                              'configure (if (eq? 'windows (hash-ref (runtime-env) 'toolchain-type))
                                              (at-source "racket/src" subdir "winfig.bat")
                                              (at-source "racket/src" subdir "configure"))
                               'inputs (list (at-source "racket/src" subdir "Makefile.in"))
@@ -184,7 +187,8 @@
                                                   '("--enable-bcdefault")]
                                                  [else '()])
                                                (cond
-                                                 [(eq? 'windows (system-type)) '()]
+                                                 [(eq? 'windows (hash-ref (runtime-env) 'toolchain-type))
+						  '()]
                                                  [prefix (list (~a "--prefix=" prefix)
                                                                "--enable-macprefix")]
                                                  [else '("--disable-useprefix"
@@ -218,6 +222,7 @@
                                      ;; Propagate `RACKET` and similar if specified
                                      'RACKET (get-provided-racket)
                                      'BOOTFILE_RACKET (lookup 'BOOTFILE_RACKET)
+                                     'SCHEME (lookup 'SCHEME)
                                      'SCHEME_DIR (let ([s (lookup 'CS_HOST_WORKAREA_PREFIX)])
                                                    (if (equal? s "")
                                                        ""
@@ -304,7 +309,7 @@
   (define (maybe-fetch vm)
     (when (eq? vm 'cs)
       (when (andmap (lambda (key) (equal? (lookup key) ""))
-                    '(RACKET PLAIN_RACKET SCHEME SCHEME_DIR))
+                    '(RACKET BOOTFILE_RACKET PLAIN_RACKET SCHEME SCHEME_DIR))
         (pb-manage 'fetch))))
 
   (define (base token vm [options (hash)])
@@ -350,6 +355,10 @@
   (define (as-is token vm)
     (check-mode "in-place")
     (base token vm)
+    (racket (find-racket vm)
+            (list "-U" "-G" (path-only build-config.rktd)
+                  (at-source "racket/src/pkgs-config.rkt")
+                  "--maybe-update-stamp"))
     (setup vm))
 
   (define (in-place token vm [also? #f] [setup-extra-args ""])
@@ -383,17 +392,21 @@
                   "-l-" "pkg/dirs-catalog"
                   "--link" "--check-metadata" "--immediate"
                   (at-source "racket/share/pkgs-catalog")
-                  (at-source "pkgs")
-                  (at-source "racket/src/expander")
-                  (at-source "racket/src/zuo/zuo-doc")))
+                  (local-pkg-dirs)))
     (racket vars
             (list "-U" "-G" (path-only build-config.rktd)
                   (at-source "racket/src/pkgs-config.rkt")
+                  "--pkgs-catalog"
                   default-src-catalog
                   (lookup 'SRC_CATALOG)))
     (racket vars
             (at-source "racket/src/pkgs-check.rkt")
             (at-source "racket/share/pkgs-catalog")))
+
+  (define (local-pkg-dirs)
+    (list (at-source "pkgs")
+          (at-source "racket/src/expander")
+          (at-source "racket/src/zuo/zuo-doc")))
 
   ;; ------------------------------------------------------------
   ;; Distribution builds: server
@@ -448,18 +461,27 @@
   (define (server-from-base token [options-in (hash)])
     (check-mode "server")
     (make-build/site.rkt)
-    (update-stamp.txt)
-
     (define options (add-server-compile-machine options-in))
+    (update-stamp.txt options)
 
     ;; Create a copy of `SRC_CATALOG', so that we snapshot checksums, and
     ;; start building from it. The packages are installed in user scope,
     ;; but we set the add-on directory to "build/user", so that we don't
     ;; affect the actual current user's installation (and to a large degree
-    ;; we're insulated from it)
+    ;; we're insulated from it). Before using `SRC_CATALOG`, though, use
+    ;; packages that are part of the main repo in preference to entries
+    ;; in the catalog.
     (rm* "build/user")
+    (define link-catalog "build/link-catalog")
+    (rm* link-catalog)
+    (built-racket options
+                  "-l-" "pkg/dirs-catalog" "--immediate"
+                  link-catalog
+                  (local-pkg-dirs))
     (rm* "build/catalog-copy")
-    (built-raco options "pkg" "catalog-copy" (lookup 'SRC_CATALOG) "build/catalog-copy")
+    (built-raco options "pkg" "catalog-copy"
+                link-catalog (lookup 'SRC_CATALOG)
+                "build/catalog-copy")
     (server-cache-config options)
     (built-raco options "pkg" "install" "--all-platforms" source-user-auto
                 required-pkgs
@@ -506,26 +528,25 @@
                            "(machine)")
                        build/site.rkt)))
   
-  (define (update-stamp.txt)
+  (define (update-stamp.txt options)
     (define given-stamp (lookup 'BUILD_STAMP))
     (define stamp
       (cond
         [(not (equal? given-stamp ""))
          given-stamp]
         [else
-         (define (shell-result . cmds)
-           (define p (shell cmds (hash 'stdout 'pipe)))
-           (define r (fd-read (hash-ref p 'stdout) eof))
-           (process-wait (hash-ref p 'process))
-           (unless (= 0 (process-status (hash-ref p 'process)))
-             (error "failed" cmds))
-           (car (string-split r "\n")))
-         (~a
-          (shell-result "date" (string->shell "+%Y%m%d"))
-          (if (directory-exists? (at-source ".git"))
-              (~a "-"
-                  (shell-result "git log -1 --pretty=format:%h"))
-              ""))]))
+         (define cmds
+           (list (find-built-racket options)
+                 (at-source "racket/src/pkgs-config.rkt")
+                 "--display-auto-stamp"))
+         (define p
+           (apply racket/process (append cmds (list (hash 'stdout 'pipe)))))
+         (define r
+           (fd-read (hash-ref p 'stdout) eof))
+         (process-wait (hash-ref p 'process))
+         (unless (= 0 (process-status (hash-ref p 'process)))
+           (error "failed" cmds))
+         (car (string-split r "\n"))]))
     (display-to-file (~a stamp "\n") (at-source "build/stamp.txt") :truncate))
 
   (define (server-cache-config options)

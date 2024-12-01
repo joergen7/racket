@@ -23,8 +23,13 @@
 (test #f malloc 0 _int)
 (test #f malloc _int 0)
 
+(test 0 ptr-ref (malloc 100 'zeroed-atomic) _int 10)
+(test 0 ptr-ref (malloc 100 'zeroed-atomic-interior) _int 10)
+
 (unless (eq? 'cs (system-type 'gc))
   (test 0 bytes-length (make-sized-byte-string #f 0)))
+
+(err/rt-test (malloc 'atomic) exn:fail:contract? #rx"no size given")
 
 ;; Check integer-range checking:
 (let ()
@@ -1409,6 +1414,13 @@
   (test #t ctype? (_vector o _int 10))
   (test #t ctype? (_vector io _int 10)))
 
+(test #t ctype? (_ptr i _int atomic))
+(test #t ctype? (_ptr i _int zeroed-atomic))
+(test #t ctype? (_ptr i _int atomic-interior))
+(test #t ctype? (_ptr i _int zeroed-atomic-interior))
+
+(syntax-test #'(_ptr i _int magic))
+
 ;; ----------------------------------------
 
 (define-cpointer-type _foo)
@@ -1531,7 +1543,7 @@
     (go (- (expt 2 63)) (- 256 (expt 2 63))))
 
   (let ()
-    (define p (cast bstr _pointer _pointer))
+    (define p (malloc 10 'atomic-interior))
     (for ([i (in-range 100)])
       (ptr-set! bstr _pointer (ptr-add p i))
       (ptr-set! bstr _pointer 2 p)
@@ -1610,16 +1622,34 @@
 ;; ----------------------------------------
 
 (let ()
-  (unless (eq? (system-type) 'windows)
-    (define-ffi-definer define-test-lib test-lib
-      #:make-c-id convention:hyphen->underscore)
-    (define-test-lib check-multiple-of-ten
-      (_fun #:save-errno 'posix _int -> _int))
-    (test 0 check-multiple-of-ten 40)
-    (test -1 check-multiple-of-ten 42)
-    (test 2 saved-errno)
-    (saved-errno 5)
-    (test 5 saved-errno)))
+  (define-ffi-definer define-test-lib test-lib
+    #:make-c-id convention:hyphen->underscore)
+  (define-test-lib underscore-variable (_fun -> _void))
+  (test (void) underscore-variable))
+
+(let ()
+  (define-ffi-definer define-test-lib test-lib
+    #:make-c-id convention:hyphen->camelCase)
+  (define-test-lib camel-case-variable (_fun -> _void))
+  (test (void) camel-case-variable)
+  (define-test-lib cAmeL-CAsE-vaRiaBlE (_fun -> _void))
+  (test (void) cAmeL-CAsE-vaRiaBlE))
+
+(let ()
+  (define-ffi-definer define-test-lib test-lib
+    #:make-c-id convention:hyphen->PascalCase)
+  (define-test-lib pascal-case-variable (_fun -> _void))
+  (test (void) pascal-case-variable)
+  (define-test-lib paSCaL-CAsE-vaRiaBlE (_fun -> _void))
+  (test (void) paSCaL-CAsE-vaRiaBlE))
+
+(let ()
+  (define-ffi-definer define-test-lib test-lib
+    #:make-c-id convention:hyphen->camelcase)
+  (define-test-lib pascal-case-variable (_fun -> _void))
+  (test (void) pascal-case-variable)
+  (define-test-lib paSCaL-CAsE-vaRiaBlE (_fun -> _void))
+  (test (void) paSCaL-CAsE-vaRiaBlE))
 
 (let ()
   (define-ffi-definer define-test-lib test-lib)

@@ -285,7 +285,10 @@
 
     (test f f f2)
     (test f2 f2 f2)
-    (test f2 f f)))
+    (test f2 f f))
+
+  (close-input-port f)
+  (close-output-port f2))
 
 ;; system* ------------------------------------------------------
 
@@ -342,6 +345,7 @@
 ;; empty strings and nul checks ------------------------------------------------------
 
 (err/rt-test (subprocess #f #f #f ""))
+(err/rt-test (subprocess #f #f #f 42) exn:fail:contract? #rx"42")
 (err/rt-test (process* ""))
 (err/rt-test (system* ""))
 
@@ -675,8 +679,26 @@
   (try-arg "a\\\\\\\\\"b" "a\\\\b")
   (try-arg "a\\\\\\\\\\\"b" "a\\\\\"b"))
 
+(unless (eq? 'windows (system-type))
+  (err/rt-test (subprocess #f #f #f "anything" 'exact "make sure this is disallowed")
+               exn:fail:contract?
+               #rx"exact command line not supported"))
+
+(err/rt-test (subprocess #f #f #f "anything" 'exact) ;; missing argument after `'exact`
+             exn:fail:contract?)
+(err/rt-test (subprocess #f #f #f "anything" 'exact "a" "b") ;; multiple arguments after `'exact`
+             exn:fail:contract?)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; check file-descriptor sharing
+
+;; This test includes the questionable action of creating a bad file
+;; descriptor and expecting the OS to tell us that it's bad (implicit
+;; in `read-char`). As of Mac OS 13.2 Ventura, the select() system
+;; call only complains about bad file descriptors up to number 24; if
+;; a bad 25 or up is supplied, it select() seems to ignore bad
+;; descriptors. So, take care that this test is not run with too many
+;; unclosed ports.
 
 (define (check-sharing keep-mode)
   (define fn (make-temporary-file))
@@ -711,7 +733,7 @@
 
   (list ok? (get-output-bytes o) (regexp-match? #rx"error reading" (get-output-bytes e))))
 
-(unless (eq? 'windows (system-type))
+(unless 'closes-all-cloexec-and-uninherited ; we don't have a predicate for platforms without O_CLOEXEC
   (test '(#t #"y\n1\n" #f) check-sharing 'all))
 (test '(#f #"y\n" #t) check-sharing 'inherited)
 (test '(#f #"y\n" #t) check-sharing '())

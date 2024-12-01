@@ -387,10 +387,14 @@ static void do_error(iptr type, const char *who, const char *s, ptr args) {
                        Scons(Sstring_utf8(s, -1), args)));
 
 #ifdef PTHREADS
-    while (S_mutex_is_owner(&S_alloc_mutex))
+    while (S_mutex_is_owner(&S_alloc_mutex) && (S_alloc_mutex_depth > 0)) {
+      S_alloc_mutex_depth -= 1;
       S_mutex_release(&S_alloc_mutex);
-    while (S_mutex_is_owner(&S_tc_mutex))
+    }
+    while (S_mutex_is_owner(&S_tc_mutex) && (S_tc_mutex_depth > 0)) {
+      S_tc_mutex_depth -= 1;
       S_mutex_release(&S_tc_mutex);
+    }
 #endif /* PTHREADS */
 
     /* in case error is during fasl read: */
@@ -564,7 +568,7 @@ static BOOL WINAPI handle_signal(DWORD dwCtrlType) {
     case CTRL_BREAK_EVENT: {
 #ifdef PTHREADS
      /* get_thread_context() always returns 0, so assume main thread */
-      ptr tc = S_G.thread_context;
+      ptr tc = TO_PTR(S_G.thread_context);
 #else
       ptr tc = get_thread_context();
 #endif
@@ -662,6 +666,16 @@ ptr S_dequeue_scheme_signals(ptr tc) {
 static void forward_signal_to_scheme(INT sig) {
   ptr tc = get_thread_context();
 
+#ifdef PTHREADS
+  /* deliver signals to the main thread, only; depending
+     on the threads that are running, `tc` might even be NULL */
+  if (tc != TO_PTR(&S_G.thread_context)) {
+    pthread_kill(S_main_thread_id, sig);
+    RESET_SIGNAL
+    return;
+  }
+#endif
+
   if (enqueue_scheme_signal(tc, sig)) {
     SIGNALINTERRUPTPENDING(tc) = Strue;
     SOMETHINGPENDING(tc) = Strue;
@@ -725,13 +739,16 @@ static void handle_signal(INT sig, UNUSED siginfo_t *si, UNUSED void *data) {
         case SIGQUIT:
             RESET_SIGNAL
             S_abnormal_exit();
+	    break;	/* Pacify compilers treating fallthrough warnings as errors */
 #endif /* SIGQUIT */
         case SIGILL:
             RESET_SIGNAL
             S_error_reset("illegal instruction");
+	    break;	/* Pacify compilers treating fallthrough warnings as errors */
         case SIGFPE:
             RESET_SIGNAL
             S_error_reset("arithmetic overflow");
+	    break;	/* Pacify compilers treating fallthrough warnings as errors */
 #ifdef SIGBUS
         case SIGBUS:
 #endif /* SIGBUS */
@@ -744,9 +761,11 @@ static void handle_signal(INT sig, UNUSED siginfo_t *si, UNUSED void *data) {
             else
                 S_error_reset("invalid memory reference");
           }
+	    break;
         default:
             RESET_SIGNAL
             S_error_reset("unexpected signal");
+	    break;
     }
 }
 

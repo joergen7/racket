@@ -33,6 +33,7 @@
 
 #lang racket/base
 (require setup/cross-system
+         (submod compiler/private/collects-path set-executable-tag)
          racket/file
          racket/list)
 
@@ -43,6 +44,8 @@
 (define (get-arg)
   (when (null? args) (error "insufficient arguments"))
   (begin0 (car args) (set! args (cdr args))))
+(define (maybe-get-arg)
+  (and (pair? args) (get-arg)))
 
 (define op (string->symbol (get-arg)))
 (define adjust-mode
@@ -174,7 +177,7 @@
             [(link-exists? src)
              (make-file-or-directory-link (resolve-path src) dst)]
             [(directory-exists? src)
-             (make-directory dst)
+             (make-directory* dst) ; `*` to support merging instead of only replacing
              (if build-path?
                  (for-each (lambda (p) (loop (make-path src p) (make-path dst p)))
                            (parameterize ([current-directory src])
@@ -223,24 +226,14 @@
 
 (define (fix-executable file #:ignore-non-executable? [ignore-non-executable? #f])
   (define (fix-binary file)
-    (define (fix-one tag dir)
-      (let-values ([(i o) (open-input-output-file file #:exists 'update)])
-        (cond
-          [(regexp-match-positions tag i)
-           => (lambda (m)
-                (file-position o (cdar m))
-                (display dir o)
-                (write-byte 0 o)
-                (write-byte 0 o))]
-          [else
-           (unless ignore-non-executable?
-             (error
-              (format "could not find collection-path label in executable: ~a"
-                      file)))])
-        (close-input-port i)
-        (close-output-port o)))
-    (fix-one #rx#"coLLECTs dIRECTORy:" (dir: 'collects))
-    (fix-one #rx#"coNFIg dIRECTORy:" (dir: 'config)))
+    (define (fix-one tag desc dir)
+      (set-executable-tag 'unixstyle-install tag desc file ignore-non-executable? dir
+                          (path->bytes
+                           (if (string? dir)
+                               (string->path dir)
+                               dir))))
+    (fix-one #rx#"coLLECTs dIRECTORy:" "collects" (dir: 'collects))
+    (fix-one #rx#"coNFIg dIRECTORy:" "config" (dir: 'config)))
   (define (fix-script file)
     (let* ([size (file-size file)]
            [buf (with-input-from-file file (lambda () (read-bytes size)))]
@@ -265,8 +258,11 @@
                                                            #""
                                                            r))))])
     (cond [(or (regexp-match #rx#"^\177ELF" magic)
+               ;; Mach-O magic numbers for LE/BE, 32/64-bit
                (regexp-match #rx#"^\316\372\355\376" magic)
-               (regexp-match #rx#"^\317\372\355\376" magic))
+               (regexp-match #rx#"^\317\372\355\376" magic)
+               (regexp-match #rx#"^\376\355\372\316" magic)
+               (regexp-match #rx#"^\376\355\372\317" magic))
            (let ([temp (format "~a-temp-for-install"
                                (regexp-replace* #rx"/" file "_"))])
              (with-handlers ([exn? (lambda (e) (rm temp) (raise e))])
@@ -329,7 +325,19 @@
      (lambda (o)
        (fprintf o "(\n")
        (for ([e (in-list entries)])
-         (define p (cadr e))
+         (define p (let ([p (cadr e)])
+                     ;; normalize to string form, which assumes that we get here
+                     ;; only for a Unix filesystem and with string-friendly
+                     ;; package paths
+                     (cond
+                       [(string? p) p]
+                       [(bytes? p) (path->string (bytes->path p))]
+                       [else (path->string
+                              (apply build-path
+                                     (for/list ([pe (in-list p)])
+                                       (if (bytes? pe)
+                                           (bytes->path-element pe)
+                                           pe))))])))
          (fprintf o " ")
          (define m (regexp-match #rx"^pkgs/(.*)$" p))
          (write
@@ -401,10 +409,6 @@
       (printf "\n# Remove this script\n")
       (printf "exec rm \"$0\"\n")))
   (run "chmod" "+x" uninstaller))
-
-;; we need a namespace to compile the new config, grab it now, before the
-;; collection tree moves (otherwise it won't find the `scheme' collection)
-(define base-ns (make-base-namespace))
 
 (define write-config
   (case-lambda
@@ -479,12 +483,13 @@
 
 (define ((move/copy-tree move?) src dst*
                                 #:missing [missing 'error]
-                                #:build-path? [build-path? #f])
+                                #:build-path? [build-path? #f]
+                                #:merge? [merge? #f])
   (define skip-filter (current-skip-filter))
   (define dst (if (symbol? dst*) (dir: dst*) dst*))
   (define src-exists?
     (or (directory-exists? src) (file-exists? src) (link-exists? src)))
-  (printf "~aing ~a -> ~a\n" (if move? "Mov" "Copy") src dst)
+  (printf "~aing~a ~a -> ~a\n" (if move? "Mov" "Copy") (if merge? " with merge" "") src dst)
   (cond
     [src-exists?
      (make-dir* (dirname dst))
@@ -498,11 +503,12 @@
              [dst-f? (file-exists? dst)])
          (unless (skip-filter src)
            (when (and src-d? (not lvl) (not dst-d?))
-             (when (or dst-l? dst-f?) (ask-overwrite "file or link" dst))
+             (unless merge?
+               (when (or dst-l? dst-f?) (ask-overwrite "file or link" dst)))
              (make-directory dst)
              (register-change! 'md dst)
              (set! dst-d? #t) (set! dst-l? #f) (set! dst-f? #f))
-           (cond [dst-l? (ask-overwrite "symlink" dst) (doit)]
+           (cond [dst-l? (unless merge? (ask-overwrite "symlink" dst)) (doit)]
                  [dst-d? (if (and src-d? (or (not lvl) (< 0 lvl)))
                            ;; recur only when source is dir, & not too deep
                            (for-each (lambda (name)
@@ -510,8 +516,8 @@
                                              (make-path dst name)
                                              (and lvl (sub1 lvl))))
                                      (ls src))
-                           (begin (ask-overwrite "dir" dst) (doit)))]
-                 [dst-f? (ask-overwrite "file" dst) (doit)]
+                           (begin (unless merge? (ask-overwrite "dir" dst)) (doit)))]
+                 [dst-f? (unless merge? (ask-overwrite "file" dst)) (doit)]
                  [else (doit)]))))
      (when move? (remove-empty-dirs src))]
     [(eq? missing 'error)
@@ -584,7 +590,9 @@
 
 (define (make-install-copytree)
   (define copytree (move/copy-tree #f))
+  (define (maybe-complete-path p) (and p (path->complete-path p)))
   (define origtree? (equal? "yes" (get-arg)))
+  (define prepared-dir (maybe-complete-path (maybe-get-arg))) ; "collects" root and "doc" parent
   (current-directory rktdir)
   (skip-dot-files!)
   (with-handlers ([exn? (lambda (e) (undo-changes) (raise e))])
@@ -597,6 +605,13 @@
     (copytree "etc"      'config   #:missing 'skip)
     (unless (equal-path? (dir: 'pkgs) (build-path (dir: 'sharerkt) "pkgs"))
       (fix-pkg-links (dir: 'sharerkt) (dir: 'pkgs)))
+    (when prepared-dir
+      (parameterize ([current-directory (reroot-path (current-directory)
+                                                     prepared-dir)])
+        (copytree "collects" 'collects #:missing 'skip #:merge? #t)
+        (copytree (make-path "share" "pkgs") 'pkgs #:missing 'skip #:merge? #t))
+      (parameterize ([current-directory prepared-dir])
+        (copytree "doc" 'doc #:missing 'skip #:merge? #t)))
     (unless origtree? (write-config))))
 
 (define (remove-dest destdir p)

@@ -38,8 +38,10 @@
                            equal?
                            vector? mutable-vector? vector-length vector-ref vector-set!
                            vector-copy vector-fill! vector->immutable-vector vector->list
+                           vector-append vector-set/copy
+                           immutable-vector?
                            random random-seed
-                           box? unbox set-box!
+                           box? unbox set-box! immutable-box? mutable-box?
 			   get-thread-id
 			   threaded?
                            map for-each andmap ormap
@@ -51,6 +53,7 @@
                            bitwise-not
                            fllog flatan
                            fxquotient
+                           expt
                            make-flvector flvector-copy
                            vector->pseudo-random-generator
                            vector->pseudo-random-generator!)

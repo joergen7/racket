@@ -21,6 +21,7 @@
          module-path-index-resolve
          module-path-index-fresh
          module-path-index-join
+         module-path-index-join*
          module-path-index-split
          module-path-index-submodule
          make-self-module-path-index
@@ -28,10 +29,12 @@
          imitate-generic-module-path-index!
          module-path-index-shift
          module-path-index-resolved ; returns #f if not yet resolved
+         module-path-index-shift/resolved
 
          top-level-module-path-index
          top-level-module-path-index?
          non-self-module-path-index?
+         non-self-derived-module-path-index?
 
          inside-module-context?
 
@@ -208,7 +211,7 @@
 ;; must be shared across phases of a module
 (define deserialize-module-path-index
   (case-lambda
-    [(path base) (module-path-index-join path base)]
+    [(path base) (module-path-index-join* path base)]
     [(name) (make-self-module-path-index (make-resolved-module-path name))]
     [() top-level-module-path-index]))
 
@@ -239,7 +242,7 @@
 
 (define (module-path-index-fresh mpi)
   (define-values (path base) (module-path-index-split mpi))
-  (module-path-index-join path base))
+  (module-path-index-join* path base))
 
 (define/who (module-path-index-join mod-path base [submod #f])
   (check who #:or-false module-path? mod-path)
@@ -267,16 +270,20 @@
     (make-self-module-path-index (make-resolved-module-path
                                   (cons generic-module-name submod)))]
    [else
-    (define keep-base
-      (let loop ([mod-path mod-path])
-        (cond
-         [(path? mod-path) #f]
-         [(and (pair? mod-path) (eq? 'quote (car mod-path))) #f]
-         [(symbol? mod-path) #f]
-         [(and (pair? mod-path) (eq? 'submod (car mod-path)))
-          (loop (cadr mod-path))]
-         [else base])))
-    (module-path-index mod-path keep-base #f empty-shift-cache)]))
+    (module-path-index-join* mod-path base)]))
+
+(define (module-path-index-join* mod-path base)
+  (define keep-base
+    (let loop ([mod-path mod-path])
+      (cond
+        [(path? mod-path) #f]
+        [(and (pair? mod-path) (eq? 'quote (car mod-path))) #f]
+        [(symbol? mod-path) #f]
+        [(and (pair? mod-path) (eq? 'lib (car mod-path))) #f]
+        [(and (pair? mod-path) (eq? 'submod (car mod-path)))
+         (loop (cadr mod-path))]
+        [else base])))
+  (module-path-index mod-path keep-base #f empty-shift-cache))
 
 (define (module-path-index-resolve/maybe base load?)
   (if (module-path-index? base)
@@ -342,30 +349,61 @@
 ;; Mutate the resolved path in `mpi` to use the root module name of a
 ;; generic module path index, which means that future
 ;; `free-identifier=?` comparisons with the generic module path index
-;; will succeed
+;; will succeed<
 (define (imitate-generic-module-path-index! mpi)
   (define r (module-path-index-resolved mpi))
   (when r
     (set-module-path-index-resolved! mpi
                                      (resolved-module-path-to-generic-resolved-module-path r))))
 
-(define (module-path-index-shift mpi from-mpi to-mpi)
+(define (module-path-index-shift* mpi from-mpi to-mpi freshen-cache)
   (cond
    [(eq? mpi from-mpi) to-mpi]
    [else
     (define base (module-path-index-base mpi))
-    (cond
-     [(not base) mpi]
-     [else
-      (define shifted-base (module-path-index-shift base from-mpi to-mpi))
+    (define result-mpi
       (cond
-       [(eq? shifted-base base) mpi]
-       [(shift-cache-ref (module-path-index-shift-cache shifted-base) mpi)]
-       [else
-        (define shifted-mpi
-          (module-path-index (module-path-index-path mpi) shifted-base #f empty-shift-cache))
-        (shift-cache-set! shifted-base shifted-mpi)
-        shifted-mpi])])]))
+        [(not base) mpi]
+        [else
+         (define shifted-base (module-path-index-shift* base from-mpi to-mpi freshen-cache))
+         (cond
+           [(eq? shifted-base base) mpi]
+           [(shift-cache-ref (module-path-index-shift-cache shifted-base) mpi)]
+           [else
+            (define shifted-mpi
+              (module-path-index-join* (module-path-index-path mpi) shifted-base))
+            (shift-cache-set! shifted-base shifted-mpi)
+            shifted-mpi])]))
+    (when (and freshen-cache
+               (not (hash-ref freshen-cache result-mpi #f)))
+      ;; Create a fresh mpi, but return `result-mpi` to take advantage
+      ;; of its caching, instead of re-caching the shift at `fresh-mpi`
+      (define result-base (module-path-index-base result-mpi))
+      (define fresh-base (hash-ref freshen-cache result-base #f))
+      (define fresh-mpi
+        (module-path-index (module-path-index-path result-mpi)
+                           (or fresh-base result-base)
+                           #f
+                           empty-shift-cache))
+      (when fresh-base
+        (shift-cache-set! fresh-base fresh-mpi))
+      (hash-set! freshen-cache result-mpi fresh-mpi))
+    result-mpi]))
+
+(define (module-path-index-shift mpi from-mpi to-mpi)
+  (module-path-index-shift* mpi from-mpi to-mpi #f))
+
+;; ensures that the result module-path index is fresh enough, so that
+;; resolving will go through the module name resolver; the `freshen-cache`
+;; hash table ensures that sharing in the original is preserved through
+;; sharing of fresh MPIs
+(define (module-path-index-shift/resolved mpi from-mpi to-mpi freshen-cache rp)
+  (define new-mpi (module-path-index-shift* mpi from-mpi to-mpi freshen-cache))
+  (define fresh-mpi (hash-ref freshen-cache new-mpi))
+  (when rp
+    (unless (module-path-index-resolved fresh-mpi)
+      (set-module-path-index-resolved! fresh-mpi rp)))
+  fresh-mpi)
 
 (define (shift-cache-ref cache mpi)
   (for/or ([wb (in-list cache)])
@@ -403,6 +441,12 @@
 
 (define (non-self-module-path-index? mpi)
   (and (module-path-index-path mpi) #t))
+
+(define (non-self-derived-module-path-index? mpi)
+  (and (non-self-module-path-index? mpi)
+       (let ([base (module-path-index-base mpi)])
+         (or (not base)
+             (non-self-derived-module-path-index? base)))))
 
 (define (inside-module-context? mpi inside-mpi)
   (or (eq? mpi inside-mpi)
@@ -458,7 +502,7 @@
        (error 'core-module-name-resolver
               "not a supported module path: ~v" p)])]))
 
-;; Build a submodule name given an enclosing module name, if cany
+;; Build a submodule name given an enclosing module name, if any
 (define (build-module-name name ; a symbol
                            enclosing ; #f => no enclosing module
                            #:original [orig-name name]) ; for error reporting

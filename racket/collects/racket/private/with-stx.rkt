@@ -35,8 +35,7 @@
                     [heres (map (lambda (x)
                                   (datum->syntax
                                    x
-                                   'here
-                                   x))
+                                   'here))
                                 ins)]
                     [outs (syntax->list (syntax (out ...)))])
                 ;; Let-bind RHSs, then build up nested syntax-cases:
@@ -76,7 +75,7 @@
     (unless (stx-list? sl)
       (raise-argument-error 
        'generate-temporaries
-       "(or/c list? syntax->list)"
+       "stx-list?"
        sl))
     (let ([l (stx->list sl)])
       (map (lambda (x) 

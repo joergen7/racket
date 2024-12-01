@@ -26,7 +26,7 @@ Documentation notes:
   pairs, and then uses a weak or ephemeron eq hashtable to map the key
   to its value; use the size of the eq hashtable as the generic hashtable's
   size
-- an eqv hashtabble pairs an eq hashtable and an generic hashtable
+- an eqv hashtable pairs an eq hashtable and an generic hashtable
 |#
 
 #|
@@ -94,7 +94,7 @@ Documentation notes:
 ;;; eqv-hashtable operators
 (define make-weak-eqv-hashtable)         ; [k], k >= 0
   
-;;; unsafe eq-hashtable operators
+;;; unsafe hashtable operators
 (define $make-eq-hashtable)              ; fxminlen subtype, fxminlen = 2^n, n >= 0
 (define $eq-hashtable-keys)              ; eq-hashtable
 (define $eq-hashtable-values)            ; eq-hashtable
@@ -102,6 +102,7 @@ Documentation notes:
 (define $eq-hashtable-cells)             ; eq-hashtable
 (define $eq-hashtable-copy)              ; eq-hashtable [mutableflag]
 (define $eq-hashtable-clear!)            ; eq-hashtable [fxminlen]
+(define $hashtable-cells)                ; hashtable [fxminlen]
 
 ;;; inspection
 (define $hashtable-veclen)
@@ -818,8 +819,8 @@ Documentation notes:
     (set-who! symbol-hashtable-ref-cell
       (lambda (h x)
         (unless (symbol-ht? h) ($oops who "~s is not a symbol hashtable" h))
-        (unless (symbol? x) ($oops who "~s is not a symbol" x))
         (unless (xht-mutable? h) ($oops who "~s is not mutable" h))
+        (unless (symbol? x) ($oops who "~s is not a symbol" x))
         (#3%symbol-hashtable-ref-cell h x)))
 
   (set-who! symbol-hashtable-contains?
@@ -831,15 +832,15 @@ Documentation notes:
   (set-who! symbol-hashtable-set!
     (lambda (h x v)
       (unless (symbol-ht? h) ($oops who "~s is not a symbol hashtable" h))
-      (unless (symbol? x) ($oops who "~s is not a symbol" x))
       (unless (xht-mutable? h) ($oops who "~s is not mutable" h))
+      (unless (symbol? x) ($oops who "~s is not a symbol" x))
       (#3%symbol-hashtable-set! h x v)))
 
   (set-who! symbol-hashtable-update!
     (lambda (h x p v)
       (unless (symbol-ht? h) ($oops who "~s is not a symbol hashtable" h))
-      (unless (symbol? x) ($oops who "~s is not a symbol" x))
       (unless (xht-mutable? h) ($oops who "~s is not mutable" h))
+      (unless (symbol? x) ($oops who "~s is not a symbol" x))
       (unless (procedure? p)
         ($oops who "~s is not a procedure" p))
       (#3%symbol-hashtable-update! h x p v)))
@@ -847,15 +848,15 @@ Documentation notes:
   (set-who! symbol-hashtable-cell
     (lambda (h x v)
       (unless (symbol-ht? h) ($oops who "~s is not a symbol hashtable" h))
-      (unless (symbol? x) ($oops who "~s is not a symbol" x))
       (unless (xht-mutable? h) ($oops who "~s is not mutable" h))
+      (unless (symbol? x) ($oops who "~s is not a symbol" x))
       (#3%symbol-hashtable-cell h x v)))
 
   (set-who! symbol-hashtable-delete!
     (lambda (h x)
       (unless (symbol-ht? h) ($oops who "~s is not a symbol hashtable" h))
-      (unless (symbol? x) ($oops who "~s is not a symbol" x))
       (unless (xht-mutable? h) ($oops who "~s is not mutable" h))
+      (unless (symbol? x) ($oops who "~s is not a symbol" x))
       (#3%symbol-hashtable-delete! h x)))
 
   (set-who! hashtable-ref
@@ -872,17 +873,16 @@ Documentation notes:
 
   (set-who! hashtable-ref-cell
     (lambda (h x)
-      (define (check-mutable)
-        (unless (xht-mutable? h) ($oops who "~s is not mutable" h)))
       (unless (xht? h)
         ($oops who "~s is not a hashtable" h))
+      (unless (xht-mutable? h) ($oops who "~s is not mutable" h))
       (case (xht-type h)
-        [(eq) (check-mutable) (#3%eq-hashtable-ref-cell h x)]
+        [(eq) (#3%eq-hashtable-ref-cell h x)]
         [(symbol)
          (unless (symbol? x) ($oops 'symbol-hash "~s is not a symbol" x))
          (#3%symbol-hashtable-ref-cell h x)]
-        [(eqv) (check-mutable) ($eqv-hashtable-ref-cell h x who)]
-        [else (check-mutable) ($gen-hashtable-ref-cell h x who)])))
+        [(eqv) ($eqv-hashtable-ref-cell h x who)]
+        [else ($gen-hashtable-ref-cell h x who)])))
 
   (set-who! hashtable-contains?
     (lambda (h x)
@@ -928,18 +928,16 @@ Documentation notes:
 
   (set-who! hashtable-cell
     (lambda (h x v)
-      (define (check-mutable)
-        (unless (xht-mutable? h) ($oops who "~s is not mutable" h)))
       (unless (xht? h)
         ($oops who "~s is not a hashtable" h))
+      (unless (xht-mutable? h) ($oops who "~s is not mutable" h))
       (case (xht-type h)
-        [(eq) (check-mutable) (#3%eq-hashtable-cell h x v)]
+        [(eq) (#3%eq-hashtable-cell h x v)]
         [(symbol)
          (unless (symbol? x) ($oops 'symbol-hash "~s is not a symbol" x))
-         (check-mutable)
          (#3%symbol-hashtable-cell h x v)]
-        [(eqv) (check-mutable) ($eqv-hashtable-cell h x v who)]
-        [else (check-mutable) ($gen-hashtable-cell h x v who)])))
+        [(eqv) ($eqv-hashtable-cell h x v who)]
+        [else ($gen-hashtable-cell h x v who)])))
 
   (set-who! hashtable-delete!
     (lambda (h x)
@@ -1065,7 +1063,7 @@ Documentation notes:
           [(generic) ($gen-hashtable-entries h (most-positive-fixnum))]
           [else ($ht-hashtable-entries h (most-positive-fixnum))])))
 
-    (set-who! hashtable-cells
+    (set-who! $hashtable-cells
       (hashtable-content-dispatch who
                                   $eq-hashtable-cells
                                   $eqv-hashtable-cells

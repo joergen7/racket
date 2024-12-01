@@ -906,6 +906,16 @@
                                 (make-if ctxt sc e11 (non-result-exp e12 e2) (non-result-exp e13 e3)))])))
                   #f)]
              [else #f])]
+          [(nanopass-case (Lsrc Expr) (result-exp e1)
+             [(call ,preinfo ,e10 ,e11 ,e12)
+              (guard (and (primref? e10) (memq (primref-name e10) '(eq? eqv?))))
+              (if (and (or (and (record-equal? e11 e2 'value) (record-equal? e12 e3 'value))
+                           (and (record-equal? e11 e3 'value) (record-equal? e12 e2 'value)))
+                       (simple? e2)
+                       (simple? e3))
+                  (non-result-exp e1 (make-1seq ctxt e2 e3))
+                  #f)]
+             [else #f])]
           [else
            (bump sc 1)
            `(if ,e1 ,e2 ,e3)])))
@@ -1068,6 +1078,8 @@
                            `(record ,rtd ,rtd-expr ,e* ...)]
                           [(immutable-list (,[e*] ...) ,[e])
                            `(immutable-list (,e* ...) ,e)]
+                          [(immutable-vector (,[e*] ...) ,[e])
+                           `(immutable-vector (,e* ...) ,e)]
                           [(pariah) e]
                           [(profile ,src) e]
                           [else (exit #f)]))))
@@ -1170,6 +1182,7 @@
               [(foreign (,conv* ...) ,name ,e (,arg-type* ...) ,result-type) (memoize (pure? e))]
               [(letrec* ([,x* ,e*] ...) ,body) (memoize (and (andmap pure1? e*) (pure? body)))]
               [(immutable-list (,e* ...) ,e) (memoize (and (andmap pure1? e*) (pure? e)))]
+              [(immutable-vector (,e* ...) ,e) (memoize (and (andmap pure1? e*) (pure? e)))]
               [(profile ,src) #t]
               [(cte-optimization-loc ,box ,e ,exts) (memoize (pure? e))]
               [(moi) #t]
@@ -1234,6 +1247,7 @@
               [(foreign (,conv* ...) ,name ,e (,arg-type* ...) ,result-type) (memoize (ivory1? e))]
               [(letrec* ([,x* ,e*] ...) ,body) (memoize (and (andmap ivory1? e*) (ivory? body)))]
               [(immutable-list (,e* ...) ,e) (memoize (and (andmap ivory1? e*) (ivory? e)))]
+              [(immutable-vector (,e* ...) ,e) (memoize (and (andmap ivory1? e*) (ivory? e)))]
               [(profile ,src) #t]
               [(cte-optimization-loc ,box ,e ,exts) (memoize (ivory? e))]
               [(moi) #t]
@@ -1274,6 +1288,7 @@
               [(seq ,e1 ,e2) (memoize (and (simple? e1) (simple? e2)))]
               [(set! ,maybe-src ,x ,e) #f]
               [(immutable-list (,e* ...) ,e) (memoize (and (andmap simple1? e*) (simple? e)))]
+              [(immutable-vector (,e* ...) ,e) (memoize (and (andmap simple1? e*) (simple? e)))]
               [(letrec ([,x* ,e*] ...) ,body) (memoize (and (andmap simple1? e*) (simple? body)))]
               [(letrec* ([,x* ,e*] ...) ,body) (memoize (and (andmap simple1? e*) (simple? body)))]
               [,pr #t]
@@ -1325,6 +1340,7 @@
               [(seq ,e1 ,e2) (memoize (and (simple/profile? e1) (simple/profile? e2)))]
               [(set! ,maybe-src ,x ,e) #f]
               [(immutable-list (,e* ...) ,e) (memoize (and (andmap simple/profile1? e*) (simple/profile? e)))]
+              [(immutable-vector (,e* ...) ,e) (memoize (and (andmap simple/profile1? e*) (simple/profile? e)))]
               [(letrec ([,x* ,e*] ...) ,body) (memoize (and (andmap simple/profile1? e*) (simple/profile? body)))]
               [(letrec* ([,x* ,e*] ...) ,body) (memoize (and (andmap simple/profile1? e*) (simple/profile? body)))]
               [,pr #t]
@@ -1408,6 +1424,7 @@
               [(record-set! ,rtd ,type ,index ,e1 ,e2) #f]
               [(record ,rtd ,rtd-expr ,e* ...) #f]
               [(immutable-list (,e* ...) ,e) #f]
+              [(immutable-vector (,e* ...) ,e) #f]
               [(cte-optimization-loc ,box ,e ,exts) (memoize (boolean-valued? e))]
               [(profile ,src) #f]
               [(set! ,maybe-src ,x ,e) #f]
@@ -1420,7 +1437,10 @@
       ;; Returns #t, #f, 'value/inspect (single-valued, but may
       ;; inspect continuation), or a prelex for a lambda that needs to
       ;; be single-valued to imply #t. The prelex case is useful to
-      ;; detect a single-valued loop.
+      ;; detect a single-valued loop. When `debug-level` is 2 or more,
+      ;; we treat aborting ops as 'value/inspect instead of #t so that
+      ;; those calls are not moved into tail position (especially after
+      ;; cptypes lifts them into a sequence with `(void)`).
       (define-who single-valued
         (lambda (e)
           (with-memoize () e
@@ -1428,13 +1448,20 @@
             (nanopass-case (Lsrc Expr) e
               [(quote ,d) #t]
               [(call ,preinfo ,e ,e* ...)
-               (or (and (preinfo-call-single-valued? preinfo)
+               (or (and (or (and (preinfo-call-no-return? preinfo)
+                                 (if (fx< (debug-level) 2)
+                                     #t
+                                     'value/inspect))
+                            (preinfo-call-single-valued? preinfo))
                         (not (preinfo-call-check? preinfo)))
                    (let procedure-single-valued ([e e] [e* e*])
                      (nanopass-case (Lsrc Expr) (result-exp e)
                        [,pr
-                        (or (all-set? (prim-mask single-valued) (primref-flags pr))
-                            (all-set? (prim-mask abort-op) (primref-flags pr))
+                        (or (and (all-set? (prim-mask abort-op) (primref-flags pr))
+                                 (if (fx< (debug-level) 2)
+                                     #t
+                                     'value/inspect))
+                            (all-set? (prim-mask single-valued) (primref-flags pr))
                             (and e*
                                  (cond
                                    [(extract-called-procedure pr e*)
@@ -1498,6 +1525,7 @@
               [(seq ,e1 ,e2) (memoize (single-valued e2))]
               [(set! ,maybe-src ,x ,e) #t]
               [(immutable-list (,e* ...) ,e) #t]
+              [(immutable-vector (,e* ...) ,e) #t]
               [(letrec ([,x* ,e*] ...) ,body) (memoize (single-valued body))]
               [(letrec* ([,x* ,e*] ...) ,body) (memoize (single-valued body))]
               [,pr #t]
@@ -1550,6 +1578,8 @@
            ;; conservative assumption for a prelex:
            [else #f])))
 
+      ;; Single-valued and ok to move from non-tail to tail position
+      ;; (because it doesn't inspect the continuation)?
       (define-who single-valued?
         (lambda (e)
           (single-valued-reduce? (single-valued e)))))
@@ -1654,6 +1684,17 @@
           [(call) (find-call-lambda-clause exp (app-opnds ctxt))]
           [(apply2) (values)]
           [(apply3) (find-apply-lambda-clause exp (app-opnds ctxt))])))
+
+    (define (build-let-help lambda-preinfo id* rhs* body)
+      (or (and (= (length id*) 1)
+               (= (length rhs*) 1)
+               (nanopass-case (Lsrc Expr) (car rhs*)
+                 [(seq ,e1 ,e2)
+                  ; (let ((x (begin e1 e2))) e3) => (begin e1 (let ((x e2)) e3))
+                  ; this can expose (immutable-vector ...) in e2 to optimization
+                  `(seq ,e1 ,(build-let lambda-preinfo id* (list e2) body))]
+                 [else #f]))
+          (build-let lambda-preinfo id* rhs* body)))
 
     (define letify
       (case-lambda
@@ -1768,7 +1809,7 @@
                                    (lambda (new-e* . ignore)
                                      (let ([body (if (andmap eq? new-e* e*) body (build-body (car new-e*) (cdr new-e*)))])
                                        (let ([alist (filter cdr alist)])
-                                         (if (null? alist) body (build-let lambda-preinfo (map car alist) (map cdr alist) body)))))))))
+                                         (if (null? alist) body (build-let-help lambda-preinfo (map car alist) (map cdr alist) body)))))))))
                            (nanopass-case (Lsrc Expr) body
                              [(call ,preinfo ,e ,e* ...)
                               (drop-let (cons e e*) (lambda (e e*) (build-call preinfo e e*)))]
@@ -1781,7 +1822,7 @@
                              [(record-type ,rtd ,e)
                               (drop-let (list e) (lambda (e e*) (safe-assert (null? e*)) `(record-type ,rtd ,e)))]
                              [else #f])))]
-                   [else (build-let lambda-preinfo id* rhs* body)]))))]))
+                   [else (build-let-help lambda-preinfo id* rhs* body)]))))]))
 
     (define cp0-let
       (lambda (lambda-preinfo ids body ctxt env sc wd name moi)
@@ -1940,6 +1981,19 @@
                    sc))]
             [(immutable-list (,e* ...) ,e)
              `(immutable-list (,e* ...)
+                ,(residualize-ref maybe-src
+                   (nanopass-case (Lsrc Expr) e
+                     [(ref ,maybe-src ,x)
+                      (guard (not (prelex-was-assigned x))
+                        ; protect against (letrec ([x x]) ---)
+                        (not (eq? x id)))
+                      (when (prelex-was-multiply-referenced id)
+                        (set-prelex-was-multiply-referenced! x #t))
+                      x]
+                     [else id])
+                   sc))]
+            [(immutable-vector (,e* ...) ,e)
+             `(immutable-vector (,e* ...)
                 ,(residualize-ref maybe-src
                    (nanopass-case (Lsrc Expr) e
                      [(ref ,maybe-src ,x)
@@ -2560,6 +2614,15 @@
                                        e]))
                                  c-val)))))])))))])
 
+      (define-inline 2 (call/cc call/1cc call-with-current-continuation)
+        [(body)
+         (nanopass-case (Lsrc Expr) (value-visit-operand! body)
+           [(case-lambda ,preinfo (clause (,x) ,interface ,e))
+            (guard (not (prelex-was-referenced x)))
+            (residualize-seq (list) (list body) ctxt)
+            e]
+           [else #f])])
+
       (define-inline 2 $call-setting-continuation-attachment
         [(val body)
          (nanopass-case (Lsrc Expr) (value-visit-operand! body)
@@ -2624,6 +2687,42 @@
               empty-vector-rec)]
         [args #f])
 
+      (define-inline 2 immutable-vector
+        [() (begin
+              (residualize-seq '() '() ctxt)
+              `(quote ,(immutable-vector)))]
+        [opnd*
+         (or (let ([e* (objs-if-constant (value-visit-operands! opnd*))])
+               (and e*
+                    (begin
+                      (residualize-seq '() opnd* ctxt)
+                      `(quote ,(apply immutable-vector e*)))))
+             (begin
+               (residualize-seq opnd* '() ctxt)
+               (let loop ([e* (value-visit-operands! opnd*)]
+                          [lhs* '()]
+                          [rhs* '()]
+                          [re* '()])
+                 (if (null? e*)
+                     (let ([e* (reverse re*)])
+                       (let ([e `(immutable-vector (,e* ...)
+                                   ,(build-primcall 3 'immutable-vector e*))])
+                         (if (null? lhs*)
+                             e
+                             (build-let lhs* rhs* e))))
+                     (let ([e (car e*)] [e* (cdr e*)])
+                       (if (nanopass-case (Lsrc Expr) e
+                             [(quote ,d) #t]
+                             [(ref ,maybe-src ,x)
+                              (guard (not (prelex-was-assigned x)))
+                              (unless (prelex-multiply-referenced x)
+                                (set-prelex-multiply-referenced! x #t))
+                              #t]
+                             [else #f])
+                           (loop e* lhs* rhs* (cons e re*))
+                           (let ([t (cp0-make-temp #t)])
+                             (loop e* (cons t lhs*) (cons e rhs*) (cons (build-ref t) re*)))))))))])
+
       (define-inline 2 string
         [() (begin
               (residualize-seq '() '() ctxt)
@@ -2648,8 +2747,114 @@
               empty-flvector-rec)]
         [args #f])
 
+      (let ()
+        (define (build-immediate-immutable-vector e ctxt)
+          (let ([e-val (value-visit-operand! e)])
+            (nanopass-case (Lsrc Expr) (result-exp e-val)
+              [(quote ,d)
+               (cond
+                 [(immutable-vector? d)
+                  (residualize-seq (list e) '() ctxt)
+                  e-val]
+                 [(eq? d '#())
+                  (residualize-seq '() (list e) ctxt)
+                  `(quote ,(vector->immutable-vector '#()))]
+                 [else #f])]
+              [(immutable-vector (,e* ...) ,e2)
+               (residualize-seq (list e) '() ctxt)
+               e-val]
+              [(call ,preinfo ,pr ,e* ...)
+               (case (primref-name pr)
+                 [(vector->immutable-vector immutable-vector
+                                            immutable-vector-copy immutable-vector-set/copy immutable-vector-append)
+                  (residualize-seq (list e) '() ctxt)
+                  e-val]
+                 [(vector vector-copy vector-set/copy vector-append)
+                  (residualize-seq (list e) '() ctxt)
+                  (non-result-exp e-val
+                                  (build-primcall 3
+                                                  (case (primref-name pr)
+                                                    [(vector) 'immutable-vector]
+                                                    [(vector-copy) 'immutable-vector-copy]
+                                                    [(vector-set/copy) 'immutable-vector-set/copy]
+                                                    [(vector-append) 'immutable-vector-append]
+                                                    [else ($oops #f "missing conversion")])
+                                                  e*))]
+                 [else #f])]
+              [else #f])))
+        (define (build-append-immediate-vectors prim orig-vec-e* ctxt)
+          (let loop ([vec-e* orig-vec-e*] [accum '()])
+            (cond
+              [(null? vec-e*)
+               (residualize-seq orig-vec-e* '() ctxt)
+               (build-primcall 3 prim (reverse accum))]
+              [else
+               (let ([vec-e-val (value-visit-operand! (car vec-e*))])
+                 (nanopass-case (Lsrc Expr) vec-e-val
+                   [(quote ,d)
+                    (guard (vector? d))
+                    (loop (cdr vec-e*) (append (map (lambda (v) `(quote ,v))
+                                                    (reverse (vector->list d)))
+                                               accum))]
+                   [(immutable-vector (,e* ...) ,e)
+                    (loop (cdr vec-e*) (append (reverse e*) accum))]
+                   [(call ,preinfo ,pr ,e* ...)
+                    (guard (memq (primref-name pr) '(vector immutable-vector)))
+                    (loop (cdr vec-e*) (append (reverse e*) accum))]
+                   [else #f]))])))
+
+        (define-inline 2 vector->immutable-vector
+          [(e) (build-immediate-immutable-vector e ctxt)])
+        (define-inline 2 immutable-vector-copy
+          [(e) (build-immediate-immutable-vector e ctxt)])
+        (define-inline 2 vector-copy
+          [(e) (build-append-immediate-vectors 'vector (list e) ctxt)])
+        (define-inline 2 vector-append
+          [e* (build-append-immediate-vectors 'vector e* ctxt)])
+        (define-inline 2 immutable-vector-append
+          [(e) (build-immediate-immutable-vector e ctxt)]
+          [e* (build-append-immediate-vectors 'immutable-vector e* ctxt)]))
+
+      (define-inline 2 string->immutable-string
+        [(e) (let ([e-val (value-visit-operand! e)])
+               (nanopass-case (Lsrc Expr) (result-exp e-val)
+                 [(quote ,d)
+                  (cond
+                    [(immutable-string? d)
+                     (residualize-seq (list e) '() ctxt)
+                      e-val]
+                    [(eq? d "")
+                     (residualize-seq '() (list e) ctxt)
+                     `(quote ,(string->immutable-string ""))]
+                    [else #f])]
+                 [else #f]))])
+
+      (define-inline 2 bytevector->immutable-bytevector
+        [(e) (let ([e-val (value-visit-operand! e)])
+               (nanopass-case (Lsrc Expr) (result-exp e-val)
+                 [(quote ,d)
+                  (cond
+                    [(immutable-bytevector? d)
+                     (residualize-seq (list e) '() ctxt)
+                      e-val]
+                    [(eq? d '#vu8())
+                     (residualize-seq '() (list e) ctxt)
+                     `(quote ,(bytevector->immutable-bytevector '#vu8()))]
+                    [else #f])]
+                 [else #f]))])
+
       (define-inline 2 (eq? eqv? equal?)
-        [(arg1 arg2) (handle-equality ctxt arg1 (list arg2))])
+        [(arg1 arg2) (or (handle-equality ctxt arg1 (list arg2))
+                         (let ([val1 (value-visit-operand! arg1)]
+                               [val2 (value-visit-operand! arg2)])
+                           (cond
+                             [(cp0-constant? not (result-exp val1))
+                              (residualize-seq (list arg2) (list arg1) ctxt)
+                              (make-if ctxt sc val2 false-rec true-rec)]
+                             [(cp0-constant? not (result-exp val2))
+                              (residualize-seq (list arg1) (list arg2) ctxt)
+                              (make-if ctxt sc val1 false-rec true-rec)]
+                             [else #f])))])
 
       (define-inline 3 (bytevector=? enum-set=? bound-identifier=? free-identifier=? ftype-pointer=? literal-identifier=? time=?)
         [(arg1 arg2) (handle-equality ctxt arg1 (list arg2))])
@@ -3533,7 +3738,7 @@
                 (lambda (x)
                   (syntax-case x ()
                     [(_ type bytes pred)
-                     (if (memq (datum type) '(scheme-object boolean))
+                     (if (memq (datum type) '(scheme-object boolean stdbool))
                          #'($oops who "unexpected type ~s" 'type)
                          #'(build-primcall 3 'pred
                              (list (build-ref val-t))))])))
@@ -3556,7 +3761,7 @@
                                    (lambda (fld t check*)
                                      (let* ([type (fld-type fld)]
                                             [real-type (filter-foreign-type type)])
-                                       (if (memq real-type '(scheme-object boolean))
+                                       (if (memq real-type '(scheme-object boolean stdbool))
                                            check*
                                            (cons
                                              `(if ,(type->pred 'record-constructor real-type t)
@@ -3811,7 +4016,7 @@
                                      [rec-t (cp0-make-temp #t)]
                                      [val-t (cp0-make-temp #t)])
                                 (let ([expr `(record-set! ,rtd ,type ,index (ref #f ,rec-t) (ref #f ,val-t))]
-                                      [pred (and (not (memq real-type '(scheme-object boolean)))
+                                      [pred (and (not (memq real-type '(scheme-object boolean stdbool)))
                                                  (type->pred who real-type val-t))])
                                   (cond
                                     [(fx= level 3)
@@ -3984,6 +4189,7 @@
               [(fcallable (,conv* ...) ,e (,arg-type* ...) ,result-type) #t]
               [(record-set! ,rtd ,type ,index ,e1 ,e2) #t]
               [(immutable-list (,e* ...) ,e) #t]
+              [(immutable-vector (,e* ...) ,e) #t]
               [else #f])))
         (define one-arg-case
           (lambda (?x ctxt)
@@ -4982,7 +5188,25 @@
         (define true (lambda (x) #t))
 
         (define-inline 2 vector-ref
-          [(?x ?i) (tryref ctxt ?x ?i 'vector #f)])
+          [(?x ?i)
+           (or (nanopass-case (Lsrc Expr) (result-exp (value-visit-operand! ?x))
+                 [(immutable-vector (,e* ...) ,e)
+                  (nanopass-case (Lsrc Expr) (result-exp (value-visit-operand! ?i))
+                    [(quote ,d)
+                     (guard (fixnum? d) (#%$fxu< d (length e*)))
+                     (residualize-seq '() (app-opnds ctxt) ctxt)
+                     (list-ref e* d)]
+                    [else #f])]
+                 [else #f])
+               (tryref ctxt ?x ?i 'vector #f))])
+
+        (define-inline 2 vector-length
+          [(?x)
+           (nanopass-case (Lsrc Expr) (result-exp (value-visit-operand! ?x))
+             [(immutable-vector (,e* ...) ,e)
+              (residualize-seq '() (app-opnds ctxt) ctxt)
+              `(quote ,(length e*))]
+             [else #f])])
 
         (define-inline 2 string-ref
           [(?x ?i) (tryref ctxt ?x ?i 'string char?)])
@@ -5550,7 +5774,15 @@
       [(record-type ,rtd ,e) (cp0 e ctxt env sc wd name moi)]
       [(record-cd ,rcd ,rtd-expr ,e) (cp0 e ctxt env sc wd name moi)]
       [(immutable-list (,[cp0 : e* 'value env sc wd #f moi -> e*] ...) ,[cp0 : e ctxt env sc wd name moi -> e])
-       `(immutable-list (,e*  ...) ,e)]
+       (context-case ctxt
+         [(effect) (make-seq ctxt e void-rec)]
+         [(test) (make-seq ctxt e true-rec)]
+         [else `(immutable-list (,e*  ...) ,e)])]
+      [(immutable-vector (,[cp0 : e* 'value env sc wd #f moi -> e*] ...) ,[cp0 : e ctxt env sc wd name moi -> e])
+       (context-case ctxt
+         [(effect) (make-seq ctxt e void-rec)]
+         [(test) (make-seq ctxt e true-rec)]
+         [else `(immutable-vector (,e*  ...) ,e)])]
       [(moi) (if moi `(quote ,moi) ir)]
       [(pariah) ir]
       [(cte-optimization-loc ,box ,[cp0 : e ctxt env sc wd name moi -> e] ,exts)

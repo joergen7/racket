@@ -57,7 +57,9 @@ languages.}
 the @racketmodname[racket] library and will typically load faster.
 
 The @racketmodname[racket] library combines
-@racketmodname[racket/base]@racket-extra-libs[].}
+@racketmodname[racket/base]@racket-extra-libs[].
+In addition, it re-exports @racket[for-syntax] everything from
+@racketmodname[racket/base].}
 
 @table-of-contents[]
 
@@ -107,7 +109,7 @@ The @racketmodname[racket] library combines
              #:author "Olivier Danvy and Andre Filinski"
              #:title "Abstracting Control"
              #:location "LISP and Functional Programming"
-             #:url "http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.6.960&rep=rep1&type=pdf"
+             #:url "https://doi.org/10.1145/91556.91622"
              #:date "1990")
 
   (bib-entry #:key "Felleisen88a"
@@ -282,6 +284,13 @@ The @racketmodname[racket] library combines
              #:location "Object-Oriented Programming, Systems, and Languages (OOPSLA)"
              #:url "http://www.eecs.northwestern.edu/~robby/pubs/papers/oopsla2012-stff.pdf"
              #:date "2012")
+
+  (bib-entry #:key "Stucki15"
+             #:title "RRB Vector: A Practical General Purpose Immutable Sequence"
+             #:author "Nicolas Stucki, Tiark Rompf, Vlad Ureche, and Phil Bagwell"
+             #:location "International Conference on Functional Programming"
+             #:url "https://dl.acm.org/doi/abs/10.1145/2784731.2784739"
+             #:date "2015")
 
   (bib-entry #:key "Torosyan21"
              #:title "Runtime and Compiler Support for HAMTs"

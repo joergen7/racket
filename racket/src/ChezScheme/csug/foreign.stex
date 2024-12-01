@@ -492,6 +492,12 @@ Transmission of fixnums is slightly faster than transmission of
 \scheme{#f} is converted to 0; all other objects are converted to 1.
 The argument is passed to C as an \scheme{int}.
 
+\foreigntype{\scheme{stdbool}}
+\index{\scheme{stdbool}}Any Scheme object may be passed as a boolean.
+\scheme{#f} is converted to 0; all other objects are converted to 1.
+The argument is passed to C as a \scheme{bool} defined by the the host
+machine's \scheme{stdbool.h} include file.
+
 \foreigntype{\scheme{char}}
 \index{\scheme{char}}Only Scheme characters with Unicode scalar values
 in the range 0 through 255 are valid \scheme{char} parameters.
@@ -770,6 +776,12 @@ fixed-size type above, depending on the size of a C pointer.
 \foreigntype{\scheme{boolean}}
 \index{\scheme{boolean}}This type converts a C \scheme{int} return value
 into a Scheme boolean.
+0 is converted to \scheme{#f}; all other values are converted to \scheme{#t}.
+
+\foreigntype{\scheme{stdbool}}
+\index{\scheme{stdbool}}This type converts a C \scheme{bool} return value
+into a Scheme boolean, where \scheme{bool} is from the host machine's \scheme{stdbool.h}
+include file.
 0 is converted to \scheme{#f}; all other values are converted to \scheme{#t}.
 
 \foreigntype{\scheme{char}}
@@ -1427,8 +1439,9 @@ Several additional machine-dependent types are recognized:
 \begin{itemize}
 \item \scheme{iptr},
 \item \scheme{uptr},
-\item \scheme{fixnum}, and
-\item \scheme{boolean}.
+\item \scheme{fixnum},
+\item \scheme{boolean}, and
+\item \scheme{stdbool}.
 \end{itemize}
 
 \scheme{uptr} is equivalent to \scheme{void*}; both are treated as
@@ -1437,6 +1450,9 @@ unsigned integers the size of a pointer.
 \scheme{fixnum} is treated as an \scheme{iptr}, but with a range limited
 to the fixnum range.
 \scheme{boolean} is treated as an \scheme{int}, with zero
+converted to the Scheme value \scheme{#f} and all
+other values converted to \scheme{#t}.
+\scheme{stdbool} is treated as an \scheme{bool} from \scheme{stdbool.h}, with zero
 converted to the Scheme value \scheme{#f} and all
 other values converted to \scheme{#t}.
 
@@ -1482,7 +1498,7 @@ to be stored, one of those listed in the description of
 \scheme{foreign-ref} above.
 Scheme characters are converted to type \scheme{char} or \scheme{wchar_t}
 as if via \scheme{char->integer}.
-For type \scheme{boolean}, Scheme \scheme{#f} is converted to the
+For type \scheme{boolean} or \scheme{stdbool}, Scheme \scheme{#f} is converted to the
 \scheme{int} 0, and any other Scheme object is converted to 1.
 
 \var{address} must be an exact integer in the range $-2^{w-1}$ through
@@ -2670,8 +2686,9 @@ via one of the other methods described in this section.
 \endentryheader
 
 \noindent
-\var{path} must be a string.
-\scheme{load-shared-object} loads the shared object named by \var{path}.
+\var{path} must be a string or \scheme{#f}.
+If \var{path} is a string, \scheme{load-shared-object} loads the shared object
+named by \var{path}.
 Shared objects may be system libraries or files created from ordinary
 C programs.
 All external symbols in the shared object, along with external symbols
@@ -2684,6 +2701,26 @@ runs.
 If \var{path} does not begin with a ``.'' or ``/'', the shared
 object is searched for in a default set of directories determined
 by the system.
+
+If \var{path} is \scheme{#f}, external symbols in the executable itself (if
+any), as well as those found in dependent shared objects, are also made
+available as foreign entries.
+Usually, executables do not export symbols, but can be instructed to do so with
+proper compilation flags.
+One may thus create an executable based on {\ChezScheme}, and have Scheme code
+access exported symbols from it and also from any shared object dynamically
+linked to it.
+
+Because {\ChezScheme} is usually dynamically linked to the operating system's C
+library, all built-in C library functions are also accessible after evaluation
+of \scheme{(load-shared-object #f)}.
+This provides a simple way to gain access to standard C functions (such as
+\var{memcpy} or \var{getenv}), which may be very convenient for Scheme programs
+intended to be portable across different systems.
+If {\ChezScheme} is statically linked however, the standard C functions may only
+be accessible in this manner if they are present in the executable and
+exported, otherwise the shared object containing the C library must be
+explicitly named; see below for examples for some platforms.
 
 On most Unix systems, \scheme{load-shared-object} is based on the
 system routine \scheme{dlopen}.
@@ -2701,6 +2738,7 @@ The name of the shared object varies from one system to another.
 % On Sun Sparc systems running Solaris 2.X or higher
 % running Digital Unix 2.X or higher, and SGI systems running IRIX 5.X
 % or higher
+
 On Linux systems:
 
 \schemedisplay
@@ -3071,8 +3109,11 @@ program.
 \cfunction{void}{Sscheme_init}{void (*\var{abnormal}_\var{exit})(void)}
 \cfunction{void}{Sset_verbose}{int \var{v}}
 \cfunction{void}{Sregister_boot_file}{const char *\var{name}}
+\cfunctTwo{void}{Sregister_boot_executable_relative_file}{const char *\var{execpath},}{const char *\var{name}}
+\cfunction{void}{Sregister_boot_relative_file}{const char *\var{name}}
 \cfunction{void}{Sregister_boot_file_fd}{const char *\var{name}, int \var{fd}}
-\cfunctTwo{void}{Sregister_boot_file_fd_segment}{const char *\var{name}, int \var{fd},}{iptr \var{offset}, iptr \var{len}, int \var{close}_\var{after}}
+\cfunctTwo{void}{Sregister_boot_file_fd_region}{const char *\var{name}, int \var{fd},}{iptr \var{offset}, iptr \var{len}, int \var{close}_\var{after}}
+\cfunction{void}{Sregister_boot_file_bytes}{const char *\var{name}, void *\var{content}, iptr \var{len}}
 \cfunction{void}{Sbuild_heap}{const char *\var{exec}, void (*\var{custom}_\var{init})(void)}
 \cfunction{void}{Senable_expeditor}{const char *\var{history}_\var{file}}
 \cfunction{void}{Sretain_static_relocation}{void}
@@ -3103,13 +3144,24 @@ values of \var{v} and off when \var{v} is zero.
 In verbose mode, the system displays a trace of the search process
 for subsequently registered boot files.
 
-\scheme{Sregister_boot_file} searches for
-the named boot file and
-register it for loading, while \scheme{Sregister_boot_file_fd}
-provides a specific boot file as a file descriptor.
-When only a boot file name is provided, the file is opened but not loaded until the heap is built via
-\scheme{Sbuild_heap}. When a file descriptor is provided, the given file name
-is used only for error reporting.
+\scheme{Sregister_boot_file} searches for a boot file and registers it
+for loading. If the given boot file path is absolute or starts with
+a \scheme{.} or \scheme{..} path element, then the path is
+used relative to the current directory; otherwise, the boot file is
+found through a search as described in
+Section~\ref{SECTUSECOMMANDLINE}, and \scheme{"scheme"} is assumed as
+the executable name for resolving a \scheme{"%x"} escape when the
+executable path is not otherwise available from the operating system.
+\scheme{Sregister_boot_executable_relative_file} is similar, but
+accepts a path to the executable instead of assuming
+\scheme{"scheme"}, so it should be preferred when using a boot file
+path that may be resolved relative to the executable.
+\scheme{Sregister_boot_relative_file} always treats a relative path
+as relative to the current directory, so the executable path is not needed.
+In all of those cases, the boot file is opened but not loaded until the heap is built via
+\scheme{Sbuild_heap}. \scheme{Sregister_boot_file_fd} provides a specific boot file as a file descriptor,
+the given file name is used only for error reporting, and the file descriptor
+is not read until until the heap is built via \scheme{Sbuild_heap}.
 For the first boot file registered only, the system also
 searches for the boot files upon which the named file
 depends, either directly or indirectly.
@@ -3127,11 +3179,18 @@ descriptor is used for multiple boot files, then
 one. The boot file content is read only when \scheme{Sbuild_heap} is
 called.
 
+The \scheme{Sregister_boot_file_bytes} function is another alternative
+to the \scheme{Sregister_boot_file} functions that registers boot-file
+content that is already loaded into memory, instead of reading from a
+file. The registered bytes must remain available until
+\scheme{Sbuild_heap} reads them.
+
 \scheme{Sbuild_heap} creates the Scheme heap from the registered boot
 files.
 \var{exec} is assumed to be the name of or path to the executable
 image and is used when no boot files have been registered as
-the base name for the boot-file search process.
+both the base name for the boot-file search process and the executable
+name for finding boot files relative to the executable.
 \var{exec} may be null only if one or more boot files have
 been registered.
 \scheme{\var{custom}_\var{init}} must be a (possibly null) pointer to
@@ -3256,10 +3315,39 @@ or 64-bit range and return integers of the appropriate
 type for the machine type.
 
 \begin{flushleft}
-\cfunction{<32-bit int type>}{Sinteger32_value}{ptr \var{integer}}
-\cmacro{<32-bit unsigned type>}{Sunsigned32_value}{ptr \var{integer}}
-\cfunction{<64-bit int type>}{Sinteger64_value}{ptr \var{integer}}
-\cmacro{<64-bit unsigned type>}{Sunsigned64_value}{ptr \var{integer}}
+\cfunction{Sint32_t}{Sinteger32_value}{ptr \var{integer}}
+\cmacro{Suint32_t}{Sunsigned32_value}{ptr \var{integer}}
+\cfunction{Sint64_t}{Sinteger64_value}{ptr \var{integer}}
+\cmacro{Suint64_t}{Sunsigned64_value}{ptr \var{integer}}
+\end{flushleft}
+
+The functions
+\scheme{Stry_integer_value},
+\scheme{Stry_integer32_value}, and
+\scheme{Stry_integer64_value}
+also convert Scheme values to C integers.
+Unlike the corresponding \scheme{Sinteger_value} functions, these functions do not raise exceptions.
+Instead, they take additional \var{result} and \var{reason} arguments
+and return 1 or 0 to indicate success or failure.
+If \var{integer} can be converted to the requested type, these functions store
+the value in \var{result} and return 1.
+Otherwise, they return 0 without modifying \var{result}.
+If \var{integer} cannot be converted to the requested type and
+\var{reason} is not NULL, these functions store a
+Scheme-style
+format string in \var{reason} explaining why the conversion failed.
+The corresponding functions for unsigned values are
+\scheme{Stry_unsigned_value},
+\scheme{Stry_unsigned32_value}, and
+\scheme{Stry_unsigned64_value}.
+
+\begin{flushleft}
+\cfunction{int}{Stry_integer_value}{ptr \var{integer}, iptr* \var{result}, const char** \var{reason}}
+\cfunction{int}{Stry_integer32_value}{ptr \var{integer}, Sint32_t* \var{result}, const char** \var{reason}}
+\cfunction{int}{Stry_integer64_value}{ptr \var{integer}, Sint64_t* \var{result}, const char** \var{reason}}
+\cfunction{int}{Stry_unsigned_value}{ptr \var{integer}, uptr* \var{result}, const char** \var{reason}}
+\cfunction{int}{Stry_unsigned32_value}{ptr \var{integer}, Suint32_t* \var{result}, const char** \var{reason}}
+\cfunction{int}{Stry_unsigned64_value}{ptr \var{integer}, Suint64_t* \var{result}, const char** \var{reason}}
 \end{flushleft}
 
 \noindent
@@ -3270,7 +3358,7 @@ Scheme counterparts.
 \begin{flushleft}
 \cmacro{ptr}{Scar}{ptr \var{pair}}
 \cmacro{ptr}{Scdr}{ptr \var{pair}}
-\cmacro{ptr}{Ssymbol_to_string}{ptr \var{sym}}
+\cfunction{ptr}{Ssymbol_to_string}{ptr \var{sym}}
 \cmacro{ptr}{Sunbox}{ptr \var{box}}
 \end{flushleft}
 
@@ -3431,7 +3519,7 @@ appear negative if cast to integers.
 whereas \scheme{Sunsigned} converts such values into the appropriate
 positive Scheme values.
 For example, assuming a 32-bit, two's complement representation for
-\scheme{iptrs}, \scheme{Sinteger(-1)} and \scheme{Sunsigned((iptr)0xffffffff)}
+\scheme{iptrs}, \scheme{Sinteger(-1)} and \scheme{Sinteger((iptr)0xffffffff)}
 both evaluate to the Scheme integer \scheme{-1}, whereas
 \scheme{Sunsigned(0xffffffff)} and \scheme{Sunsigned((uptr)-1)}
 both evaluate to the Scheme integer
@@ -3466,10 +3554,10 @@ and \scheme{Sunsigned64} are like the generic equivalents but
 restrict their arguments to the 32- or 64-bit range.
 
 \begin{flushleft}
-\cfunction{ptr}{Sinteger32}{<32-bit int type> \var{n}}
-\cfunction{ptr}{Sunsigned32}{<32-bit unsigned type> \var{n}}
-\cfunction{ptr}{Sinteger64}{<64-bit int type> \var{n}}
-\cfunction{ptr}{Sunsigned64}{<64-bit unsigned type> \var{n}}
+\cfunction{ptr}{Sinteger32}{Sint32_t \var{n}}
+\cfunction{ptr}{Sunsigned32}{Suint32_t \var{n}}
+\cfunction{ptr}{Sinteger64}{Sint64_t \var{n}}
+\cfunction{ptr}{Sunsigned64}{Suint64_t \var{n}}
 \end{flushleft}
 
 \noindent
@@ -3491,14 +3579,16 @@ that it takes a C string (character pointer) as input.
 \end{flushleft}
 
 \noindent
-\scheme{Smake_string}, \scheme{Smake_vector}, \scheme{Smake_bytevector},
-and \scheme{Smake_fxvector} are similar to their Scheme counterparts.
+\scheme{Smake_string}, \scheme{Smake_vector},
+\scheme{Smake_bytevector}, \scheme{Smake_fxvector}, and
+\scheme{Smake_flvector} are similar to their Scheme counterparts.
 
 \begin{flushleft}
 \cfunction{ptr}{Smake_string}{iptr \var{n}, int \var{c}}
 \cfunction{ptr}{Smake_vector}{iptr \var{n}, ptr \var{obj}}
 \cfunction{ptr}{Smake_bytevector}{iptr \var{n}, int \var{fill}}
 \cfunction{ptr}{Smake_fxvector}{iptr \var{n}, ptr \var{fixnum}}
+\cfunction{ptr}{Smake_flvector}{iptr \var{n}, double \var{flonum}}
 \end{flushleft}
 
 \noindent
@@ -3609,11 +3699,11 @@ be unlocked by an equal number of calls to
 \scheme{Sunlock_object} or \scheme{unlock-object} before it is
 truly unlocked.
 
-The function \scheme{Sunlocked_objectp} can be used to determine
+The function \scheme{Slocked_objectp} can be used to determine
 if an object is locked.
 
 \begin{flushleft}
-\cfunction{int}{Sunlocked_objectp}{ptr \var{obj}}
+\cfunction{int}{Slocked_objectp}{ptr \var{obj}}
 \end{flushleft}
 
 When a foreign procedure call is made into Scheme, a return address
@@ -3662,7 +3752,7 @@ operation as its Scheme counterpart, i.e., the Scheme procedure
 \scheme{foreign-callable-entry-point}.
 
 \begin{flushleft}
-\cfunction{(void (*) (void))}{Sforeign_callable_entry_point}{ptr \var{code}}
+\cmacro{(void (*) (void))}{Sforeign_callable_entry_point}{ptr \var{code}}
 \end{flushleft}
 
 \noindent
@@ -3674,7 +3764,7 @@ is not saved across any calls back into Scheme.
 The inverse translation can be made via \scheme{Sforeign_callable_code_object}.
 
 \begin{flushleft}
-\cfunction{ptr}{Sforeign_callable_code_object}{(void (*addr)(void))}
+\cmacro{ptr}{Sforeign_callable_code_object}{(void (*addr)(void))}
 \end{flushleft}
 
 \parheader{Low-level support for calls into Scheme}

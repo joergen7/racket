@@ -203,7 +203,8 @@ mutable pairs print using @litchar["{"] and @litchar["}"] instead of
 
 @defboolparam[print-unreadable on?]{
 
-A @tech{parameter} that enables or disables printing of values that have no
+A @tech{parameter} that enables or disables
+@racket[print] and @racket[write] of values that have no
 @racket[read]able form (using the default reader), including
 structures that have a custom-write procedure (see
 @racket[prop:custom-write]), but not including @tech{uninterned}
@@ -353,8 +354,7 @@ global port print handler is the same as the default write handler.}
 A @tech{parameter} that determines @deftech{global port print handler},
 which is called by the default port print handler (see
 @racket[port-print-handler]) to @racket[print] values into a port.
-The default value uses the built-in printer (see
-@secref["printing"]) in @racket[print] mode.
+The default value is equivalent to @racket[default-global-port-print-handler].
 
 A @tech{global port print handler} optionally accepts a third
 argument, which corresponds to the optional third argument to
@@ -362,3 +362,13 @@ argument, which corresponds to the optional third argument to
 @racket[global-port-print-handler] does not accept a third argument,
 it is wrapped with a procedure that discards the optional third
 argument.}
+
+@defproc[(default-global-port-print-handler [v any/c]
+                                            [out output-port?]
+                                            [print-depth (or/c 0 1) 0])
+         void?]{
+
+Prints @racket[v] to @racket[out] using the built-in printer (see
+@secref["printing"]) in @racket[print] mode.
+
+@history[#:added "8.8.0.6"]}

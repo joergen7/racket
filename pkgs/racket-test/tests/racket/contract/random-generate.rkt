@@ -3,6 +3,8 @@
 (require racket/contract
          racket/contract/private/generate-base
          racket/set
+         racket/promise
+         racket/treelist
          (only-in racket/list empty? cons?)
          rackunit
          racket/math
@@ -82,6 +84,7 @@
 (check-not-exn (λ () (test-contract-generation (and/c integer? even?))))
 (check-not-exn (λ () (test-contract-generation (or/c (and/c real? positive? (</c 0)) boolean?))))
 (check-not-exn (λ () (test-contract-generation (first-or/c (and/c real? positive? (</c 0)) boolean?))))
+(check-not-exn (λ () (test-contract-generation (complex/c (and/c integer? odd?) (and/c integer? even?)))))
 
 (check-not-exn (λ () (test-contract-generation (listof boolean?))))
 (check-not-exn (λ () (test-contract-generation (listof some-crazy-predicate?))))
@@ -92,6 +95,9 @@
 (check-not-exn (λ () ((car (test-contract-generation (list/c (-> number? number?)))) 0)))
 (check-not-exn (λ () (test-contract-generation (*list/c boolean? number? char?))))
 (check-not-exn (λ () (test-contract-generation (-> (*list/c boolean? number? char?) any))))
+
+(check-not-exn (λ () (test-contract-generation (treelist/c char?))))
+(check-not-exn (λ () (test-contract-generation (mutable-treelist/c char?))))
 
 (check-not-exn (λ () (test-contract-generation (hash/c boolean? boolean?))))
 (check-not-exn (λ () (test-contract-generation (hash/c char? integer?))))
@@ -106,6 +112,20 @@
 (check-not-exn (λ () (test-contract-generation (set/c (-> number? integer?) #:cmp 'equal-always))))
 (check-not-exn (λ () (test-contract-generation (set/c string? #:cmp 'eqv #:kind 'weak))))
 (check-not-exn (λ () (test-contract-generation (set/c string? #:cmp 'eq #:kind 'mutable))))
+
+(check-not-exn (λ () (test-contract-generation (promise/c string?))))
+
+(check-not-exn (λ ()
+                 (define (a-stream/c c)
+                   (or/c null?
+                         (cons/c c (recursive-contract (a-stream/c c)))
+                         (promise/c (recursive-contract (a-stream/c c)))))
+                 (test-contract-generation
+                  (rename-contract (a-stream/c integer?)
+                                   'integer-stream))))
+(check-not-exn (λ ()
+                 (test-contract-generation
+                  (rename-contract (or/c integer? boolean?) 'b-or-i))))
 
 (define (check-empty-and-nonempty ctc val-empty? val-nonempty?)
   (define val-list
@@ -571,6 +591,25 @@
            (set add1)
            'pos
            'neg))
+
+(check-exercise
+ 10
+ pos-exn?
+ (contract (promise/c integer?)
+           (delay "x")
+           'pos
+           'neg))
+
+(check-exercise
+ 10
+ pos-exn?
+ (let ()
+   (define (a-stream/c c)
+     (or/c null?
+           (promise/c (cons/c c (recursive-contract (a-stream/c c))))))
+   (contract (a-stream/c integer?)
+             (cons 1 (delay (cons "two" '())))
+             'pos 'neg)))
 
 ;; a test for contract-random-generate/choose
 (let ()

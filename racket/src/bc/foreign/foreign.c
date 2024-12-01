@@ -95,6 +95,8 @@ static Scheme_Object *uncollectable_sym;
 static Scheme_Object *eternal_sym;
 static Scheme_Object *interior_sym;
 static Scheme_Object *atomic_interior_sym;
+static Scheme_Object *zeroed_atomic_sym;
+static Scheme_Object *zeroed_atomic_interior_sym;
 static Scheme_Object *raw_sym;
 static Scheme_Object *tagged_sym;
 static Scheme_Object *fail_ok_sym;
@@ -2694,6 +2696,20 @@ static Scheme_Object *foreign_compiler_sizeof(int argc, Scheme_Object *argv[])
 /*****************************************************************************/
 /* Pointer type user functions */
 
+static void *malloc_zeroed_atomic(size_t size_in_bytes) {
+  void *p;
+  p = scheme_malloc_atomic(size_in_bytes);
+  memset(p, 0, size_in_bytes);
+  return p;
+}
+
+static void *malloc_zeroed_atomic_allow_interior(size_t size_in_bytes) {
+  void *p;
+  p = scheme_malloc_atomic_allow_interior(size_in_bytes);
+  memset(p, 0, size_in_bytes);
+  return p;
+}
+
 static Scheme_Malloc_Proc mode_to_allocator(const char *who, Scheme_Object *mode)
 {
   Scheme_Malloc_Proc mf;
@@ -2705,6 +2721,8 @@ static Scheme_Malloc_Proc mode_to_allocator(const char *who, Scheme_Object *mode
   else if (SAME_OBJ(mode, uncollectable_sym)) mf = scheme_malloc_uncollectable;
   else if (SAME_OBJ(mode, interior_sym))      mf = scheme_malloc_allow_interior;
   else if (SAME_OBJ(mode, atomic_interior_sym)) mf = scheme_malloc_atomic_allow_interior;
+  else if (SAME_OBJ(mode, zeroed_atomic_sym))        mf = malloc_zeroed_atomic;
+  else if (SAME_OBJ(mode, zeroed_atomic_interior_sym)) mf = malloc_zeroed_atomic_allow_interior;
   else if (SAME_OBJ(mode, raw_sym))           mf = malloc;
   else if (SAME_OBJ(mode, tagged_sym))        mf = scheme_malloc_tagged;
   else {
@@ -2788,6 +2806,7 @@ static Scheme_Object *foreign_malloc(int argc, Scheme_Object *argv[])
                             "      ctype?\n"
                             "      (or/c 'nonatomic 'stubborn 'uncollectable\n"
                             "             'eternal 'interior 'atomic-interior\n"
+                            "             'zeroed-atomic 'zeroed-atomic-interior\n"
                             "             'tagged 'raw)\n"
                             "      'fail-on\n"
                             "      (and/c cpointer? (not/c #f)))",
@@ -2795,7 +2814,7 @@ static Scheme_Object *foreign_malloc(int argc, Scheme_Object *argv[])
     }
   }
   if (!num) return scheme_false;
-  if ((num == -1) && (size == 0)) scheme_signal_error(MYNAME": no size given");
+  if ((num == -1) && (size == 0)) scheme_contract_error(MYNAME, "no size given", NULL);
   size = mult_check_overflow(MYNAME, ((size==0) ? 1 : size), ((num==-1) ? 1 : num));
   if (mode == NULL)
     mf = (base != NULL && CTYPE_PRIMTYPE(base) == &ffi_type_gcpointer)
@@ -4039,11 +4058,12 @@ static Scheme_Object *foreign_ffi_call(int argc, Scheme_Object *argv[])
 }
 #undef MYNAME
 
-/* (ffi-call-maker in-types out-type [abi save-errno? orig-place? lock-name blocking? varargs-after exns?]) -> (ffi->obj -> (in-types -> out-value)) */
+/* (ffi-call-maker in-types out-type [abi save-errno? orig-place? lock-name blocking? varargs-after exns? core]) -> (ffi->obj -> (in-types -> out-value)) */
 /* Curried version of `ffi-call` */
 #define MYNAME "ffi-call-maker"
 static Scheme_Object *foreign_ffi_call_maker(int argc, Scheme_Object *argv[])
 {
+  if (argc > 9) argc = 9; /* drop `core` */
   return ffi_call_or_curry(MYNAME, 1, argc, argv);
 }
 #undef MYNAME
@@ -4548,7 +4568,7 @@ static Scheme_Object *make_ffi_callback_from_curried(int argc, Scheme_Object *ar
   return ffi_callback_or_curry("make-ffi-callback", 0, c+1, a);
 }
 
-/* (ffi-callback-maker in-types out-type [abi atomic? sync]) -> (proc -> ffi-callback) */
+/* (ffi-callback-maker in-types out-type [abi atomic? sync varargs-after core]) -> (proc -> ffi-callback) */
 /* Curried version of `ffi-callback`. Check arguments eagerly, but we don't do anything
    otherwise until a function is available. */
 #define MYNAME "ffi-callback-maker"
@@ -4556,6 +4576,8 @@ static Scheme_Object *foreign_ffi_callback_maker(int argc, Scheme_Object *argv[]
 {
   int i;
   Scheme_Object *vec, *a[1];
+
+  if (argc > 6) argc = 6; /* drop `core` */
 
   (void)ffi_callback_or_curry(MYNAME, 1, argc, argv);
 
@@ -4569,6 +4591,34 @@ static Scheme_Object *foreign_ffi_callback_maker(int argc, Scheme_Object *argv[]
                                           1, a,
                                           "make-ffi-callback",
                                           1, 1);
+}
+#undef MYNAME
+
+/*****************************************************************************/
+
+/* static-callback support needed by CS */
+
+#define MYNAME "ffi-maybe-call-and-callback-core"
+static Scheme_Object *foreign_ffi_maybe_call_and_callback_core(int argc, Scheme_Object *argv[])
+{
+  Scheme_Object *v[7];
+
+  v[0] = scheme_false;
+  v[1] = scheme_build_list_offset(argc, argv, 6);
+  v[2] = argv[5];
+  v[3] = argv[1];
+  v[4] = argv[2];
+  v[5] = argv[3];
+  v[6] = argv[4];
+
+  return scheme_values(7, v);
+}
+#undef MYNAME
+
+#define MYNAME "assert-ctype-representation"
+static Scheme_Object *foreign_assert_ctype_representation(int argc, Scheme_Object *argv[])
+{
+  return argv[1];
 }
 #undef MYNAME
 
@@ -5051,6 +5101,10 @@ void scheme_init_foreign_globals()
   interior_sym = scheme_intern_symbol("interior");
   MZ_REGISTER_STATIC(atomic_interior_sym);
   atomic_interior_sym = scheme_intern_symbol("atomic-interior");
+  MZ_REGISTER_STATIC(zeroed_atomic_sym);
+  zeroed_atomic_sym = scheme_intern_symbol("zeroed-atomic");
+  MZ_REGISTER_STATIC(zeroed_atomic_interior_sym);
+  zeroed_atomic_interior_sym = scheme_intern_symbol("zeroed-atomic-interior");
   MZ_REGISTER_STATIC(raw_sym);
   raw_sym = scheme_intern_symbol("raw");
   MZ_REGISTER_STATIC(tagged_sym);
@@ -5211,11 +5265,15 @@ void scheme_init_foreign(Scheme_Startup_Env *env)
   scheme_addto_prim_instance("ffi-call",
     scheme_make_noncm_prim(foreign_ffi_call, "ffi-call", 3, 10), env);
   scheme_addto_prim_instance("ffi-call-maker",
-    scheme_make_noncm_prim(foreign_ffi_call_maker, "ffi-call-maker", 2, 9), env);
+    scheme_make_noncm_prim(foreign_ffi_call_maker, "ffi-call-maker", 2, 10), env);
   scheme_addto_prim_instance("ffi-callback",
     scheme_make_noncm_prim(foreign_ffi_callback, "ffi-callback", 3, 6), env);
   scheme_addto_prim_instance("ffi-callback-maker",
-    scheme_make_noncm_prim(foreign_ffi_callback_maker, "ffi-callback-maker", 2, 6), env);
+    scheme_make_noncm_prim(foreign_ffi_callback_maker, "ffi-callback-maker", 2, 7), env);
+  scheme_addto_prim_instance("ffi-maybe-call-and-callback-core",
+    scheme_make_noncm_prim(foreign_ffi_maybe_call_and_callback_core, "ffi-maybe-call-and-callback-core", 6, -1), env);
+  scheme_addto_prim_instance("assert-ctype-representation",
+    scheme_make_immed_prim(foreign_assert_ctype_representation, "assert-ctype-representation", 2, 2), env);
   scheme_addto_prim_instance("saved-errno",
     scheme_make_immed_prim(foreign_saved_errno, "saved-errno", 0, 1), env);
   scheme_addto_prim_instance("lookup-errno",
@@ -5578,11 +5636,15 @@ void scheme_init_foreign(Scheme_Env *env)
   scheme_addto_primitive_instance("ffi-call",
    scheme_make_noncm_prim((Scheme_Prim *)unimplemented, "ffi-call", 3, 10), env);
   scheme_addto_primitive_instance("ffi-call-maker",
-   scheme_make_noncm_prim((Scheme_Prim *)unimplemented, "ffi-call-maker", 2, 9), env);
+   scheme_make_noncm_prim((Scheme_Prim *)unimplemented, "ffi-call-maker", 2, 10), env);
   scheme_addto_primitive_instance("ffi-callback",
    scheme_make_noncm_prim((Scheme_Prim *)unimplemented, "ffi-callback", 3, 6), env);
   scheme_addto_primitive_instance("ffi-callback-maker",
-   scheme_make_noncm_prim((Scheme_Prim *)unimplemented, "ffi-callback-maker", 2, 6), env);
+   scheme_make_noncm_prim((Scheme_Prim *)unimplemented, "ffi-callback-maker", 2, 7), env);
+  scheme_addto_primitive_instance("ffi-maybe-call-and-callback-core",
+   scheme_make_noncm_prim((Scheme_Prim *)unimplemented, "ffi-maybe-call-and-callback-core", 6, -1), env);
+  scheme_addto_primitive_instance("assert-ctype-representation",
+   scheme_make_immed_prim((Scheme_Prim *)unimplemented, "assert-ctype-representation", 2, 2), env);
   scheme_addto_primitive_instance("saved-errno",
    scheme_make_immed_prim((Scheme_Prim *)unimplemented, "saved-errno", 0, 1), env);
   scheme_addto_primitive_instance("lookup-errno",

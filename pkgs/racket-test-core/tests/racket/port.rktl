@@ -1,5 +1,6 @@
 
 (load-relative "loadtest.rktl")
+(require compiler/find-exe)
 
 (Section 'port)
 
@@ -503,6 +504,19 @@
   (test 5 write-bytes-avail/enable-break #"hello" /dev/null-out)
   (test #t write-special-avail* 'hello /dev/null-out)
   (test 5 write-bytes-avail #"hello" /dev/null-out))
+
+(for ([pre? (in-list '(#f #t))])
+  (let ()
+    (define exe (find-exe))
+    (define-values (sp stdout-in stdin-out stderr-in)
+      (subprocess #f #f #f exe "-q" "-n"))
+    (subprocess-wait sp)
+    (when pre?
+      ;; write some buffered bytes
+      (write-bytes #"ok" stdin-out))
+    ;; make sure `write-bytes-avail-evt` doesn't try to buffer
+    (err/rt-test/once (sync (write-bytes-avail-evt #"hello" stdin-out))
+                      exn:fail:filesystem?)))
 
 ;; A part that accumulates bytes as characters in a list,
 ;;  but not in a thread-safe way:
@@ -1149,7 +1163,8 @@
     (define pos (file-position ifile))
     (test "def" read-line ifile)
     (file-position ifile pos)
-    (test "def" read-line ifile))
+    (test "def" read-line ifile)
+    (close-input-port ifile))
 
   (let* ([bs (call-with-input-file path
 	       #:mode 'text 
@@ -1293,6 +1308,45 @@
   (define str (make-string 10))
   (test 5 peek-string! str 0 in)
   (test "hello" substring str 0 5))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(parameterize ([current-input-port (open-input-nowhere)])
+  (test eof read)
+  (test eof read-char)
+  (test eof read-byte)
+  (test eof read-line)
+  (test eof read-char-or-special))
+
+(test 'nowhere object-name (open-input-nowhere))
+(test 'apple   object-name (open-input-nowhere 'apple))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(for ([poll-proc (in-list (list
+                           (lambda (i)
+                             (byte-ready? i))
+                           (lambda (i)
+                             (peek-bytes-avail!* (make-bytes 1) 0 #f i))))])
+  (define peeked? #f)
+  (define polled? #f)
+  (define i
+    (make-input-port
+     'test
+     (lambda (bstr)
+       never-evt)
+     (lambda (bstr skip evt)
+       (set! peeked? #t)
+       (poll-guard-evt
+        (lambda (poll?)
+          (when poll?
+            (set! polled? #t))
+          (wrap-evt always-evt (lambda (v) 0)))))
+     void))
+  ;; should trigger a poll on an evt:
+  (poll-proc i)
+  (test #t values peeked?)
+  (test #t values polled?))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

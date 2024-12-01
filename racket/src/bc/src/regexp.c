@@ -4817,10 +4817,12 @@ static int translate(unsigned char *s, int len, char **result, int pcre)
 	  /* Start with "(?:[...]|" for simples. */
 	  unsigned int last_end;
 	  int did_alt;
+          int start_j;
 	  r = make_room(r, j, 6 + (128 - on_count) + ((pcre && !simple_on['\\']) ? 1 : 0), &rs);
 	  r[j++] = '(';
 	  r[j++] = '?';
 	  r[j++] = ':';
+          start_j = j;
 	  if (on_count < 128) {
 	    if (!on_count) {
 	      r[j++] = '[';
@@ -4868,7 +4870,17 @@ static int translate(unsigned char *s, int len, char **result, int pcre)
 	    }
 	  }
 	  r = make_room(r, j, 1, &rs);
-	  r[j++] = ')';
+          if (j == start_j) {
+            /* no possible ranges; need to emit unmatchable */
+            r = make_room(r, j, 7, &rs);
+            r[j++] = '[';
+            r[j++] = '^';
+            r[j++] = 0;
+            r[j++] = '-';
+            r[j++] = 255;
+            r[j++] = ']';
+          }
+          r[j++] = ')';
 	} else {
 	  /* Normal mode */
 	  /* Start with "(?:[...]|" for simples. */
@@ -5115,6 +5127,7 @@ static int translate(unsigned char *s, int len, char **result, int pcre)
 
   r[j] = 0;
   *result = (char *)r;
+
   return j;
 }
 
@@ -5794,6 +5807,7 @@ static Scheme_Object *gen_replace(const char *name, int argc, Scheme_Object *arg
       if (SCHEME_CHAR_STRINGP(argv[1])) {
 	scheme_contract_error(name, "cannot replace a string with a byte string",
                               "string-matching regexp", 1, argv[0],
+                              "string", 1, argv[1],
                               "byte string", 1, argv[2],
                               NULL);
       }

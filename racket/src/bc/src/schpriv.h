@@ -172,12 +172,8 @@ XFORM_NONGCING int scheme_intern_prim_opt_flags(int);
 #define MALLOC_N_STUBBORN(x, n) _MALLOC_N(x, n, scheme_malloc_stubborn)
 
 #ifdef MZ_PRECISE_GC
-# define WEAKIFY(x) scheme_make_weak_box(x)
-# define WEAKIFIED(x) SCHEME_WEAK_BOX_VAL(x)
 # define HT_EXTRACT_WEAK(x) SCHEME_WEAK_BOX_VAL(x)
 #else
-# define WEAKIFY(x) x
-# define WEAKIFIED(x) x
 # define HT_EXTRACT_WEAK(x) (*(char **)(x))
 #endif
 
@@ -469,6 +465,7 @@ Scheme_Object *scheme_read_linklet(Scheme_Object *obj, int unsafe_ok);
 extern Scheme_Equal_Proc *scheme_type_equals;
 extern Scheme_Primary_Hash_Proc *scheme_type_hash1s;
 extern Scheme_Secondary_Hash_Proc *scheme_type_hash2s;
+extern Scheme_Object *scheme_hash_kind_key;
 
 void scheme_init_port_config(void);
 void scheme_init_port_fun_config(void);
@@ -606,6 +603,10 @@ extern Scheme_Object *scheme_unsafe_fxrshift_proc;
 extern Scheme_Object *scheme_unsafe_fx_to_fl_proc;
 extern Scheme_Object *scheme_unsafe_pure_proc;
 
+extern Scheme_Object *scheme_zero_length_char_string;
+extern Scheme_Object *scheme_zero_length_char_immutable_string;
+extern Scheme_Object *scheme_zero_length_byte_string;
+
 extern Scheme_Object *scheme_string_p_proc;
 extern Scheme_Object *scheme_unsafe_string_length_proc;
 extern Scheme_Object *scheme_unsafe_string_set_proc;
@@ -658,6 +659,7 @@ extern Scheme_Object *scheme_boolean_p_proc;
 extern Scheme_Object *scheme_eq_proc;
 extern Scheme_Object *scheme_eqv_proc;
 extern Scheme_Object *scheme_equal_proc;
+extern Scheme_Object *scheme_equal_always_proc;
 
 extern Scheme_Object *scheme_def_exit_proc;
 extern Scheme_Object *scheme_system_type_proc;
@@ -911,7 +913,7 @@ void scheme_run_atexit_closers(Scheme_Object *o, Scheme_Close_Custodian_Client *
 
 typedef struct Scheme_Thread_Custodian_Hop {
   Scheme_Object so;
-  Scheme_Thread *p; /* really an indirection with precise gc */
+  Scheme_Object *p; /* weak box containing a Scheme_Thread* */
   Scheme_Custodian_Reference *mref;
   Scheme_Object *extra_mrefs; /* More owning custodians */
   Scheme_Object *dead_box;
@@ -1328,7 +1330,7 @@ Scheme_Object *scheme_apply_chaperone(Scheme_Object *o, int argc, Scheme_Object 
                                       Scheme_Object *auto_val, int checks);
 
 Scheme_Object *scheme_parse_chaperone_props(const char *who, int start_at, int argc, Scheme_Object **argv);
-Scheme_Object *scheme_chaperone_props_get(Scheme_Object *props, Scheme_Object *prop);
+XFORM_NONGCING Scheme_Object *scheme_chaperone_props_get(Scheme_Object *props, Scheme_Object *prop);
 Scheme_Object *scheme_chaperone_props_remove(Scheme_Object *props, Scheme_Object *prop);
 
 Scheme_Object *scheme_chaperone_hash_get(Scheme_Object *table, Scheme_Object *key);
@@ -3635,6 +3637,7 @@ char *scheme_get_exec_path(void);
 Scheme_Object *scheme_get_run_cmd(void);
 
 Scheme_Object *scheme_get_fd_identity(Scheme_Object *port, intptr_t fd, char *path, int noerr);
+Scheme_Object *scheme_get_fd_stat(intptr_t fd);
 
 Scheme_Object *scheme_extract_relative_to(Scheme_Object *obj, Scheme_Object *dir, Scheme_Hash_Table *cache);
 
@@ -3700,6 +3703,7 @@ Scheme_Object *scheme_file_position_star(int argc, Scheme_Object *argv[]);
 Scheme_Object *scheme_file_truncate(int argc, Scheme_Object *argv[]);
 Scheme_Object *scheme_file_buffer(int argc, Scheme_Object *argv[]);
 Scheme_Object *scheme_file_identity(int argc, Scheme_Object *argv[]);
+Scheme_Object *scheme_file_stat(int argc, Scheme_Object *argv[]);
 Scheme_Object *scheme_file_try_lock(int argc, Scheme_Object **argv);
 Scheme_Object *scheme_file_unlock(int argc, Scheme_Object **argv);
 
@@ -3875,7 +3879,7 @@ typedef Scheme_Object *(*Hash_Table_Element_Filter_Proc)(Scheme_Object *);
 Scheme_Object *scheme_chaperone_hash_table_filtered_copy(Scheme_Object *obj,
                                                          Hash_Table_Element_Filter_Proc filter);
 
-void scheme_bad_vec_index(char *name, Scheme_Object *i, 
+void scheme_bad_vec_index(const char *name, Scheme_Object *i, 
                           const char *what, Scheme_Object *vec, 
                           intptr_t bottom, intptr_t len);
 

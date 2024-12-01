@@ -311,6 +311,7 @@
 (define-primitive $stencil-vector? (lambda (v) #f))
 (define-primitive $system-stencil-vector? (lambda (v) #f))
 (define-primitive $symbol-name #%$symbol-name)
+(define-primitive immutable-vector (lambda args (vector->immutable-vector (apply vector args))))
 
 (define-primitive ($char-grapheme-other-state) 1) ; probably correct, shouldn't matter for compiler
 
@@ -529,7 +530,7 @@
 
 (define-primitive ($make-source-oops who . args)
   (($top-level-value 'datum->syntax) (or who ($make-interaction-syntax 'unknown))
-                                     '(error "oops")))
+                                     `(error 'source "oops ~s" '(,who . ,args))))
 
 (define-primitive ($source-warning . args)
   (printf "~s\n" args))
@@ -541,8 +542,13 @@
   fn)
 
 (define-primitive ($make-read p . more)
-  (lambda ()
-    (read p)))
+  (let ([l (filtered-file->exps p)])
+    (lambda ()
+      (if (null? l)
+          #!eof
+          (let ([a (car l)])
+            (set! l (cdr l))
+            a)))))
 
 (define-primitive ($map who f . ls)
   (apply map f ls))
@@ -575,7 +581,9 @@
 (define (filtered-file->exps s)
   (cond
     [need-vector-filter?
-     (call-with-input-file
+     ((if (input-port? s)
+          (lambda (s proc) (proc s))
+          call-with-input-file)
       s
       (lambda (i)
         (let* ([str (get-string-all i)]
@@ -627,6 +635,7 @@
                        (vec-loop (add1 i))))
                    v)]
                 [else r]))))))]
+    [(input-port? s) (input->exps s)]
     [else (file->exps s)]))
 
 (define (noisy-compile-and-load s)

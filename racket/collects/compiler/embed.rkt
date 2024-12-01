@@ -331,6 +331,7 @@
 (define (mod-name m) (list-ref m 3))
 (define (mod-full-name m) (list-ref m 4))
 (define (mod-mappings m) (unbox (list-ref m 5)))
+(define (mod-mappings-box m) (list-ref m 5))
 (define (mod-runtime-paths m) (list-ref m 6))
 (define (mod-runtime-module-syms m) (list-ref m 7))
 (define (mod-actual-file m) (list-ref m 8))
@@ -521,11 +522,18 @@
                                      (if (pair? l)
                                          (car l)
                                          "compiled"))
-                                   (if (and host? (cross-compiling?))
-                                       (lambda (e)
-                                         (parameterize ([current-compile-target-machine (system-type 'target-machine)])
-                                           (compiler e)))
-                                       compiler)
+                                   (cond
+                                     [(and host? (cross-compiling?))
+                                      (lambda (e)
+                                        (parameterize ([current-compile-target-machine (system-type 'target-machine)])
+                                          (compiler e)))]
+                                     [(not host?)
+                                      (lambda (e)
+                                        ;; point at host compiled code for dependencies
+                                        (parameterize ([current-compiled-file-roots (list (car (current-compiled-file-roots)))])
+                                          (compiler e)))]
+                                     [else
+                                      compiler])
                                    (if on-extension
                                        (lambda (f l?)
                                          (on-extension f l?)
@@ -1245,6 +1253,11 @@
                        null))))
     ;; Drop elements of `codes' that just record copied libs:
     (set-box! codes (filter mod-code (unbox codes)))
+    ;; As an accomodation to `raco demod`, make sure sibling modules of a top-level module
+    ;; are reachable from each other, and submodules are reachable from the root,
+    ;; because `raco demod` generates relative references directly (e.g., in bindings in
+    ;; scopes in syntax objects) instead of going through a sequence of `require` paths:
+    (saturate-immediate-submodule-mappings! (unbox codes))
     ;; Bind `module' to get started:
     (write (compile-using-kernel '(namespace-require '(only '#%kernel module))) outp)
     ;; Install a module name resolver that redirects
@@ -1984,3 +1997,36 @@
       (integer->integer-bytes offset 4 #t #f))
     (list (integer->integer-bytes total 4 #t #f))
     bstrs)))
+
+;; See note at call site for this function:
+(define (saturate-immediate-submodule-mappings! mods)
+  (define submods (make-hash)) ; root module name -> submod sym -> full name
+  (define (immediate-submod? mp)
+    (and (pair? mp)
+         (eq? (car mp) 'submod)
+         (pair? (cddr mp))
+         (null? (cdddr mp))))
+  (for ([m (in-list mods)])
+    (define mp (mod-mod-path m))
+    (when (immediate-submod? mp)
+      (hash-update! submods (cadr mp)
+                    (lambda (ht) (hash-set ht (caddr mp) (mod-full-name m)))
+                    #hasheq())))
+  (for ([m (in-list mods)])
+    (define mp (mod-mod-path m))
+    (define (add-submods! root-name make-submod-path)
+      (define avail (for/hash ([m (in-list (mod-mappings m))])
+                      (values (car m) #t)))
+      (define additions
+        (for/list ([(subm name) (in-hash (hash-ref submods root-name #hasheq()))]
+                   #:do [(define rel-mp (make-submod-path subm))]
+                   #:when (not (hash-ref avail rel-mp #f)))
+          (cons rel-mp name)))
+      (unless (null? additions)
+        (define bx (mod-mappings-box m))
+        (set-box! bx (append (unbox bx) additions))))
+    (cond
+      [(immediate-submod? mp)
+       (add-submods! (cadr mp) (lambda (subm) `(submod ".." ,subm)))]
+      [(not (and (pair? mp) (eq? (car mp) 'submod)))
+       (add-submods! mp (lambda (subm) `(submod "." ,subm)))])))

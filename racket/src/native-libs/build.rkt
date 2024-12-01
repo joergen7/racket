@@ -136,6 +136,9 @@
 ;; https://hg.mozilla.org/mozilla-central/file/tip/gfx/cairo/native-clipping.patch
 (define-runtime-path cairo-cg-surface-patch "patches/cairo-cg-surface.patch")
 
+;; Decallocation-ordering fix
+(define-runtime-path cairo-quartz-callback-patch "patches/cairo-quartz-callback.patch")
+
 ;; Define some functions that aren't in Mac OS 10.5 (for the 32-bit build)
 (define-runtime-path pango-surrogate-patch "patches/pango-surrogate.patch")
 
@@ -154,6 +157,9 @@
 
 ;; Detect oblique before italic on Mac OS
 (define-runtime-path pango-preferoblique-patch "patches/pango-preferoblique.patch")
+
+;; Add `-lusp10` before `-lgdi32` to preserve support for Windows 7
+(define-runtime-path pango-usp10-patch "patches/pango-usp10.patch")
 
 ;; Needed when building with old GCC, such as 4.0:
 (define-runtime-path gmp-weak-patch "patches/gmp-weak.patch")
@@ -229,10 +235,11 @@
 ;; Build GNU sed to avoid potential BSD sed:
 (define need-sed? win?)
 
-(define (sdk n)
-  (~a " -isysroot /usr/local/Developer/SDKs/MacOSX10."n".sdk -mmacosx-version-min=10."n))
+(define (sdk n #:base [base 10])
+  (~a " -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX"base"."n".sdk -mmacosx-version-min="base"."n))
 (define mac32-sdk 6)
 (define mac64-sdk 9)
+(define macaarch64-sdk (sdk 0 #:base 11))
 
 (define all-env
   (cond
@@ -253,7 +260,7 @@
    [mac?
     (cond
      [aarch64?
-      (define flags "-arch arm64 -mmacosx-version-min=11")
+      (define flags (~a "-arch arm64 " macaarch64-sdk))
       (list
        (list "CPPFLAGS" (~a flags))
        (list "LDFLAGS" (~a flags)))]
@@ -649,7 +656,8 @@
                         (list cairo-emptyglyph.patch
                               cairo-coretext-patch
                               courier-new-patch
-                              cairo-cg-surface-patch)
+                              cairo-cg-surface-patch
+                              cairo-quartz-callback-patch)
                         (if win?
                             (list cairo-nofortfy-patch)
                             null)))]
@@ -689,6 +697,9 @@
                                       null)
                                   (if (or mac? win?)
                                       (list pango-emoji-patch)
+                                      null)
+                                  (if (and win? (not aarch64?))
+                                      (list pango-usp10-patch)
                                       null)))]
     [("gmp") (config #:patches (cond
                                  [gcc-4.0?

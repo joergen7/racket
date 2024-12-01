@@ -3554,7 +3554,7 @@ static Scheme_Object *unsafe_socket_to_semaphore(int argc, Scheme_Object *argv[]
   return unsafe_handle_to_semaphore("unsafe-socket->semaphore", argc, argv, 1);
 }
 
-Scheme_Object *scheme_file_identity(int argc, Scheme_Object *argv[])
+static intptr_t extract_port_fd_identity(const char *who, int argc, Scheme_Object *argv[])
 {
   intptr_t fd = 0;
   int fd_ok = 0;
@@ -3571,21 +3571,39 @@ Scheme_Object *scheme_file_identity(int argc, Scheme_Object *argv[])
 
       ip = scheme_input_port_record(p);
       
-      CHECK_PORT_CLOSED("port-file-identity", "input", p, ip->closed);
+      CHECK_PORT_CLOSED(who, "input", p, ip->closed);
     } else if (SCHEME_OUTPUT_PORTP(p)) {
       Scheme_Output_Port *op;
       
       op = scheme_output_port_record(p);
       
-      CHECK_PORT_CLOSED("port-file-identity", "output", p, op->closed);
+      CHECK_PORT_CLOSED(who, "output", p, op->closed);
     }
 
     /* Otherwise, it's just the wrong type: */
-    scheme_wrong_contract("port-file-identity", "file-stream-port?", 0, argc, argv);
-    return NULL;
+    scheme_wrong_contract(who, "file-stream-port?", 0, argc, argv);
+    return 0;
   }
 
-  return scheme_get_fd_identity(p, fd, NULL, 0);
+  return fd;
+}
+
+Scheme_Object *scheme_file_identity(int argc, Scheme_Object *argv[])
+{
+  intptr_t fd;
+
+  fd = extract_port_fd_identity("port-file-identity", argc, argv);
+
+  return scheme_get_fd_identity(argv[0], fd, NULL, 0);
+}
+
+Scheme_Object *scheme_file_stat(int argc, Scheme_Object *argv[])
+{
+  intptr_t fd;
+
+  fd = extract_port_fd_identity("port-file-stat", argc, argv);
+
+  return scheme_get_fd_stat(fd);
 }
 
 static int is_fd_terminal(intptr_t fd)
@@ -4037,6 +4055,8 @@ do_file_position(const char *who, int argc, Scheme_Object *argv[], int can_false
 
     op = scheme_output_port_record(argv[0]);
 
+    CHECK_PORT_CLOSED(who, "output", argv[0], op->closed);    
+
     if (SAME_OBJ(op->sub_type, file_output_port_type)) {
       f = ((Scheme_Output_File *)op->port_data)->f;
     } else if (SAME_OBJ(op->sub_type, fd_output_port_type)) {
@@ -4063,6 +4083,8 @@ do_file_position(const char *who, int argc, Scheme_Object *argv[], int can_false
 
     if (ip->input_lock)
       scheme_wait_input_allowed(ip, 0);
+
+    CHECK_PORT_CLOSED(who, "input", argv[0], ip->closed);
 
     if (SAME_OBJ(ip->sub_type, file_input_port_type)) {
       f = ((Scheme_Input_File *)ip->port_data)->f;

@@ -17,11 +17,11 @@ prompt with syntax coloring and indentation support. This parameter is
 typically set by a @racketidfont{configure-runtime} module; see also
 @secref["configure-runtime"].
 
-Instead of providing configuration information directly, the the
+Instead of providing configuration information directly, the
 @racket[current-interaction-info] parameter specifies a module to
 load, a exported function to call, and data to pass as an argument to
 the exported function. The result of that function should be another
-one that accepts two arguments: a symbol a symbol indicating the kind
+one that accepts two arguments: a symbol indicating the kind
 of information requested (as defined by external tools), and a default
 value that normally should be returned if the symbol is not
 recognized.

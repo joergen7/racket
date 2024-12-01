@@ -17,9 +17,11 @@ on regular-expression matching on strings, bytes, and streams.
 @note-lib[racket/match #:use-sources (racket/match)]
 
 @defform/subs[(match val-expr clause ...)
-              ([clause [pat body ...+]
-                       [pat (=> id) body ...+]
-                       [pat #:when cond-expr body ...+]])]{
+              ([clause [pat option=> option ... body ...+]]
+               [option=> (code:line)
+                         (=> id)]
+               [option (code:line #:when cond-expr)
+                       (code:line #:do [do-body ...])])]{
 
 Finds the first @racket[pat] that matches the result of
 @racket[val-expr], and evaluates the corresponding @racket[body]s with
@@ -53,9 +55,30 @@ a lower-level mechanism achieving the same ends.
 (m '(2 3 4))
 ]
 
-An optional @racket[(=> id)] between a @racket[pat] and the
-@racket[body]s is bound to a @deftech{failure procedure} of zero
-arguments.  If this procedure is invoked, it escapes back to the
+An optional @racket[#:do [do-body ...]] executes @racket[do-body] forms.
+In particular, the forms may introduce definitions that are visible in the remaining
+options and the main clause body.
+Both @racket[#:when] and @racket[#:do] options may appear multiple times
+
+@examples[
+#:eval match-eval
+(define (m x)
+  (match x
+    [(list a b c)
+     #:do [(define sum (+ a b c))]
+     #:when (> sum 6)
+     (format "the sum, which is ~a, is greater than 6" sum)]
+    [(list a b c) 'sum-is-not-greater-than-six]))
+
+(m '(1 2 3))
+(m '(2 3 4))
+]
+
+An optional @racket[(=> id)], which must appear immediately after @racket[pat],
+is bound to a @deftech{failure procedure} of zero
+arguments.
+@racket[id] is visible in all clause options and the clause body.
+If this procedure is invoked, it escapes back to the
 pattern matching expression, and resumes the matching process as if
 the pattern had failed to match.  The @racket[body]s must not mutate
 the object being matched before calling the failure procedure,
@@ -93,7 +116,8 @@ In more detail, patterns match as follows:
        @racketidfont{..}@racket[_k], and
        @racketidfont{__}@racket[_k] for non-negative integers
        @racket[_k]) @margin-note{Unlike in @racket[cond] and @racket[case],
-       @racket[else] is not a keyword in @racket[match].} or @racket[(var _id)]
+       @racket[else] is not a keyword in @racket[match].
+       Use the @racketidfont{_} pattern for the ``else'' clause.} or @racket[(var _id)]
        --- matches anything, and binds @racket[_id] to the
        matching values. If an @racket[_id] is used multiple times
        within a pattern, the corresponding matches must be the same
@@ -223,8 +247,110 @@ In more detail, patterns match as follows:
          [(vector 1 (list a) ..3 5) a])
        ]}
 
+ @item{@racket[(#,(match-kw "hash") _expr _pat ... ... _ht-opt)] ---
+       matches against a hash table where @racket[_expr] matches
+       a key and @racket[_pat] matches a corresponding value.
+
+       @examples[
+       #:eval match-eval
+       (match (hash "aa" 1 "b" 2)
+         [(hash "b" b (string-append "a" "a") a)
+          (list b a)])
+       (match (hash "aa" 1 "b" 2)
+         [(hash "b" _ "c" _) 'matched]
+         [_ 'not-matched])
+       ]
+
+       The key matchings use the key comparator of the matching hash table.
+
+       @examples[
+       #:eval match-eval
+       (let ([k (string-append "a" "b")])
+         (match (hasheq "ab" 1)
+           [(hash k v) 'matched]
+           [_ 'not-matched]))
+       (let ([k (string-append "a" "b")])
+         (match (hasheq k 1)
+           [(hash k v) 'matched]
+           [_ 'not-matched]))
+       ]
+
+       The behavior of residue key-value entries in the hash table value depends on @racket[_ht-opt].
+
+       When @racket[_ht-opt] is not provided or when it is @racket[#:closed],
+       all of the keys in the hash table value must be matched.
+       I.e., the matching is closed to extension.
+
+       @examples[
+       #:eval match-eval
+       (match (hash "a" 1 "b" 2)
+         [(hash "b" _) 'matched]
+         [_ 'not-matched])
+       ]
+
+       When @racket[_ht-opt] is @racket[#:open],
+       there can be keys in the hash table value that are not specified in the pattern.
+       I.e., the matching is open to extension.
+
+       @examples[
+       #:eval match-eval
+       (match (hash "a" 1 "b" 2)
+         [(hash "b" _ #:open) 'matched]
+         [_ 'not-matched])
+       ]
+
+       When @racket[_ht-opt] is @racket[#:rest _pat], @racket[_pat] is further
+       matched against the residue hash table.
+       If the matching hash table is immutable, this residue matching is efficient.
+       Otherwise, the matching hash table will be copied, which could be expensive.
+
+       @examples[
+       #:eval match-eval
+       (match (hash "a" 1 "b" 2)
+         [(hash "b" _ #:rest (hash "a" a)) a]
+         [_ #f])
+       ]
+
+       Many key @racket[_expr]s could evaluate to the same value.
+
+       @examples[
+       #:eval match-eval
+       (match (hash "a" 1 "b" 2)
+         [(hash "b" _ "b" 2 "a" _) 'matched]
+         [_ 'not-matched])
+       ]}
+
+ @item{@racket[(#,(match-kw "hash*") [_expr _pat _kv-opt] ... _ht-opt)] ---
+       similar to @racketidfont{hash}, but with the following differences:
+
+       @itemlist[
+         @item{The key-value pattern must be grouped syntactically.}
+         @item{If @racket[_ht-opt] is not specified, it behaves like @racket[#:open]
+               (as opposed to @racket[#:closed]).}
+         @item{If @racket[_kv-opt] is specified with @racket[#:default _def-expr],
+               and the key does not exist in the hash table value, then the default value
+               from @racket[_def-expr] will be matched against the value pattern,
+               instead of immediately failing to match.}
+       ]
+
+       @examples[
+       #:eval match-eval
+       (match (hash "a" 1 "b" 2)
+         [(hash* ["b" b] ["a" a]) (list b a)])
+       (match (hash "a" 1 "b" 2)
+         [(hash* ["b" b]) 'matched]
+         [_ 'not-matched])
+       (match (hash "a" 1 "b" 2)
+         [(hash* ["a" a #:default 42] ["c" c #:default 100]) (list a c)]
+         [_ #f])
+       ]}
+
  @item{@racket[(#,(match-kw "hash-table") (_pat _pat) ...)] ---
-       similar to @racketidfont{list-no-order}, but matching against
+       @bold{This pattern is deprecated because it can be incorrect.}
+       However, many programs rely on the incorrect behavior,
+       so we still provide this pattern for backward compatibility reasons.
+
+       Similar to @racketidfont{list-no-order}, but matching against
        hash table's key--value pairs.
 
        @examples[
@@ -233,8 +359,12 @@ In more detail, patterns match as follows:
          [(hash-table ("b" b) ("a" a)) (list b a)])
        ]}
 
- @item{@racket[(#,(racketidfont "hash-table") (_pat _pat) ...+ _ooo)]
-       --- Generalizes @racketidfont{hash-table} to support a final
+ @item{@racket[(#,(racketidfont "hash-table") (_pat _pat) ...+ _ooo)] ---
+       @bold{This pattern is deprecated because it can be incorrect.}
+       However, many programs rely on the incorrect behavior,
+       so we still provide this pattern for backward compatibility reasons.
+
+       Generalizes @racketidfont{hash-table} to support a final
        repeating pattern.
 
        @examples[
@@ -298,9 +428,12 @@ In more detail, patterns match as follows:
        }
 
  @item{@racket[(#,(match-kw "regexp") _rx-expr)] --- matches a
-       string that matches the regexp pattern produced by
-       @racket[_rx-expr]; see @secref["regexp"] for more information
-       about regexps.
+       string that matches the regexp pattern produced by @racket[_rx-expr],
+       where @racket[_rx-expr] can be either a @racket[regexp], a @racket[pregexp],
+       a @racket[byte-regexp], a @racket[byte-pregexp], a string, or a byte string.
+       A string and byte string value is converted to a pattern using
+       @racket[regexp] and @racket[byte-regexp] respectively.
+       See @secref["regexp"] for more information about regexps.
 
        @examples[
        #:eval match-eval
@@ -308,7 +441,19 @@ In more detail, patterns match as follows:
          [(regexp #rx"p+") 'yes]
          [_ 'no])
        (match "banana"
-         [(regexp #rx"p+") 'yes]
+         [(regexp #px"(na){2}") 'yes]
+         [_ 'no])
+       (match "banana"
+         [(regexp "(na){2}") 'yes]
+         [_ 'no])
+       (match #"apple"
+         [(regexp #rx#"p+") 'yes]
+         [_ 'no])
+       (match #"banana"
+         [(regexp #px#"(na){2}") 'yes]
+         [_ 'no])
+       (match #"banana"
+         [(regexp #"(na){2}") 'yes]
          [_ 'no])
        ]}
 
@@ -329,9 +474,10 @@ In more detail, patterns match as follows:
 
  @item{@racket[(#,(match-kw "pregexp") _rx-expr)] or
        @racket[(#,(racketidfont "pregexp") _rx-expr _pat)] --- like the
-       @racketidfont{regexp} patterns, but if @racket[_rx-expr]
-       produces a string, it is converted to a pattern using
-       @racket[pregexp] instead of @racket[regexp].}
+       @racketidfont{regexp} patterns, but @racket[_rx-expr] must be either
+       a @racket[pregexp], a @racket[byte-pregexp], a string, or a byte string.
+       A string and byte string value is converted to a pattern using
+       @racket[pregexp] and @racket[byte-pregexp] respectively.}
 
  @item{@racket[(#,(match-kw "and") _pat ...)] --- matches if all
        of the @racket[_pat]s match.  This pattern is often used as
@@ -428,6 +574,10 @@ may evaluate expressions embedded in patterns such as @racket[(#,(racketidfont
 "app") expr pat)] in arbitrary order, or multiple times.  Therefore, such
 expressions must be safe to call multiple times, or in an order other than they
 appear in the original program.
+
+@history[#:changed "8.9.0.5" @elem{Added a support for @racket[#:do].}
+         #:changed "8.11.1.10" @elem{Added the @racket[#,(racketidfont "hash")] and
+                                     @racket[#,(racketidfont "hash*")] patterns.}]
 }
 
 @; ----------------------------------------------------------------------
@@ -435,9 +585,7 @@ appear in the original program.
 @section{Additional Matching Forms}
 
 @defform/subs[(match* (val-expr ...+) clause* ...)
-              ([clause* [(pat ...+) body ...+]
-               [(pat ...+) (=> id) body ...+]
-               [(pat ...+) #:when cond-expr body ...+]])]{
+              ([clause* [(pat ...+) option=> option ... body ...+]])]{
 Matches a sequence of values against each clause in order, matching
 only when all patterns in a clause match.  Each clause must have the
 same number of patterns as the number of @racket[val-expr]s.
@@ -476,9 +624,7 @@ many values to expect from @racket[expr].
         [arg-id default-expr]
         (code:line keyword arg-id)
         (code:line keyword [arg-id default-expr])]
-   [match*-clause [(pat ...+) body ...+]
-                  [(pat ...+) (=> id) body ...+]
-                  [(pat ...+) #:when cond-expr body ...+]])
+   [match*-clause [(pat ...+) option=> option ... body ...+]])
 ]{
   Binds @racket[id] to a procedure that is defined by pattern matching
   clauses using @racket[match*]. Each clause takes a sequence of
@@ -516,21 +662,30 @@ many values to expect from @racket[expr].
   ]
 }
 
-@defform[(match-lambda clause ...)]{
+@deftogether[(@defform[(match-lambda clause ...)]
+              @defform[(match-λ clause ...)])]{
 
 Equivalent to @racket[(lambda (id) (match id clause ...))].
+
+@history[#:changed "8.13.0.5" @elem{Added @racket[match-λ].}]
 }
 
-@defform[(match-lambda* clause ...)]{
+@deftogether[(@defform[(match-lambda* clause ...)]
+              @defform[(match-λ* clause ...)])]{
 
 Equivalent to @racket[(lambda lst (match lst clause ...))].
+
+@history[#:changed "8.13.0.5" @elem{Added @racket[match-λ*].}]
 }
 
-@defform[(match-lambda** clause* ...)]{
+@deftogether[(@defform[(match-lambda** clause* ...)]
+              @defform[(match-λ** clause ...)])]{
 
 Equivalent to @racket[(lambda (args ...) (match* (args ...) clause* ...))],
 where the number of @racket[args ...] is computed from the number of patterns
 appearing in each of the @racket[clause*].
+
+@history[#:changed "8.13.0.5" @elem{Added @racket[match-λ**].}]
 }
 
 

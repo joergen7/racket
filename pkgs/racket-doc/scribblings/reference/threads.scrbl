@@ -12,6 +12,8 @@ When a thread is created, it is placed into the management of the
 @tech{current custodian} and added to the current @tech{thread
 group}. A thread can have any number of custodian managers added
 through @racket[thread-resume].
+The allocation made by a thread is accounted to the thread's custodian managers.
+See @racket[custodian-limit-memory] for examples.
 
 A thread that has not terminated can be garbage collected (see
 @secref["gc-model"]) if it is unreachable and suspended or if it is
@@ -147,10 +149,10 @@ Terminates the specified thread immediately, or suspends the thread if
 @racket[thd] was created with
 @racket[thread/suspend-to-kill]. Terminating the main thread exits the
 application.  If @racket[thd] has already terminated,
-@racket[kill-thread] does nothing.  If the @tech{current custodian}
-does not manage @racket[thd] (and none of its subordinates manages
-@racket[thd]), the @exnraise[exn:fail:contract], and the thread is not
-killed or suspended.
+@racket[kill-thread] does nothing.  If the @tech{current custodian} 
+does not solely manage @racket[thd] (i.e., some custodian of @racket[thd]
+is not the current custodian or a subordinate), the 
+@exnraise[exn:fail:contract], and the thread is not killed or suspended.
 
 Unless otherwise noted, procedures provided by Racket (and GRacket) are
 kill-safe and suspend-safe; that is, killing or suspending a thread
@@ -164,9 +166,12 @@ consumed or not consumed, and other threads can safely use the port.}
          void?]{
 
 @index['("threads" "breaking")]{Registers} a break with the specified
-thread, where @racket[kind] optionally indicates the kind of break to
-register. If breaking is disabled in @racket[thd], the break will be
-ignored until breaks are re-enabled (see @secref["breakhandler"]).}
+thread. The optional @racket[kind] value indicates the kind of break to
+register, where @racket[#f], @racket['hang-up], and @racket['terminate]
+correspond to interrupt, hang-up, and terminate breaks respectively.
+If breaking is disabled in @racket[thd], the break will be
+ignored until breaks are re-enabled.
+See @secref["breakhandler"] for details.}
 
 @defproc[(sleep [secs (>=/c 0) 0]) void?]{
 

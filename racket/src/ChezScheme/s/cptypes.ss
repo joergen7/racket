@@ -93,6 +93,7 @@ Notes:
                  [else #f]
                  #;[else ($oops who "unrecognized record ~s" e)])))))
 
+    ;; Unlike `single-valued?` in cp0, the result is always #t for aborting operations
     (module (single-valued?)
       (define default-fuel 5)
       (define (single-valued? e)
@@ -103,7 +104,7 @@ Notes:
                (nanopass-case (Lsrc Expr) e
                  [(quote ,d) #t]
                  [(seq ,e1 ,e2)
-                  (sv? e fuel)]
+                  (sv? e2 fuel)]
                  [(if ,e1 ,e2, e3)
                   (and (sv? e2 fuel)
                        (sv? e3 fuel))]
@@ -125,6 +126,7 @@ Notes:
                  [(case-lambda ,preinfo ,cl* ...) #t]
                  [(set! ,maybe-src ,x ,e) #t]
                  [(immutable-list (,e* ...) ,e) #t]
+                 [(immutable-vector (,e* ...) ,e) #t]
                  [,pr #t]
                  [(record-cd ,rcd ,rtd-expr ,e) #t]
                  [(record-ref ,rtd ,type ,index ,e) #t]
@@ -204,6 +206,8 @@ Notes:
            (make-1seq 'effect rtd-expr e void-rec)]
           [(immutable-list (,e* ...) ,e)
            (make-1seq 'effect (make-1seq* 'effect e*) e void-rec)]
+          [(immutable-vector (,e* ...) ,e)
+           (make-1seq 'effect (make-1seq* 'effect e*) e void-rec)]
           [(moi) void-rec]
           [else ir]
           #;[else ($oops who "unrecognized record ~s" ir)])
@@ -223,17 +227,6 @@ Notes:
          #t]
         [else #f]))
 
-    (define make-nontail
-      (lambda (ctxt e)
-        (case ctxt
-          [(value)
-           (if (single-valued? e)
-               e
-               `(call ,(make-preinfo-call) ,(lookup-primref 3 '$value) ,e))]
-          [else
-           ;; 'test and 'effect contexts cannot have an active attachment
-           e])))
-    
     (define make-seq
       ; ensures that the right subtree of the output seq is not a seq if the
       ; last argument is similarly constrained, to facilitate result-exp
@@ -251,7 +244,7 @@ Notes:
          (if (simple? e1)
                e2
                (if (and (eq? ctxt 'effect) (simple? e2))
-                   (make-nontail ctxt e1)
+                   e1
                    (nanopass-case (Lsrc Expr) e2
                      [(seq ,e21 ,e22) `(seq (seq ,e1 ,e21) ,e22)]
                      [else `(seq ,e1 ,e2)])))]
@@ -579,14 +572,14 @@ Notes:
     (cond
       [(#3%$record? d) '$record] ;check first to avoid double representation of rtd
       [(okay-to-copy? d) ir]
-      [(list? d) '$list-pair] ; quoted list should not be modified.
-      [(pair? d) 'pair]
-      [(box? d) 'box]
-      [(vector? d) 'vector]
-      [(string? d) 'string]
-      [(bytevector? d) 'bytevector]
-      [(fxvector? d) 'fxvector]
-      [(flvector? d) 'flvector]
+      [(list? d) list-pair-pred] ; quoted list should not be modified.
+      [(pair? d) pair-pred]
+      [(box? d) box-pred]
+      [(vector? d) vector*-pred]
+      [(string? d) string*-pred]
+      [(bytevector? d) bytevector*-pred]
+      [(fxvector? d) fxvector*-pred]
+      [(flvector? d) flvector*-pred]
       [else #f]))
 
   (define (rtd->record-predicate rtd extend?)
@@ -670,7 +663,28 @@ Notes:
          (predicate-implies? x $fixmediate-pred)))
 
   (define (unwrapped-error ctxt e)
-    (values (make-nontail ctxt e) 'bottom pred-env-bottom #f #f))
+    (let ([e (cond
+               [(or (and (fx< (debug-level) 2)
+                         ;; Calling functions for continuation-attachment operations
+                         ;; will not count as `single-valued?` (even though we get
+                         ;; here because we know an error will be raised); we need to keep
+                         ;; those non-tail:
+                         (single-valued? e))
+                    ;; A 'test or 'effect context cannot have an active attachment,
+                    ;; and they are non-tail with respect to the enclosing function,
+                    ;; so ok to have `e` immediately:
+                    (not (eq? 'value ctxt)))
+                ;; => It's ok to potentially move `e` into tail position
+                ;; from a continuation-marks perspective. Although an
+                ;; error may trigger a handler that has continuation-mark
+                ;; operations, but the handler is called by `raise` in
+                ;; non-tail position.
+                e]
+               [else
+                ;; Wrap `e` to keep it non-tail
+                (with-output-language (Lsrc Expr)
+                  `(seq ,e ,void-rec))])])
+      (values e 'bottom pred-env-bottom #f #f)))
 
   (module ()
     (with-output-language (Lsrc Expr)
@@ -1035,13 +1049,15 @@ Notes:
 
         (define-specialize/bitwise 2 bitwise-and
                                      fxand
-                                     (lambda (r*) (ormap (lambda (r) (check-constant-is? r (lambda (x) (target-fixnum? x)
-                                                                                                       (>= x 0))))
+                                     (lambda (r*) (ormap (lambda (r) (check-constant-is? r (lambda (x) 
+                                                                                             (and (target-fixnum? x)
+                                                                                                  (>= x 0)))))
                                                          r*)))
         (define-specialize/bitwise 2 bitwise-ior
                                      fxior
-                                     (lambda (r*) (ormap (lambda (r) (check-constant-is? r (lambda (x) (target-fixnum? x)
-                                                                                                       (< x 0))))
+                                     (lambda (r*) (ormap (lambda (r) (check-constant-is? r (lambda (x)
+                                                                                             (and (target-fixnum? x)
+                                                                                                  (< x 0)))))
                                                          r*)))
         (define-specialize/bitwise 2 bitwise-xor fxxor (lambda (r*) #f))
         (define-specialize/bitwise 2 bitwise-not fxnot (lambda (r*) #f))
@@ -1053,12 +1069,12 @@ Notes:
 
       (define-specialize 2 list
         [() (values null-rec null-rec ntypes #f #f)] ; should have been reduced by cp0
-        [e* (values `(call ,preinfo ,pr ,e* ...) 'pair ntypes #f #f)])
+        [e* (values `(call ,preinfo ,pr ,e* ...) pair-pred ntypes #f #f)])
 
       (define-specialize 2 cdr
         [(v) (values `(call ,preinfo ,pr ,v)
                      (cond
-                       [(predicate-implies? (predicate-intersect (get-type v) 'pair) '$list-pair)
+                       [(predicate-implies? (predicate-intersect (get-type v) pair-pred) list-pair-pred)
                         $list-pred]
                        [else
                         ptr-pred])
@@ -1129,6 +1145,38 @@ Notes:
                                   (and (eq? ctxt 'test)
                                        (pred-env-add/ref ntypes val (rtd->record-predicate rtd #t) plxc))
                                   #f)]))])
+
+      (define-specialize 2 (add1 sub1)
+        [(n) (let ([r (get-type n)])
+               (cond
+                 [(predicate-implies? r 'exact-integer)
+                  (values `(call ,preinfo ,pr ,n)
+                          'exact-integer ntypes #f #f)]
+                 [(predicate-implies? r flonum-pred)
+                  (values `(call ,preinfo ,(lookup-primref 3 (if (eq? prim-name 'add1) 'fl+ 'fl-)) ,n (quote 1.0))
+                          flonum-pred ntypes #f #f)]
+                 [(predicate-implies? r real-pred)
+                  (values `(call ,preinfo ,pr ,n)
+                          real-pred ntypes #f #f)]
+                 [else
+                  (values `(call ,preinfo ,pr ,n)
+                          ret ntypes #f #f)]))])
+
+      (define-specialize 2 abs
+        [(n) (let ([r (get-type n)])
+               (cond
+                 ; not closed for fixnums
+                 [(predicate-implies? r 'bignum)
+                  (values `(call ,preinfo ,pr ,n)
+                          'bignum ntypes #f #f)]
+                 [(predicate-implies? r 'exact-integer)
+                  (values `(call ,preinfo ,pr ,n)
+                          'exact-integer ntypes #f #f)]
+                 [(predicate-implies? r flonum-pred)
+                  (values `(call ,preinfo ,(lookup-primref 3 'flabs) ,n)
+                          flonum-pred ntypes #f #f)]
+                 [else
+                  (values `(call ,preinfo ,pr ,n) ret ntypes #f #f)]))])
 
       (define-specialize 2 zero?
         [(n) (let ([r (get-type n)])
@@ -1467,7 +1515,7 @@ Notes:
     (define (cut-r* r* n)
       (let loop ([i n] [r* r*])
         (if (fx= i 0)
-            (list (if (null? r*) null-rec 'pair))
+            (list (if (null? r*) null-rec pair-pred))
             (cons (car r*) (loop (fx- i 1) (cdr r*))))))
     (let*-values ([(ntypes e* r* t* t-t* f-t*)
                    (map-Expr/delayed e* oldtypes plxc)])
@@ -1721,12 +1769,20 @@ Notes:
                 [(predicate-implies? ret2 'bottom) ;check bottom first
                  (values (if (unsafe-unreachable? e2)
                              (make-seq ctxt e1 e3)
-                             (make-seq ctxt `(if ,e1 ,e2 ,void-rec) e3))
+                             (if (or (< (debug-level) 2)
+                                     (not (eq? ctxt 'value)))
+                                 (make-seq ctxt `(if ,e1 ,e2 ,void-rec) e3)
+                                 ;; If `debug-level` >= 2, may need to keep in tail position
+                                 ir))
                          ret3 types3 t-types3 f-types3)]
                 [(predicate-implies? ret3 'bottom) ;check bottom first
                  (values (if (unsafe-unreachable? e3)
                              (make-seq ctxt e1 e2)
-                             (make-seq ctxt `(if ,e1 ,void-rec ,e3) e2))
+                             (if (or (< (debug-level) 2)
+                                     (not (eq? ctxt 'value)))
+                                 (make-seq ctxt `(if ,e1 ,void-rec ,e3) e2)
+                                 ;; As above:
+                                 ir))
                          ret2 types2 t-types2 f-types2)]
                 [else
                  (let ([new-types (pred-env-union/super-base types2 t-types1
@@ -1853,7 +1909,11 @@ Notes:
       [(immutable-list (,[e* 'value types plxc -> e* r* t* t-t* f-t*] ...)
                        ,[e 'value types plxc -> e ret types t-types f-types])
        (values `(immutable-list (,e*  ...) ,e)
-               (if (null? e*) null-rec '$list-pair) types #f #f)]
+               (if (null? e*) null-rec $list-pred) types #f #f)]
+      [(immutable-vector (,[e* 'value types plxc -> e* r* t* t-t* f-t*] ...)
+                         ,[e 'value types plxc -> e ret types t-types f-types])
+       (values `(immutable-vector (,e*  ...) ,e)
+               ret types t-types f-types)]
       [(moi) (values ir #f types #f #f)]
       [(pariah) (values ir void-rec types #f #f)]
       [(cte-optimization-loc ,box ,[e 'value types plxc -> e ret types t-types f-types] ,exts)

@@ -258,7 +258,8 @@
                     (if universe-ct
                         (let-values ([(ct . ignore) (with-profile-tracker go)])
                           (store-coverage universe-ct ct (format "~a.covout" mat)))
-                        (go))))
+                        (go))
+                    (printf "\npeak memory use: ~s\n" (maximum-memory-bytes))))
                 (lambda () (close-output-port (mat-output))))))))))
 
 (set! record-run-coverage
@@ -379,6 +380,13 @@
                         (let f ([i (fx- (fxvector-length x) 1)])
                           (or (fx< i 0)
                               (and (fx= (fxvector-ref x i) (fxvector-ref y i))
+                                   (f (fx1- i))))))]
+                  [(flvector? x)
+                   (and (flvector? y)
+                        (fx= (flvector-length x) (flvector-length y))
+                        (let f ([i (fx- (flvector-length x) 1)])
+                          (or (fx< i 0)
+                              (and (eqv? (flvector-ref x i) (flvector-ref y i))
                                    (f (fx1- i))))))]
                   [(box? x) (and (box? y) (e? (unbox x) (unbox y)))]
                   [else #f])
@@ -608,3 +616,20 @@
                                 (set! counter n)
                                 (fx= n 0))))])
         (collect)))))
+
+(define-syntax retry-for-spurious
+  (let ([mt (symbol->string (machine-type))])
+    (if (or (memq (substring mt 0 2) '("a6" "i3"))
+            (memq (substring mt 0 3) '("ta6" "ti3")))
+        ;; no retry loop needed on x86
+        (lambda (stx)
+          (syntax-case stx ()
+            [(_ e) #'e]))
+        ;; add retry loop
+        (lambda (stx)
+          (syntax-case stx ()
+            [(_ e) #'(let loop ([n 10])
+                       ;; 10 spurious failures in a row is vanishingly unlikely?
+                       (or e
+                           (and (> n 0)
+                                (loop (- n 1)))))])))))

@@ -61,8 +61,12 @@
          shifted-multi-scope?
          shifted-multi-scope<?
 
+         interned-scope?
+         interned-scope-key
+
          interned-scope-symbols
          interned-scopes
+         syntax-has-interned-scope?
 
          scope-place-init!)
 
@@ -80,7 +84,7 @@
 ;; faster and to improve GC, since non-nested binding contexts will
 ;; generally not share a most-recent scope.
 
-(struct scope (id             ; internal scope identity; used for sorting
+(struct scope (id             ; internal scope identity as an exact rational; used for sorting
                kind           ; 'macro for macro-introduction scopes, otherwise treated as debug info
                [binding-table #:mutable]) ; see "binding-table.rkt"
   #:authentic
@@ -115,12 +119,14 @@
     ;; the `bindings` field is handled via `prop:scope-with-bindings`
     (void))
   #:property prop:scope-with-bindings
-  (lambda (s get-reachable-scopes extra-shifts reach register-trigger)
+  (lambda (s get-reachable-scopes extra-shifts reach register-trigger reach-implicitly report-shifts)
     (binding-table-register-reachable (scope-binding-table s)
                                       get-reachable-scopes
                                       extra-shifts
                                       reach
-                                      register-trigger)))
+                                      register-trigger
+                                      reach-implicitly
+                                      report-shifts)))
 
 (define deserialize-scope
   (case-lambda
@@ -180,7 +186,8 @@
     (define multi-scope-tables (serialize-state-multi-scope-tables state))
     (ser-push! (or (hash-ref multi-scope-tables (multi-scope-scopes ms) #f)
                    (let ([ht (for/hasheqv ([(phase sc) (in-hash (unbox (multi-scope-scopes ms)))]
-                                           #:when (set-member? (serialize-state-reachable-scopes state) sc))
+                                           #:when (or (set-member? (serialize-state-reachable-scopes state) sc)
+                                                      (set-member? (serialize-state-implicitly-reachable-scopes state) sc)))
                                (values phase sc))])
                      (hash-set! multi-scope-tables (multi-scope-scopes ms) ht)
                      ht))))
@@ -189,7 +196,7 @@
     ;; the `scopes` field is handled via `prop:scope-with-bindings`
     (void))
   #:property prop:scope-with-bindings
-  (lambda (ms get-reachable-scopes bulk-shifts reach register-trigger)
+  (lambda (ms get-reachable-scopes bulk-shifts reach register-trigger reach-implicitly report-shifts)
     ;; This scope is reachable via its multi-scope, but it only
     ;; matters if it's reachable through a binding (otherwise it
     ;; can be re-generated later). We don't want to keep a scope
@@ -232,7 +239,10 @@
   #:property prop:serialize-fill!
   (lambda (s ser-push! state)
     (ser-push! 'tag '#:representative-scope-fill!)
-    (ser-push! (binding-table-prune-to-reachable (scope-binding-table s) state))
+    (if (set-member? (serialize-state-reachable-scopes state) s)
+        (ser-push! (binding-table-prune-to-reachable (scope-binding-table s) state))
+        ;; only implicitly reachable, so we don't need bindings
+        (ser-push! empty-binding-table))
     (ser-push! (representative-scope-owner s)))
   #:property prop:reach-scopes
   (lambda (s bulk-shifts reach)
@@ -314,8 +324,14 @@
   ;; having a larger id
   (- (new-scope-id!)))
 
-(define (deserialized-scope-id? scope-id)
-  (negative? scope-id))
+(define (make-representative-scope-id scope-id phase)
+  ;; keep a representative scope's age in line with the enclosing multi-scope's
+  ;; age, and make it deterministic for the phase
+  (cond
+    [(eqv? phase 0) (+ scope-id 1/2)]
+    [(not phase) (+ scope-id 7/8)]
+    [(phase . > . 0) (+ scope-id (/ 1 (+ 2 phase)))] ; in (0, 1/3]
+    [else (+ scope-id 1/2 (/ 1 (- 2 phase)))])) ; (1/2, 3/4]
 
 ;; A shared "outside-edge" scope for all top-level contexts
 (define top-level-common-scope (scope 0 'module empty-binding-table))
@@ -354,6 +370,10 @@
            (hash-set! interned-scopes-table sym new)
            new)))))
 
+(define (syntax-has-interned-scope? s)
+  (for/or ([sc (in-set (syntax-scopes s))])
+    (interned-scope? sc)))
+
 (define (new-multi-scope [name #f])
   (intern-shifted-multi-scope 0 (multi-scope (new-scope-id!) name (box (hasheqv)) (box (hasheqv)) (box (hash)))))
 
@@ -361,9 +381,9 @@
   ;; Get the identity of `ms` at phase`
   (let ([scopes (unbox (multi-scope-scopes ms))])
     (or (hash-ref scopes phase #f)
-        (let ([s (representative-scope (if (deserialized-scope-id? (multi-scope-id ms))
-                                           (new-deserialize-scope-id!)
-                                           (new-scope-id!))
+        (let ([s (representative-scope (make-representative-scope-id
+                                        (multi-scope-id ms)
+                                        phase)
                                        'module
                                        empty-binding-table
                                        ms phase)])

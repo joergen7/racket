@@ -199,7 +199,7 @@
       (error? (load-shared-object 3))
     )
    ]
-  [(i3le ti3le a6le ta6le arm32le tarm32le arm64le tarm64le ppc32le tppc32le rv64le trv64le)
+  [(i3le ti3le a6le ta6le arm32le tarm32le arm64le tarm64le ppc32le tppc32le rv64le trv64le la64le tla64le)
    (mat load-shared-object
       (file-exists? foreign1.so)
       (begin (load-shared-object foreign1.so) #t)
@@ -232,7 +232,8 @@
       (error? (load-shared-object 3))
     )
    ]
-  [(i3osx ti3osx a6osx ta6osx ppc32osx tppc32osx arm64osx tarm64osx)
+  [(i3osx ti3osx a6osx ta6osx ppc32osx tppc32osx arm64osx tarm64osx
+          a6ios ta6ios arm64ios tarm64ios)
    (mat load-shared-object
      (file-exists? foreign1.so)
       (begin (load-shared-object foreign1.so) #t)
@@ -293,6 +294,18 @@
       (error? (errorf 'float_id "invalid foreign-procedure argument ~s" 0))
     )
    ])
+
+(mat load-shared-object-f
+  (equal?
+    (with-input-from-string
+      (separate-eval
+        '(begin
+           (printf "(~S " (foreign-entry? "memcpy"))
+           (load-shared-object #f)
+           (printf "~S)~%" (foreign-entry? "memcpy"))
+           (void)))
+      read)
+    '(#f #t)))
 
 (mat foreign-entry?
    (foreign-entry? "id")
@@ -646,6 +659,242 @@
   ($check $siv (- -1 (expt 2 100)))
 )
 
+(mat round-trip
+  (begin
+    (define rt-int (foreign-procedure "rt_int" (iptr) ptr))
+    (define rt-int32 (foreign-procedure "rt_int32" (integer-32) ptr))
+    (define rt-int64 (foreign-procedure "rt_int64" (integer-64) ptr))
+    (define rt-uint (foreign-procedure "rt_uint" (uptr) ptr))
+    (define rt-uint32 (foreign-procedure "rt_uint32" (unsigned-32) ptr))
+    (define rt-uint64 (foreign-procedure "rt_uint64" (unsigned-64) ptr))
+    (define (check expected ls)
+      (and (list? ls)
+           (= (length ls) 4)
+           (let ([expected (or expected (car ls))])
+             (andmap (lambda (x) (eqv? expected x)) ls))))
+    (define rt-fix (if (< (fixnum-width) 32) rt-int32 rt-int64))
+    (define (check-fixnum expected)
+      (let ([actual (rt-fix expected)])
+        (and (fixnum? expected)
+             (andmap fixnum? actual)
+             (check expected actual))))
+    #t)
+  (check-fixnum -1)
+  (check-fixnum 0)
+  (check-fixnum 1)
+  (check-fixnum (most-positive-fixnum))
+  (check-fixnum (most-negative-fixnum))
+
+  (check 0 (rt-int 0))
+  (check -1 (rt-int -1))
+  (check #f (rt-int (ash 1 (- (* 8 (foreign-sizeof 'iptr)) 1))))
+  (check #f (rt-int (- (ash 1 (- (* 8 (foreign-sizeof 'iptr)) 1)))))
+  (let ([n (+ -1 (ash 1 (- (* 8 (foreign-sizeof 'iptr)) 1)))])
+    (check n (rt-int n)))
+  (let ([n (- (ash 1 (* 8 (foreign-sizeof 'iptr))) 1)])
+    (check -1 (rt-int n)))
+  (check 0 (rt-int32 0))
+  (check -1 (rt-int32 -1))
+  (check #f (rt-int32 (ash 1 31)))
+  (check #f (rt-int32 (- (ash 1 31))))
+  (let ([n (+ -1 (ash 1 31))])
+    (check n (rt-int32 n)))
+  (check 0 (rt-int64 0))
+  (check -1 (rt-int64 -1))
+  (check #f (rt-int64 (ash 1 63)))
+  (check #f (rt-int64 (- (ash 1 63))))
+  (let ([n (+ -1 (ash 1 63))])
+    (check n (rt-int64 n)))
+
+  (check 0 (rt-uint 0))
+  (check #f (rt-uint -1))
+  (check #f (rt-uint (ash 1 (- (* 8 (foreign-sizeof 'iptr)) 1))))
+  (check #f (rt-uint (- (ash 1 (- (* 8 (foreign-sizeof 'iptr)) 1)))))
+  (let ([n (+ -1 (ash 1 (- (* 8 (foreign-sizeof 'iptr)) 1)))])
+    (check n (rt-uint n)))
+  (let ([n (- (ash 1 (* 8 (foreign-sizeof 'iptr))) 1)])
+    (check n (rt-uint n)))
+  (check 0 (rt-uint32 0))
+  (check #f (rt-uint32 -1))
+  (check #f (rt-uint32 (ash 1 31)))
+  (check #f (rt-uint32 (- (ash 1 31))))
+  (let ([n (+ -1 (ash 1 31))])
+    (check n (rt-uint32 n)))
+  (let ([n (- (ash 1 32) 1)])
+    (check n (rt-uint32 n)))
+  (check 0 (rt-uint64 0))
+  (check #f (rt-uint64 -1))
+  (check #f (rt-uint64 (ash 1 63)))
+  (check #f (rt-uint64 (- (ash 1 63))))
+  (let ([n (+ -1 (ash 1 63))])
+    (check n (rt-uint64 n)))
+  (let ([n (- (ash 1 64) 1)])
+    (check n (rt-uint64 n)))
+)
+
+(mat convert
+  (begin
+    (define to-int (foreign-procedure "to_int" (ptr) iptr))
+    (define to-int32 (foreign-procedure "to_int32" (ptr) integer-32))
+    (define to-int64 (foreign-procedure "to_int64" (ptr) integer-64))
+    (define to-uint (foreign-procedure "to_uint" (ptr) uptr))
+    (define to-uint32 (foreign-procedure "to_uint32" (ptr) unsigned-32))
+    (define to-uint64 (foreign-procedure "to_uint64" (ptr) unsigned-64))
+    (define (check-error reason who f arg)
+      (define fp-names
+        (case who
+          [(to-int) '("Sinteger_value")]
+          [(to-int32) '("Sinteger32_value")]
+          [(to-int64) '("Sinteger64_value")]
+          ;; These currently call their integer counterparts and cast the
+          ;; result, so the condition-who will report the integer entry point.
+          [(to-uint) '("Sunsigned_value" "Sinteger_value")]
+          [(to-uint32) '("Sunsigned32_value" "Sinteger32_value")]
+          [(to-uint64) '("Sunsigned64_value" "Sinteger64_value")]
+          [else '("unexpected")]))
+      (guard (c [else
+                 ;; Check error message explicitly rather than relying on the
+                 ;; diff-based expected-error machinery since the offending
+                 ;; values may differ on 32- vs. 64-bit platforms.
+                 (assert (member arg (condition-irritants c)))
+                 (assert (equal? (condition-message c) reason))
+                 (assert (member (condition-who c) fp-names))
+                 #t])
+        (f arg)
+        #f))
+    (define out-of-range "~s is out of range")
+    (define not-integer "~s is not an integer")
+    (define-syntax must-fail
+      (syntax-rules ()
+        [(_ reason f n) (check-error reason 'f f n)]))
+    #t)
+
+  (equal? 0 (to-int 0))
+  (equal? 0 (to-int32 0))
+  (equal? 0 (to-int64 0))
+  (equal? 0 (to-uint 0))
+  (equal? 0 (to-uint32 0))
+  (equal? 0 (to-uint64 0))
+  (equal? -1 (to-int -1))
+  (equal? -1 (to-int32 -1))
+  (equal? -1 (to-int64 -1))
+  (equal? (- (ash 1 (* 8 (foreign-sizeof 'uptr))) 1) (to-uint -1))
+  (equal? (- (ash 1 32) 1) (to-uint32 -1))
+  (equal? (- (ash 1 64) 1) (to-uint64 -1))
+
+  (must-fail not-integer to-int "one")
+  (must-fail not-integer to-int32 'two)
+  (must-fail not-integer to-int64 '(3))
+  (must-fail not-integer to-uint "four")
+  (must-fail not-integer to-uint32 'five)
+  (must-fail not-integer to-uint64 '(6))
+
+  (must-fail out-of-range to-int (ash 1 65))
+  (must-fail out-of-range to-int (- (- (ash 1 (- (* 8 (foreign-sizeof 'iptr)) 1))) 1))
+  (must-fail out-of-range to-int32 (ash 1 33))
+  (must-fail out-of-range to-int32 (- (- (ash 1 31)) 1))
+  (must-fail out-of-range to-int64 (ash 1 65))
+  (must-fail out-of-range to-int64 (- (- (ash 1 63)) 1))
+  (must-fail out-of-range to-uint (ash 1 65))
+  (must-fail out-of-range to-uint (- (- (ash 1 (- (* 8 (foreign-sizeof 'uptr)) 1))) 1))
+  (must-fail out-of-range to-uint32 (ash 1 33))
+  (must-fail out-of-range to-uint32 (- (- (ash 1 31)) 1))
+  (must-fail out-of-range to-uint64 (ash 1 65))
+  (must-fail out-of-range to-uint64 (- (- (ash 1 63)) 1))
+)
+
+(mat try-convert
+  (begin
+    (define m-p-f (most-positive-fixnum))
+    (define m-n-f (most-negative-fixnum))
+    (define ptr-bits (* 8 (foreign-sizeof 'ptr)))
+    (define (test signed? bits prefix in-range* out-of-range*)
+      (define sign-bit (and signed? (- bits 1)))
+      (define fp-v2 (foreign-procedure (format "~a2" prefix) (ptr) ptr))
+      (define fp-v3 (foreign-procedure (format "~a3" prefix) (ptr) ptr))
+      (define (fp-name fp)
+        (format "~a~a" prefix (assert (cond [(eq? fp fp-v2) 2] [(eq? fp fp-v3) 3] [else #f]))))
+      (define (expect expected fp arg)
+        (let ([actual (fp arg)])
+          (unless (equal? expected actual)
+            (errorf #f "expected ~s but got ~s from ~a on ~s\n" expected actual (fp-name fp) arg))))
+      (define in-range-for-all*
+        (let ([ls (list 1 7654321 #xffffff #xffffff0)])
+          (cons 0
+            (if (not sign-bit)
+                ls
+                (append ls (map - ls)
+                  (let ([hi (ash 1 sign-bit)])
+                    (list hi (- hi) (+ (- hi) 1) (+ hi 1))))))))
+      (define out-of-range-for-all*
+        (let ([ls (list #e1e30 #e-1e30 (ash 1 64) (- (ash 1 64)))])
+          (if (not sign-bit)
+              ls
+              (let ([hi (ash 1 (+ sign-bit 1))])
+                (list* hi (- hi) (- (- hi) 123) (+ hi 27) (- (- (ash hi -1)) 1) ls)))))
+      (assert (string=? (substring prefix 4 7) (if sign-bit "int" "uns")))
+      ;; try some non-integer cases
+      (for-each
+       (lambda (bogus)
+         (expect '(0 0) fp-v2 bogus)
+         (expect '(0 0 "~s is not an integer") fp-v3 bogus))
+       '(#f 0.0 #t 3.2 "wrong" bad))
+      ;; try in-range cases
+      (for-each
+       (lambda (good)
+         (define expected
+           (if (not sign-bit)
+               (if (< good 0)
+                   (bitwise-bit-field (bitwise-not (- -1 good)) 0 bits)
+                   good)
+               (if (or (< good 0) (not (logbit? sign-bit good)))
+                   good
+                   (- (bitwise-bit-field (+ (bitwise-not good) 1) 0 (+ sign-bit 1))))))
+         (expect `(1 ,expected) fp-v2 good)
+         (expect `(1 ,expected "untouched") fp-v3 good))
+       (append in-range-for-all* in-range*))
+      ;; try out-of-range cases
+      (for-each
+       (lambda (bad)
+         (expect '(0 0) fp-v2 bad)
+         (expect `(0 0 "~s is out of range") fp-v3 bad))
+       (append out-of-range-for-all* out-of-range*))
+      #t)
+    #t)
+  (test #t ptr-bits "try_integer_value"
+    (list ;; extra in-range checks
+     m-n-f
+     m-p-f
+     ;; hit third return in bignum case
+     (- m-n-f 1)
+     (+ m-p-f 1))
+    '())
+  (test #t 32 "try_integer32_value" '() '())
+  (test #t 64 "try_integer64_value"
+    (list m-p-f m-n-f
+      (ash 1 60)
+      (ash 1 61)
+      (ash 1 62)
+      (- -1 (ash 1 60))
+      (- -1 (ash 1 61))
+      (- -1 (ash 1 62)))
+    '())
+  (test #f ptr-bits "try_unsigned_value"
+    (list m-p-f (+ m-p-f 1) m-n-f
+      (- (ash 1 (- ptr-bits 1)))
+      (- (- (ash 1 (- ptr-bits 1)) 1)))
+    (list (- (+ (ash 1 (- ptr-bits 1)) 1))))
+  (test #f 32 "try_unsigned32_value"
+    (list
+     (+ (ash 1 30) 1)
+     (- (+ (ash 1 30) 1))
+     (- (ash 1 31)))
+    (list (ash 1 32) (- (ash 1 32)) (- -1 (ash 1 31))))
+  (test #f 64 "try_unsigned64_value"
+    (list m-p-f (+ m-p-f 1) m-n-f (- 1 (ash 1 63)) #x-8000000000000000)
+    (list (- -1 (ash 1 63))))
+)
+
 (mat foreign-sizeof
   (equal?
     (list
@@ -684,6 +933,7 @@
   (equal? (foreign-sizeof 'unsigned-long) (foreign-sizeof 'long))
   (equal? (foreign-sizeof 'unsigned-long-long) (foreign-sizeof 'long-long))
   (equal? (foreign-sizeof 'boolean) (foreign-sizeof 'int))
+  (equal? (foreign-sizeof 'stdbool) (foreign-sizeof 'stdbool))
   (equal? (foreign-sizeof 'fixnum) (foreign-sizeof 'iptr))
   (equal? (foreign-sizeof 'scheme-object) (foreign-sizeof 'void*))
   (equal? (foreign-sizeof 'ptr) (foreign-sizeof 'void*))
@@ -1998,13 +2248,13 @@
     (define ff-locked-decr (foreign-procedure "locked_decr" ((* uptr)) boolean))
     #t)
   (eq? (ff-init-lock (ftype-&ref A (x) a)) (void))
-  (ftype-lock! A (x) a)
+  (retry-for-spurious (ftype-lock! A (x) a))
   (not (ftype-lock! A (x) a))
   (eq? (ftype-unlock! A (x) a) (void))
   (eq? (ff-spinlock (ftype-&ref A (x) a)) (void))
   (not (ftype-lock! A (x) a))
   (eq? (ff-unlock (ftype-&ref A (x) a)) (void))
-  (ftype-lock! A (x) a)
+  (retry-for-spurious (ftype-lock! A (x) a))
   (eq? (ff-unlock (ftype-&ref A (x) a)) (void))
   (eq? (ff-spinlock (ftype-&ref A (x) a)) (void))
   (not (ftype-lock! A (x) a))
@@ -2345,6 +2595,19 @@
     (and
       (eqv? (Srvtest_boolean Frvtest_boolean "abcdefg") #t)
       (eqv? (Srvtest_boolean Frvtest_boolean "gfedcba") #f)))
+  (let ()
+    (define Frvtest_stdbool
+      (foreign-callable
+        (lambda (x) (equal? x "abCDEfg"))
+        (scheme-object)
+        stdbool))
+    (define Srvtest_stdbool
+      (foreign-procedure "Srvtest_stdbool"
+        (scheme-object scheme-object)
+        stdbool))
+    (and
+      (eqv? (Srvtest_stdbool Frvtest_stdbool "abCDEfg") #t)
+      (eqv? (Srvtest_stdbool Frvtest_stdbool "gfEDCba") #f)))
   (let ()
     (define Frvtest_fixnum
       (foreign-callable
@@ -2837,13 +3100,14 @@
       (machine-case
         [(i3ob ti3ob a6ob ta6ob a6s2 ta6s2 i3s2 ti3s2 i3qnx ti3qnx i3nb ti3nb a6nb ta6nb)
          '(load-shared-object "libc.so")]
-        [(i3le ti3le a6le ta6le arm32le tarm32le arm64le tarm64le ppc32le tppc32le rv64le trv64le)
+        [(i3le ti3le a6le ta6le arm32le tarm32le arm64le tarm64le ppc32le tppc32le rv64le trv64le la64le tla64le)
          '(load-shared-object "libc.so.6")]
         [(i3fb ti3fb a6fb ta6fb)
          '(load-shared-object "libc.so.7")]
         [(i3nt ti3nt a6nt ta6nt arm64nt tarm64nt)
          '(load-shared-object "msvcrt.dll")]
-        [(i3osx ti3osx a6osx ta6osx ppc32osx tppc32osx arm64osx tarm64osx)
+        [(i3osx ti3osx a6osx ta6osx ppc32osx tppc32osx arm64osx tarm64osx
+                a6ios ta6ios arm64ios tarm64ios)
          '(load-shared-object "libc.dylib")]
         [(pb pb32l pb32b pb64l pb64b tpb tpb32l tpb32b tpb64l tpb64b)
          '(let ([try-load (lambda (path)
@@ -3273,7 +3537,7 @@
       (let* ([exception #f]
              [callback (make-ftype-pointer thread-callback-T
                          (lambda (arg)
-                           ;; Don't let an exception reset this tread.
+                           ;; Don't let an exception reset this thread.
                            (guard [c (else (set! exception c) 0.0)]
                              (cb-proc arg))))]
              [r (proc callback)])
@@ -3290,8 +3554,7 @@
          [else (loop (fx+ i 1) (proc arg))])))
     (define call-in-unknown-thread-2
       ;; Call in the current thread, but through the foreign procedure
-      (if (and (threaded?)
-               (foreign-entry? "call_in_unknown_thread"))
+      (if (threaded?)
           (let ([call (foreign-procedure "call_in_unknown_thread"
                                          ((* thread-callback-T) double int boolean boolean)
                                          double)])
@@ -3302,8 +3565,7 @@
           call-in-unknown-thread-1))
     (define call-in-unknown-thread-3
       ;; Call in a truly unknown thread:
-      (if (and (threaded?)
-               (foreign-entry? "call_in_unknown_thread"))
+      (if (threaded?)
           (let ([call (foreign-procedure "call_in_unknown_thread"
                                          ((* thread-callback-T) double int boolean boolean)
                                          double)])
@@ -3316,8 +3578,7 @@
       ;; In an truly unknown thread, but also using `__collect_safe` to
       ;; deactivate the current thread instead of using `Sdeactivate_thread`
       ;; within the foreign function:
-      (if (and (threaded?)
-               (foreign-entry? "call_in_unknown_thread"))
+      (if (threaded?)
           (let ([call (foreign-procedure __collect_safe "call_in_unknown_thread"
                                          ((* thread-callback-T) double int boolean boolean)
                                          double)])
@@ -3378,6 +3639,26 @@
               (loop))))
         (when exception (raise exception))
         ok?))
+
+  ;; make sure that lots of threads created to perform very little work
+  ;; doesn't use a huge amount of memory --- that is, that some of the
+  ;; threads trigger a GC
+  (or (not (threaded?))
+      (let ([old-max (maximum-memory-bytes)])
+        (let ([call (foreign-procedure __collect_safe
+                                       "call_in_many_unknown_threads" (uptr int int)
+                                       int)]
+              ;; manage callable pointer directly so that callback is minimal
+              [callable (foreign-callable (lambda (n) n) (int) int)])
+          (lock-object callable)
+          (and
+           (equal? 17
+                   (call (foreign-callable-entry-point callable)
+                         17
+                         10000))
+           (begin
+             (unlock-object callable)
+             (< (maximum-memory-bytes) (* 1.2 old-max)))))))
 )
 
 (machine-case
@@ -3415,11 +3696,46 @@
   (error? (make-reference-bytevector -1))
   (error? (bytevector-reference-ref #vu8(1 2 3) 0))
   (error? (bytevector-reference-ref (make-reference-bytevector 8) -8))
+  (< 3 (foreign-sizeof 'ptr)) ;; assumption for some of the following tests
+  (error? (bytevector-reference-ref (make-reference-bytevector 3) 1))
+  (error? (bytevector-reference-ref (make-reference-bytevector 3) 0))
+  (error? (bytevector-reference-ref (make-reference-bytevector 3) -1))
+  (error? (guard (x [#t (error 'bytevector-reference-ref "failed as expected")])
+                 ;; guard the exception to hide the size of the vector, which
+                 ;; varies with the machine's word size
+                 (bytevector-reference-ref (make-reference-bytevector (foreign-sizeof 'ptr)) 1)))
   (error? (bytevector-reference-ref (make-reference-bytevector 8) 'oops))
   (error? (bytevector-reference*-ref (make-reference-bytevector 8) -8))
   (error? (bytevector-reference*-ref (make-reference-bytevector 8) 'oops))
+  (error? (bytevector-reference*-ref (make-reference-bytevector 3) 1))
+  (error? (bytevector-reference*-ref (make-reference-bytevector 3) 0))
+  (error? (bytevector-reference*-ref (make-reference-bytevector 3) -1))
+  (error? (guard (x [#t (error 'bytevector-reference-ref "failed as expected")])
+                 (bytevector-reference-ref (make-reference*-bytevector (foreign-sizeof 'ptr)) 1)))
+  (error? (bytevector-reference-set! (make-reference-bytevector 8) -8 #false))
+  (error? (bytevector-reference-set! (make-reference-bytevector 8) 'oops #false))
+  (error? (bytevector-reference-set! (make-reference-bytevector 3) 1 #false))
+  (error? (bytevector-reference-set! (make-reference-bytevector 3) 0 #false))
+  (error? (guard (x [#t (error 'bytevector-reference-set! "failed as expected")])
+                 (bytevector-reference-set! (make-reference-bytevector  (foreign-sizeof 'ptr)) 1 #false)))
   (error? (reference-address->object #f))
   (error? (reference*-address->object #f))
+
+  (equal? #false (bytevector-reference-ref (make-reference-bytevector (foreign-sizeof 'ptr)) 0))
+  (equal? #false (bytevector-reference*-ref (make-reference-bytevector (foreign-sizeof 'ptr)) 0))
+  (equal? (void) (bytevector-reference-set! (make-reference-bytevector (foreign-sizeof 'ptr)) 0 #false))
+
+  ;; ensure that a GC correctly handles extra bytes that don't fit into a word:
+  (let ([make (lambda ()
+                (let ([bv (make-reference-bytevector (- (foreign-sizeof 'ptr) 1))]
+                      [bv2 (make-reference-bytevector (+ (foreign-sizeof 'ptr) 1))])
+                  (bytevector-u8-set! bv 0 72)
+                  (bytevector-u8-set! bv2 (foreign-sizeof 'ptr) 73)
+                  (list bv bv2)))])
+    (let ([pre (make)])
+      (collect-rendezvous)
+      (equal? pre
+              (make))))
 
   (not (reference-bytevector? #vu8(1 2 3)))
   (not (reference-bytevector? 7))

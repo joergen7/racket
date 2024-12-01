@@ -59,12 +59,14 @@
   (begin
     (define max-integer-alignment
       (if (or (> (fixnum-width) 32)
-              (memq (machine-type) '(i3nt ti3nt i3qnx ti3qnx arm32le tarm32le ppc32le tppc32le)))
+              (memq (machine-type) '(i3nt ti3nt i3qnx ti3qnx arm32le tarm32le ppc32le tppc32le
+                                          pb32l tpb32l pb32b tpb32b)))
           8
           4))
     (define max-float-alignment
       (if (or (> (fixnum-width) 32)
-              (memq (machine-type) '(i3nt ti3nt arm32le tarm32le ppc32le tppc32le)))
+              (memq (machine-type) '(i3nt ti3nt arm32le tarm32le ppc32le tppc32le
+                                          pb32l tpb32l pb32b tpb32b)))
           8
           4))
     (define-syntax fptr-free
@@ -441,6 +443,7 @@
         (uptr . ,(if (< (fixnum-width) 32) "uint32_t" "uint64_t"))
         (fixnum . ,(if (< (fixnum-width) 32) "int32_t" "int64_t"))
         (boolean . "int")
+        (stdbool . "int8_t")
         (integer-8 . "int8_t")
         (unsigned-8 . "uint8_t")
         (integer-16 . "int16_t")
@@ -721,7 +724,8 @@
            [a15 fixnum]
            [a16 iptr]
            [a17 uptr]
-           [a18 void*]))
+           [a18 void*]
+           [a19 stdbool]))
        (define a (make-ftype-pointer A (foreign-alloc (ftype-sizeof A))))
        (free-after a
          (ftype-set! A (a1) a 3.5)
@@ -742,6 +746,7 @@
          (ftype-set! A (a16) a -30004)
          (ftype-set! A (a17) a #xabcdef07)
          (ftype-set! A (a18) a 25000)
+         (ftype-set! A (a19) a 'howdy)
          (list
            (ftype-ref A (a1) a)
            (ftype-ref A (a2) a)
@@ -760,7 +765,8 @@
            (ftype-ref A (a15) a)
            (ftype-ref A (a16) a)
            (ftype-ref A (a17) a)
-           (ftype-ref A (a18) a))))
+           (ftype-ref A (a18) a)
+           (ftype-ref A (a19) a))))
     `(3.5
       -4.5
       -30000
@@ -778,7 +784,8 @@
       ,(most-positive-fixnum)
       -30004
       #xabcdef07
-      25000))
+      25000
+      #t))
 
   (begin
     (define-ftype A
@@ -2797,11 +2804,11 @@
     (ftype-init-lock! A (g *) x)
     #t)
 
-  (ftype-lock! A (c) x)
-  (ftype-lock! A (f f1) x)
-  (ftype-lock! A (f f2 1 f3b) x)
-  (ftype-lock! A (f f2 $idx f3b) x)
-  (ftype-lock! A (g *) x)
+  (retry-for-spurious (ftype-lock! A (c) x))
+  (retry-for-spurious (ftype-lock! A (f f1) x))
+  (retry-for-spurious (ftype-lock! A (f f2 1 f3b) x))
+  (retry-for-spurious (ftype-lock! A (f f2 $idx f3b) x))
+  (retry-for-spurious (ftype-lock! A (g *) x))
 
   (not (ftype-lock! A (c) x))
   (not (ftype-lock! A (f f1) x))
@@ -2831,6 +2838,17 @@
     (fptr-free x)
     (fptr-free g)
     #t)
+
+  ;; This is intended mainly as a test of `retry-for-spurious`:
+  (let ([m (make-ftype-pointer iptr (foreign-alloc (ftype-sizeof iptr)))])
+    (ftype-init-lock! iptr () m)
+    (let loop ([i 10000000])
+      (or (fx= i 0)
+          (and (retry-for-spurious (ftype-lock! iptr () m))
+               (begin
+                 (ftype-unlock! iptr () m)
+                 (loop (fx- i 1)))))))
+
 )
 
 (mat ftype-compile-file
@@ -4009,7 +4027,8 @@
              [a15 fixnum]
              [a16 iptr]
              [a17 uptr]
-             [a18 void*])))
+             [a18 void*]
+             [a19 stdbool])))
        (define a (make-ftype-pointer A (foreign-alloc (ftype-sizeof A))))
        (free-after a
          (ftype-set! A (a1) a 3.5)
@@ -4030,6 +4049,7 @@
          (ftype-set! A (a16) a -30004)
          (ftype-set! A (a17) a #xabcdef07)
          (ftype-set! A (a18) a 25000)
+         (ftype-set! A (a19) a 'howdy)
          (list
            (ftype-ref A (a1) a)
            (ftype-ref A (a2) a)
@@ -4048,7 +4068,8 @@
            (ftype-ref A (a15) a)
            (ftype-ref A (a16) a)
            (ftype-ref A (a17) a)
-           (ftype-ref A (a18) a))))
+           (ftype-ref A (a18) a)
+           (ftype-ref A (a19) a))))
     `(3.5
       -4.5
       -30000
@@ -4066,7 +4087,8 @@
       ,(most-positive-fixnum)
       -30004
       #xabcdef07
-      25000))
+      25000
+      #t))
   (equal?
     (let ()
        (define-ftype A
@@ -4089,7 +4111,8 @@
              [a15 fixnum]
              [a16 iptr]
              [a17 uptr]
-             [a18 void*])))
+             [a18 void*]
+             [a19 stdbool])))
        (define a (make-ftype-pointer A (foreign-alloc (ftype-sizeof A))))
        (free-after a
          (ftype-set! A (a1) a 3.5)
@@ -4110,6 +4133,7 @@
          (ftype-set! A (a16) a -30004)
          (ftype-set! A (a17) a #xabcdef07)
          (ftype-set! A (a18) a 25000)
+         (ftype-set! A (a19) a 'howdy)
          (list
            (ftype-ref A (a1) a)
            (ftype-ref A (a2) a)
@@ -4128,7 +4152,8 @@
            (ftype-ref A (a15) a)
            (ftype-ref A (a16) a)
            (ftype-ref A (a17) a)
-           (ftype-ref A (a18) a))))
+           (ftype-ref A (a18) a)
+           (ftype-ref A (a19) a))))
     `(3.5
       -4.5
       -30000
@@ -4146,7 +4171,8 @@
       ,(most-positive-fixnum)
       -30004
       #xabcdef07
-      25000))
+      25000
+      #t))
   (equal?
     (let ()
        (define-ftype A
@@ -4169,7 +4195,8 @@
              [a15 fixnum]
              [a16 iptr]
              [a17 uptr]
-             [a18 void*])))
+             [a18 void*]
+             [a19 stdbool])))
        (define a (make-ftype-pointer A (foreign-alloc (ftype-sizeof A))))
        (free-after a
          (ftype-set! A (a1) a 3.5)
@@ -4190,6 +4217,7 @@
          (ftype-set! A (a16) a -30004)
          (ftype-set! A (a17) a #xabcdef07)
          (ftype-set! A (a18) a 25000)
+         (ftype-set! A (a19) a 'howdy)
          (list
            (ftype-ref A (a1) a)
            (ftype-ref A (a2) a)
@@ -4208,7 +4236,8 @@
            (ftype-ref A (a15) a)
            (ftype-ref A (a16) a)
            (ftype-ref A (a17) a)
-           (ftype-ref A (a18) a))))
+           (ftype-ref A (a18) a)
+           (ftype-ref A (a19) a))))
     `(3.5
       -4.5
       -30000
@@ -4226,7 +4255,8 @@
       ,(most-positive-fixnum)
       -30004
       #xabcdef07
-      25000))
+      25000
+      #t))
 
  ; ----------------
   (begin
@@ -5654,7 +5684,8 @@
           [a15 fixnum]
           [a16 iptr]
           [a17 uptr]
-          [a18 void*])))
+          [a18 void*]
+          [a19 stdbool])))
     #t)
   (equivalent-expansion?
     (parameterize ([optimize-level 3] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
@@ -5678,6 +5709,7 @@
            (ftype-ref A (a16) x)
            (ftype-ref A (a17) x)
            (ftype-ref A (a18) x)
+           (ftype-ref A (a19) x)
            x)))
     '(lambda (x) x))
   (equivalent-expansion?
@@ -5702,6 +5734,7 @@
            (ftype-&ref A (a16) x)
            (ftype-&ref A (a17) x)
            (ftype-&ref A (a18) x)
+           (ftype-&ref A (a19) x)
            x)))
     '(lambda (x) x))
   (begin
@@ -5725,7 +5758,8 @@
           [a15 fixnum]
           [a16 iptr]
           [a17 uptr]
-          [a18 void*])))
+          [a18 void*]
+          [a19 stdbool])))
     #t)
   (equivalent-expansion?
     (parameterize ([optimize-level 3] [enable-cp0 #t] [#%$suppress-primitive-inlining #f])
@@ -5749,6 +5783,7 @@
            (ftype-ref A (a16) x)
            (ftype-ref A (a17) x)
            (ftype-ref A (a18) x)
+           (ftype-ref A (a19) x)
            x)))
     '(lambda (x) x))
   (equivalent-expansion?
@@ -5773,6 +5808,7 @@
            (ftype-&ref A (a16) x)
            (ftype-&ref A (a17) x)
            (ftype-&ref A (a18) x)
+           (ftype-&ref A (a19) x)
            x)))
     '(lambda (x) x))
   (begin
@@ -5900,3 +5936,176 @@
            x)))
     '(lambda (x) x))
 )
+
+(mat live-pointer-mask
+  (begin
+    (define-syntax run-with-scissors
+      (lambda (x)
+        (syntax-case x ()
+          [(k ([opnd expr] ...) body)
+           (with-implicit (k poison)
+             #`(let ()
+                 (define bait (list -1 -1))
+                 (define addr (#%$object-address bait 0))
+                 (define typemod #x8) ;; TODO is there a clean way to get this?
+                 (define type-mask (- typemod 1))
+                 (define wrong-tag-bits (logand type-mask (#%$object-address values 0)))
+                 (define poison ;; mix metaphors
+                   (logand (most-positive-fixnum)
+                           (bitwise-copy-bit-field addr 0 (integer-length type-mask) wrong-tag-bits)))
+                 (define opnd) ...
+                 (call/cc
+                  (lambda (bail)
+                    (define mark-evaluated!
+                      (let ([operands-to-evaluate (length '(opnd ...))])
+                        (lambda (get-return)
+                          (set! operands-to-evaluate (- operands-to-evaluate 1))
+                          (when (zero? operands-to-evaluate)
+                            ;; collect, but don't go through with the call since
+                            ;;  1. the argument values may be bogus
+                            ;;  2. we're checking errors in the way expand-primitives
+                            ;;     cheats on applicative order, not playing at unsafe
+                            ;;     calls to unchecked primitives
+                            (collect 0)
+                            (bail))
+                          (get-return poison))))
+                    ;; prevent cp0 from simplifying the primitive call operands
+                    (set! opnd (lambda () (mark-evaluated! (lambda (poison) expr)))) ...
+                    body))))])))
+    (define-syntax test-when
+      (syntax-rules (o >=)
+        [(_ ([o >= lvl]) expr)
+         (or (not #%$compiler-is-loaded?)
+             (#%$suppress-primitive-inlining)
+             (< (optimize-level) lvl)
+             (let () expr #t))]))
+    #t)
+  (test-when ([o >= 3])
+    ;; poison the offset since original evaluation order has raw
+    ;; OFFSET value on the stack when we evaluate the call to FPTR.
+    ;; (crashes if raw value from OFFSET is marked as a live pointer)
+    (run-with-scissors
+     ([INFO "bogus info"]
+      [FPTR "bogus fptr"]
+      [OFFSET
+       ;; When we return the poison fixnum here, the code generated by
+       ;; build-swap-object-set! calls offset-expr->index+offset which
+       ;; shifts it right and (if there are other operands to evaluate)
+       ;; stores the resulting raw value on the stack where it is live
+       ;; across a call to mark-evaluate!. If expand-primitives marks the
+       ;; expression as raw then we omit it from the live-pointer mask and
+       ;; the collector will leave it alone. If not, we've arranged for the
+       ;; raw value to look like a closure though it actually points to a
+       ;; list.
+       ;;
+       ;; This catches the issue on a6le since the object address is a
+       ;; fixnum and we can construct a value that passes the in-heap
+       ;; check. It does not catch the issue on i3le since the object
+       ;; address is not a fixnum and the result we construct here does not
+       ;; fool the in-heap check.
+       poison]
+      [VAL 3.14159])
+     ;; build-swap-object-set! supports double-float only on 64-bit machines
+     (or (< (ftype-sizeof uptr) 8)
+         (#3%$fptr-set-swap-double-float! (INFO) (FPTR) (OFFSET) (VAL)))))
+  (test-when ([o >= 3])
+    ;; poison VAL since new evaluation order can have raw mref of VAL
+    ;; live across the call to FPTR.
+    (run-with-scissors
+     ([INFO "bogus info"]
+      [FPTR "bogus fptr"]
+      [OFFSET 0]
+      [VAL
+       (let ()
+         (define-ftype Mix (union [u uptr] [d double-float]))
+         (let ([x (make-ftype-pointer Mix (foreign-alloc (ftype-sizeof Mix)))])
+           ;; Disguise poison fixnum within double-float where mref within
+           ;; build-swap-object-set! may leave the raw value live across the
+           ;; call to FPTR. That can go badly unless expand-primitives marked
+           ;; the temporary as raw.
+           (ftype-set! Mix (u) x poison)
+           (let ([disguised (ftype-ref Mix (d) x)])
+             (foreign-free (ftype-pointer-address x))
+             (set! x #f)
+             disguised)))])
+     ;; build-swap-object-set! supports double-float only on 64-bit machines
+     (or (< (ftype-sizeof uptr) 8)
+         (#3%$fptr-set-swap-double-float! (INFO) (FPTR) (OFFSET) (VAL)))))
+  (test-when ([o >= 3])
+    ;; poison the offset since original evaluation order has raw
+    ;; OFFSET value on the stack when we evaluate the call to FPTR.
+    ;; (crashes if raw value from OFFSET is marked as a live pointer)
+    (run-with-scissors
+     ([FPTR "bogus fptr"]
+      [OFFSET
+       ;; The inline handler creates a temporary for the offset, but
+       ;; build-fx+raw generates a raw value from this offset that
+       ;; expand-primitives should mark as such. Otherwise, the value
+       ;; can look like a raw pointer live across the call to FPTR.
+       poison])
+     (#3%$fptr-offset-addr (FPTR) (OFFSET))))
+  (test-when ([o >= 2])
+    ;; poison the offset since original evaluation order has raw
+    ;; OFFSET value on the stack when we evaluate the call to BASE.
+    ;; (crashes if raw value from OFFSET is marked as a live pointer)
+    (run-with-scissors
+     ([BASE "off base"]
+      [OFFSET
+       ;; When we return the poison fixnum here, the code generated by
+       ;; build-object-set! calls offset-expr->index+offset which
+       ;; shifts it right and (if there are other operands to evaluate)
+       ;; stores the resulting raw value on the stack where it is live
+       ;; across a call to mark-evaluate!. If expand-primitives marks the
+       ;; expression as raw then we omit it from the live-pointer mask and
+       ;; the collector will leave it alone. If not, we've arranged for the
+       ;; raw value to look like a closure though it actually points to a
+       ;; list.
+       ;;
+       ;; This catches the issue on a6le since the object address is a
+       ;; fixnum and we can construct a value that passes the in-heap
+       ;; check. It does not catch the issue on i3le since the object
+       ;; address is not a fixnum and the result we construct here does not
+       ;; fool the in-heap check.
+       (logand (most-positive-fixnum) poison)]
+      [VAL
+       ;; using a safe value here so that, if the test fails, it is due to
+       ;; poison offset rather that a rogue value; zero doesn't look like a
+       ;; pointer
+       0])
+     (#%$object-set! 'fixnum (BASE) (OFFSET) (VAL))))
+  (test-when ([o >= 2])
+    (run-with-scissors
+     ([BASE "off base"]
+      [OFFSET
+       ;; using a safe offset here so that, if the test fails, it is due to
+       ;; poison value rather that a rogue offset; zero doesn't look like a
+       ;; pointer
+       0]
+      [VAL
+       ;; This is like the case above except that offset-expr->index+offset
+       ;; isn't the culprit. Instead the the build-unfix in build-object-set!
+       ;; causes problems if expand-primitives does not mark it raw.
+       (logand (most-positive-fixnum) poison)])
+     (#%$object-set! 'fixnum (BASE) (OFFSET) (VAL))))
+  (test-when ([o >= 3])
+    (run-with-scissors
+     ([STR '(bogus)]
+      [INDEX
+       ;; We shift the poison value by 2 here so that the srl 1 in the code
+       ;; generated by the call to translate in the inline handler makes our
+       ;; poison fixnum look like a raw pointer, causing trouble if it is not
+       ;; marked as such.
+       (fxsra (logand (most-positive-fixnum) poison) 2)])
+     (#3%string-ref (STR) (INDEX))))
+  (test-when ([o >= 3])
+    (run-with-scissors
+     ([STR '(bogus)]
+      [INDEX
+       ;; We shift the poison value by 2 here so that the srl 1 in the code
+       ;; generated by the call to translate in the inline handler makes our
+       ;; poison fixnum look like a raw pointer, causing trouble if it is not
+       ;; marked as such.
+       (fxsra (logand (most-positive-fixnum) poison) 2)]
+      [CHAR 'bogus])
+     (#3%string-set! (STR) (INDEX) (CHAR))))
+  )

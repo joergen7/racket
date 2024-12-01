@@ -14,6 +14,7 @@
          "../syntax/space-scope.rkt"
          "../namespace/namespace.rkt"
          "../namespace/provided.rkt"
+         "../namespace/module.rkt"
          "../common/module-path.rkt"
          "../common/module-path-intern.rkt"
          "env.rkt")
@@ -27,6 +28,8 @@
 
          requires+provides-definitions-shadow-imports?
          disable-definitions-shadow-imports!
+
+         requires+provides-transitive-requires
          
          (struct-out required)
          add-required-space!
@@ -56,6 +59,7 @@
                            require-mpis ; intern table
                            require-mpis-in-order ; require-phase -> list of module-path-index
                            requires   ; mpi [interned] -> require-phase+space-shift -> sym -> list-ish of [bulk-]required
+                           transitive-requires ; resolved-module-path -> pahse-level -> #t ; used to prune instantiates in generate modules
                            provides   ; phase+space -> sym -> binding or protected
                            phase-to-defined-syms ; phase -> sym -> (or/c 'variable 'transformer)
                            also-required ; sym -> binding
@@ -93,6 +97,7 @@
                          (hash-copy (requires+provides-require-mpis-in-order copy-r+p))
                          (make-hasheqv))
                      (make-hasheq)  ; requires
+                     (make-hasheq)  ; transitive-requires
                      (make-hasheqv) ; provides
                      (make-hasheqv) ; phase-to-defined-syms
                      (make-hasheq)  ; also-required
@@ -106,6 +111,7 @@
   ;; Don't clear `require-mpis-in-order`, since we want to accumulate
   ;; all previously required modules
   (hash-clear! (requires+provides-requires r+p))
+  (hash-clear! (requires+provides-transitive-requires r+p)) ; conservative, and may reduce effectiveness
   (hash-clear! (requires+provides-provides r+p))
   (hash-clear! (requires+provides-phase-to-defined-syms r+p))
   (hash-clear! (requires+provides-also-required r+p))
@@ -175,7 +181,7 @@
 
 ;; Like `add-defined-or-required-id!`, but faster for bindings that
 ;; all have the same scope, etc., and no space level
-;; Return #t if any required id is already defined by a shaodwing definition.
+;; Return #t if any required id is already defined by a shadowing definition.
 (define (add-bulk-required-ids! r+p s self nominal-module phase-level provides provide-phase+space
                                 #:prefix bulk-prefix
                                 #:excepts bulk-excepts
@@ -323,7 +329,7 @@
 ;; require; if something is found but it will be replaced, then record that
 ;; bindings are not simple. Returns a status to indicate whether/how the binding
 ;; is defined or required already, since `allow-defined?` and `ok-binding/delated`
-;; allow that possibilify; the possible results are #f, 'defined, or 'required.
+;; allow that possibility; the possible results are #f, 'defined, or 'required.
 (define (check-not-defined #:check-not-required? [check-not-required? #f]
                            #:allow-defined? [allow-defined? #f]
                            r+p id phase space #:in orig-s
@@ -407,7 +413,9 @@
                              null
                              (cond
                                [(bulk-required? where)
-                                (format "\n  also provided by: ~.s" (syntax->datum (bulk-required-s where)))]
+                                (format "\n  also provided by: ~a"
+                                        ((error-syntax->string-handler) (bulk-required-s where)
+                                                                        (error-print-width)))]
                                [else ""])))
        (cond
          [(and (not at-mod)
@@ -463,7 +471,11 @@
                  (set-requires+provides-all-bindings-simple?! r+p #f)
                  only-can-can-shadow-require?]
                 [define-shadowing-require? #f]
-                [else (raise-already-bound defined? r)])))
+                [else
+                 (define nr (normalize-required r mpi nominal-phase+space-shift (syntax-e id)))
+                 (if (eqv? (required-phase+space nr) (intern-phase+space phase space))
+                     (raise-already-bound defined? r)
+                     only-can-can-shadow-require?)])))
           (cond
             [define-shadowing-require?
               ;; Not defined, but defining now (shadowing all requires);
@@ -482,7 +494,7 @@
 
 ;; For importing into the default space, adjust shadowable imports of
 ;; the same name into non-default spaces to that they're treated as
-;; abiguous, the same as would happen for local bindings.
+;; ambiguous, the same as would happen for local bindings.
 (define (adjust-shadow-requires! r+p id phase space)
   (unless space
     (for ([space (in-hash-keys (requires+provides-spaces r+p))])
@@ -601,26 +613,110 @@
 
 ;; ----------------------------------------
 
-(define (extract-requires-and-provides r+p old-self new-self)
-  (define (extract-requires)
+(define (extract-requires-and-provides r+p old-self new-self
+                                       #:flatten-requires? [flatten-requires? #f]
+                                       #:namespace [ns #f])
+  (define (extract-requires #:recurs? [recurs? #f])
     ;; Extract from the in-order record, so that instantiation can use the original order
     (define phase-to-mpis-in-order (requires+provides-require-mpis-in-order r+p))
     (define phases-in-order (sort (hash-keys phase-to-mpis-in-order) phase<?))
+    ;; If a resolved module path is in `transitive-requires`, then it's required by
+    ;; one of the modules that is required, so we won't need to redundantly check
+    ;; instantiation at run time
+    (define transitive-requires (requires+provides-transitive-requires r+p))
     (for/list ([phase (in-list phases-in-order)])
-      (cons phase
-            (for/list ([mpi (in-list (reverse (hash-ref phase-to-mpis-in-order phase)))]
-                       #:unless (eq? mpi old-self))
-              (module-path-index-shift mpi old-self new-self)))))
+      (define elems (for/list ([mpi (in-list (reverse (hash-ref phase-to-mpis-in-order phase)))]
+                               #:unless (eq? mpi old-self))
+                      (if recurs?
+                          (not (hash-ref (hash-ref transitive-requires
+                                                   (module-path-index-resolved mpi)
+                                                   #hasheqv())
+                                         phase
+                                         #f))
+                          (module-path-index-shift mpi old-self new-self))))
+      (if recurs?
+          elems
+          (cons phase elems))))
+  (define (extract-flattened-requires)
+    ;; accumulate mapping from phases to reversed list of mpis (or recurs)
+    (define phase-to-mpis-in-order (requires+provides-require-mpis-in-order r+p))
+    (define phases-in-order (sort (hash-keys phase-to-mpis-in-order) phase<?))
+    (define-values (name-to-phases all-mpis)
+      (for*/fold ([name-to-phases #hasheq()]
+                  [all-mpis '()]) ; list of (cons name mpi)
+                 ([phase (in-list phases-in-order)]
+                  [mpi (in-list (reverse (hash-ref phase-to-mpis-in-order phase)))]
+                  #:unless (eq? mpi old-self))
+        (let loop ([name-to-phases name-to-phases]
+                   [all-mpis all-mpis]
+                   [mpi (module-path-index-shift mpi old-self new-self)]
+                   [phase phase])
+          (define name (module-path-index-resolve mpi))          
+          (define at-name (hash-ref name-to-phases name #hasheq()))
+          (cond
+            [(hash-ref at-name phase #f)
+             ;; done already
+             (values name-to-phases all-mpis)]
+            [else
+             ;; Mark `name` as done to avoid re-traversing:
+             (define done-name-to-phases (hash-set name-to-phases name (hash-set at-name phase #t)))
+             (define (add mpi all-mpis)
+               (if (hash-ref name-to-phases name #f)
+                   all-mpis
+                   (cons (cons name mpi) all-mpis)))
+             (define m (namespace->module ns name))
+             (unless m
+               (raise-arguments-error 'module
+                                      "cannot find module while flattening requires"
+                                      "module" name))
+             (cond
+               [(and (module-cross-phase-persistent? m)
+                     (not (eqv? phase 0))
+                     (not (label-phase? phase)))
+                ;; Only need to keep phase 0 for a cross-phase persistent module
+                (loop name-to-phases all-mpis mpi 0)]
+               [else
+                (define-values (new-name-to-phases new-all-mpis)
+                  (for/fold ([name-to-phases done-name-to-phases]
+                             [all-mpis all-mpis])
+                            ([phase+reqs (in-list (module-requires m))]
+                             [recurs (in-list (module-recur-requires m))]
+                             #:do [(define new-phase (phase+ (car phase+reqs) phase))]
+                             [req (in-list (cdr phase+reqs))]
+                             [recur (in-list recurs)]
+                             #:when recur)
+                    (loop name-to-phases
+                          all-mpis
+                          (module-path-index-shift req
+                                                   (module-self m)
+                                                   mpi)                           
+                          new-phase)))
+                (values new-name-to-phases
+                        (add mpi new-all-mpis))])]))))
+    (define interned (make-hash))
+    (define (intern-phases phases)
+      (or (hash-ref interned phases #f)
+          (let ([lst (hash-keys phases #t)])
+            (hash-set! interned phases lst)
+            lst)))
+    (for/list ([name+mpi (in-list (reverse all-mpis))])
+      (define name (car name+mpi))
+      (define mpi (cdr name+mpi))
+      (vector-immutable mpi
+                        (intern-phases (hash-ref name-to-phases name)))))
+
   (define (extract-provides)
     (shift-provides-module-path-index (requires+provides-provides r+p)
                                       old-self
                                       new-self))
-  (values (extract-requires) (extract-provides)))
+  (values (extract-requires) (extract-requires #:recurs? #t)
+          (and flatten-requires? (extract-flattened-requires))
+          (extract-provides)))
 
 ;; ----------------------------------------
 
 ;; Note: the provides may include non-interned symbols. Those may be
-;; accessible via` dynamic-require`, but don't import them.
+;; accessible via `dynamic-require`, but don't import them.
 (define (shift-provides-module-path-index provides from-mpi to-mpi)
   (for/hasheqv ([(phase+space at-phase) (in-hash provides)])
     (values phase+space

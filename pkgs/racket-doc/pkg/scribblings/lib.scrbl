@@ -249,6 +249,7 @@ The package lock must be held (allowing writes if @racket[set?] is true); see
                      [#:source source (or/c 'dir 'name)]
                      [#:mode mode (or/c 'as-is 'source 'binary 'binary-lib 'built)]
                      [#:dest dest-dir (or/c (and/c path-string? complete-path?) #f)]
+                     [#:original original-source (or/c string? #f) #f]
                      [#:quiet? quiet? boolean? #f]
                      [#:from-command-line? from-command-line? boolean? #f])
         void?]{
@@ -258,7 +259,9 @@ Implements @racket[pkg-create-command].
 Unless @racket[quiet?] is true, information about the output is
 reported to the current output port. If @racket[from-command-line?]
 is true, error messages may suggest specific command-line flags for
-@command-ref{create}.}
+@command-ref{create}.
+
+@history[#:changed "8.14.0.2" @elem{Added the @racket[#:original] argument.}]}
 
 
 @defproc[(pkg-install      [descs (listof pkg-desc?)]
@@ -473,6 +476,14 @@ specific command-line flags for @command-ref{migrate}.
 The package lock must be held; see @racket[with-pkg-lock].
 
 @history[#:changed "6.4.0.14" @elem{Added the @racket[#:dry-run] argument.}]}
+
+
+@defproc[(pkg-migrate-available-versions) (listof string?)]{
+
+Returns a list of versions that are suitable as arguments to
+@racket[pkg-migrate].
+
+@history[#:added "8.11.1.7"]}
 
 
 @defproc[(pkg-catalog-show [names (listof string?)]
@@ -705,7 +716,7 @@ and status reporting.
                                    @racket[#:quiet?] arguments.}]}
 
 
-@defproc[(extract-pkg-dependencies [info (symbol? (-> any/c) . -> . any/c)]
+@defproc[(extract-pkg-dependencies [info (or/c #f (symbol? (-> any/c) . -> . any/c))]
                                    [#:build-deps? build-deps? boolean? #t]
                                    [#:filter? filter? boolean? #f]
                                    [#:versions? versions? boolean? #f])
@@ -723,6 +734,8 @@ platform, and other information is stripped so that the result list is
 always a list of either strings (when @racket[versions?] is true) or a
 two-element list containing a string and a version (when
 @racket[versions?] is @racket[#f]).
+
+If @racket[info] is @racket[#f], the result is @racket[(list)].
 
 @history[#:changed "6.0.1.6" @elem{Added the @racket[#:versions?] argument.}]}
 

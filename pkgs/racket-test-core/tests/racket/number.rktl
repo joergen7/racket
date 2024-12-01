@@ -3,7 +3,7 @@
 
 (Section 'numbers)
 
-(require racket/extflonum racket/random racket/list)
+(require racket/fixnum racket/extflonum racket/random racket/list)
 
 (define has-single-flonum? (single-flonum-available?))
 (define has-exact-zero-inexact-complex? (not (eq? 'chez-scheme (system-type 'vm))))
@@ -643,6 +643,18 @@
 (test  5.540619075645279e+34 expt  -1.000000000000001 (expt 2 56))
 (test -5.5406190756452855e+34 expt -1.000000000000001 (add1 (expt 2 56)))
 
+(err/rt-test (eval '(expt 2 (expt 2 80))) exn:fail:out-of-memory?)
+(err/rt-test (eval '(expt 1+1i (expt 2 80))) exn:fail:out-of-memory?)
+(err/rt-test (eval '(expt 1/2 (expt 2 80))) exn:fail:out-of-memory?)
+(test 1 expt 1 (expt 2 80))
+(test 1 expt -1 (expt 2 80))
+(test -1 expt -1 (add1 (expt 2 80)))
+(test 1 expt -1 (sub1 (most-positive-fixnum)))
+(test -1 expt -1 (most-positive-fixnum))
+(test 0 expt 0 (expt 2 80))
+(test 0 expt 0 (add1 (expt 2 80)))
+(test 0.0 expt 0.5 (expt 2 80))
+
 (let ()
   (define nrs (list -inf.0 -2.0 -1.0 -0.5 -0.0 0.0 0.5 1.0 2.0 +inf.0))
   (define (neg-even nr) (- (- nr) 1))
@@ -777,7 +789,7 @@
 (test #t negative? (inexact->exact -0.1))
 (test 0 + (inexact->exact -0.1) (inexact->exact 0.1))
 (arity-test inexact->exact 1 1)
-(err/rt-test (inexact->exact 'a))
+(err/rt-test (inexact->exact 'a) exn:application:type? #rx"^inexact->exact")
 (test 1+i inexact->exact 1.0+1.0i)
 (test 1 inexact->exact 1.0+0.0i)
 (test 1 inexact->exact 1.0-0.0i)
@@ -791,9 +803,9 @@
 (test 1.0+0.0i exact->inexact 1+0.0i)
 (test (expt 7 30) inexact->exact (expt 7 30))
 
-(err/rt-test (inexact->exact +inf.0))
-(err/rt-test (inexact->exact -inf.0))
-(err/rt-test (inexact->exact +nan.0))
+(err/rt-test (inexact->exact +inf.0) exn:application:type? #rx"^inexact->exact")
+(err/rt-test (inexact->exact -inf.0) exn:application:type? #rx"^inexact->exact")
+(err/rt-test (inexact->exact +nan.0) exn:application:type? #rx"^inexact->exact")
 #;(err/rt-test (begin (inexact->exact +inf.0) 'not-an-error))
 #;(err/rt-test (begin (inexact->exact -inf.0) 'not-an-error))
 #;(err/rt-test (begin (inexact->exact +nan.0) 'not-an-error))
@@ -925,13 +937,13 @@
 (test 0.4+0.2i / 2.0-1.0i)
 (test 0.0+0.0i / 0.0+0.0i 1+1e-320i)
 (test 0.0+0.0i / 0.0+0.0i #e1+1e-320i)
-(test -0.0+0.0i / -1.0e-9-1.0e+300i)
-(test -0.0+0.0i / 1.0+0.0i -1.0e-9-1.0e+300i)
-(test -0.0-0.0i / 0.0+1.0i -1.0e+300-1.0e-9i)
-(test -0.0-0.0i / +1i -1.0e+300-1.0e-9i)
+(test -0.0+1e-300i / -1.0e-9-1.0e+300i)
+(test -0.0+1e-300i / 1.0+0.0i -1.0e-9-1.0e+300i)
+(test -0.0-1e-300i / 0.0+1.0i -1.0e+300-1.0e-9i)
+(test -0.0-1e-300i / +1i -1.0e+300-1.0e-9i)
 (test +nan.0+nan.0i / 0.0+0.0i)
-(test 0.0-0.0i / 9.18e+55 4.0+1.79e+308i)
-(test 0.0+nan.0i / 9.18e+55+0.0i 4.0+1.79e+308i)
+(test 0.0-5.1284916201117317e-253i / 9.18e+55 4.0+1.79e+308i)
+(test 0.0-5.1284916201117317e-253i / 9.18e+55+0.0i 4.0+1.79e+308i)
 
 (test 3 / 1 1/3)
 (test -3 / 1 -1/3)
@@ -1385,10 +1397,10 @@
 (test #t bitwise-bit-set? (bitwise-not (expt 2 101)) 70)
 
 (arity-test bitwise-bit-set? 2 2)
-(err/rt-test (bitwise-bit-set? "a" 1))
-(err/rt-test (bitwise-bit-set? 13 "a"))
-(err/rt-test (bitwise-bit-set? 13 -1))
-(err/rt-test (bitwise-bit-set? 13 (- (expt 2 101))))
+(err/rt-test (bitwise-bit-set? "a" 1) exn:fail:contract? #rx"exact-integer[?]")
+(err/rt-test (bitwise-bit-set? 13 "a") exn:fail:contract? #rx"exact-nonnegative-integer[?]")
+(err/rt-test (bitwise-bit-set? 13 -1) exn:fail:contract? #rx"exact-nonnegative-integer[?]")
+(err/rt-test (bitwise-bit-set? 13 (- (expt 2 101)) exn:fail:contract? #rx"exact-nonnegative-integer[?]"))
 
 (test 0 bitwise-bit-field 13 0 0)
 (test 1 bitwise-bit-field 13 0 1)
@@ -1448,11 +1460,11 @@
 (test (sub1 (expt 2 32)) bitwise-bit-field -1 32 64)
 
 (arity-test bitwise-bit-field 3 3)
-(err/rt-test (bitwise-bit-field "a" 1 2))
-(err/rt-test (bitwise-bit-field 13 -1 2))
-(err/rt-test (bitwise-bit-field 13 0 -1))
-(err/rt-test (bitwise-bit-field 13 2 1))
-(err/rt-test (bitwise-bit-field 13 (expt 2 101) (sub1 (expt 2 101))))
+(err/rt-test (bitwise-bit-field "a" 1 2) exn:fail:contract? #rx"exact-integer[?]")
+(err/rt-test (bitwise-bit-field 13 -1 2) exn:fail:contract? #rx"exact-nonnegative-integer[?]")
+(err/rt-test (bitwise-bit-field 13 0 -1) exn:fail:contract? #rx"exact-nonnegative-integer[?]")
+(err/rt-test (bitwise-bit-field 13 2 1) exn:fail:contract? #rx"ending index|first index") ; CS message is more like `substring`, etc.
+(err/rt-test (bitwise-bit-field 13 (expt 2 101) (sub1 (expt 2 101)) exn:fail:contract? #rx"ending index|first index"))
 
 (test 4 gcd 0 4)
 (test 4 gcd -4 0)
@@ -1906,6 +1918,9 @@
 (test 1155.0 round (* 1000 (real-part (sqrt 1-4/3i))))
 (test -577.0 round (* 1000 (imag-part (sqrt 1-4/3i))))
 
+(test 158.0 round (* 1000 (real-part (sqrt -10+1i))))
+(test 3166.0 round (* 1000 (imag-part (sqrt -10+1i))))
+
 (test (expt 5 13) sqrt (expt 5 26))
 (test 545915034.0 round (sqrt (expt 5 25)))
 (test (make-rectangular 0 (expt 5 13)) sqrt (- (expt 5 26)))
@@ -2253,7 +2268,7 @@
 (test -2.5e-154 imag-part (atan 1.0-4e153i))
 (test +2.5e-154 imag-part (atan 1.0+4e153i))
 (test 157.0+0.0i z-round (* 100 (atan 5e153+4e153i)))
-(test 125.0 round (* 1e156 (imag-part (atan 5e153+4e153i))))
+(test 98.0 round (* 1e156 (imag-part (atan 5e153+4e153i))))
 (test 157.0+0.0i z-round (* 100 (atan 4e153+4e153i)))
 (test 125.0 round (* 1e156 (imag-part (atan 4e153+4e153i))))
 
@@ -2634,6 +2649,12 @@
 (test #t inexact? (string->number "4@5"))
 (test #f inexact? (string->number "#e4@5"))
 (test #f inexact? (string->number "#e4.0@5.0"))
+
+(test 0.0+0.0i string->number ".0@.0")
+(test 1.0+0.0i string->number "1@.0")
+(test 0.0 string->number ".0@0")
+(test 0 string->number "0@0")
+(test 0.1+0.0i string->number ".1@.0")
 
 (arity-test string->number 1 5)
 (arity-test number->string 1 2)
@@ -3588,8 +3609,12 @@
   (define (n-digit-has-nth-root? n)
     (not (= (floor (root (expt 10 (- n 1)) n))
             (floor (root (- (expt 10 n) 1) n)))))
-  
-  (test #t list? (filter n-digit-has-nth-root? (build-list 5000 (lambda (x) (+ x 1))))))
+
+  (define N (if (eq? (system-type 'gc) 'cgc)
+		50
+		5000))
+
+  (test #t list? (filter n-digit-has-nth-root? (build-list N (lambda (x) (+ x 1))))))
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; exact->inexact precision on bignums (round-trip and proper rounding)
@@ -3674,7 +3699,9 @@
     (check-random-pairs check-shift-plus-bits-to-even)))
   
 (check-conversion max-53-bit-number)
-(for ([i 100])
+(for ([i (if (eq? (system-type 'gc) 'cgc)
+             10
+             100)])
   (check-conversion
    ;; Random 53-bit number:
    (+ (arithmetic-shift 1 52)
@@ -3743,7 +3770,9 @@
                   (/ (random-bits (+ 1 (random 8192))) d))]))
 
       (test #t string? "Randomized testing of rational->flonum")
-      (for ([_  (in-range 10000)])
+      (for ([_  (in-range (if (eq? (system-type 'gc) 'cgc)
+                              100
+                              10000))])
         (define ry (random-rational))
         (define y (real->double-flonum ry))  ; this generates rounding errors
         (define e (flulp-error y ry))

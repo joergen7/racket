@@ -6,7 +6,7 @@
                ["base" #:version "6.5.0.2"]
                "net-lib"
                "sandbox-lib"
-               ["scribble-lib" #:version "1.34"]
+               ["scribble-lib" #:version "1.52"]
                "racket-index"))
 (define build-deps '("rackunit-doc"
                      "errortrace-doc"
@@ -22,7 +22,7 @@
                      "syntax-color-doc"
                      "syntax-color-lib"
                      "scribble-doc"
-                     "future-visualizer"
+                     ["future-visualizer" #:version "1.1"]
                      "distributed-places-doc"
                      "distributed-places-lib"
                      "serialize-cstruct-lib"

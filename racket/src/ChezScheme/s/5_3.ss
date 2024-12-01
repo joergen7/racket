@@ -38,6 +38,11 @@
       (float-type-case
          [(ieee) 53]))
 
+   (define-constant positive-fixnum-bits
+     (- (constant fixnum-bits) 1))
+   (define-constant flonum-high-positive-fixnum-start
+     (- 64 (- (constant fixnum-bits) 1)))
+
 )
 
 (let ()
@@ -760,16 +765,15 @@
                (let ([rho (fl/ theta)] [-pi/2 (fl- pi/2)])
                   (lambda (x y)
                      ; x is positive
-                     (let ([ay (abs y)])
+                     (let ([ay (flabs y)])
                         (cond
                            [(or (fl> x theta) (fl> ay theta))
                             ; RP(1/z) +/- (pi/2)i
                             (fl-make-rectangular
-                               (cond
-                                  [(fl> x ay) (fl/ (fl+ x (fl* (fl/ y x) y)))]
-                                  [(fl< x ay) (let ([r (fl/ y x)])
-                                                 (fl/ r (fl+ (fl* x r) y)))]
-                                  [else (fl/ (fl+ x ay))])
+                               (if (fl>= x ay)
+                                   (fl/ (fl+ x (fl* (fl/ y x) y)))
+                                   (let ([r (fl/ x y)])
+                                     (fl/ r (fl+ y (fl* r x)))))
                                (if (negated-flonum? y) pi/2 -pi/2))]
                            [(fl= x 1.0)
                             (let ([k (fl+ ay rho)])
@@ -900,10 +904,15 @@
          [(ratnum?)
           (/ (exact-sqrt (numerator x)) (exact-sqrt (denominator x)))]
          [else
-          (let ([rp (exact-sqrt (/ (+ (exact-sqrt (magnitude-squared x))
-                                      (real-part x))
-                                   2))])
-             (make-rectangular rp (/ (imag-part x) (* 2 rp))))])))
+          (let ([ssq (exact-sqrt (magnitude-squared x))])
+            (let* ([ip (exact-sqrt (/ (- ssq (real-part x))
+                                      2))]
+                   [rp (exact-sqrt (/ (+ ssq (real-part x))
+                                       2))]
+                   [ip (if (< (imag-part x) 0)
+                           (- ip)
+                           ip)])
+              (make-rectangular rp ip)))])))
 
 (define (exact-ratnum* y x)
   ;; Simplied from ratnum case below:
@@ -2792,51 +2801,27 @@
               (make-rectangular (/ (real-part x) y) (/ (imag-part x) y))]
              [else (nonnumber-error who x)])]
          [($exactnum? $inexactnum?)
+          ;; See "Algorithm 116: Complex Division" by Robert L. Smith,
+          ;; Communications of the ACM, Volume 5, Issue 8, Aug. 1962
+          ;; a+bi / c+di => (a+b(d/c))/(c+d(d/c)) + ((b-a(d/c))/(c+d(d/c)))i if |c| >= |d|
+          ;; a+bi / c+di => (b+a(c/d))/(d+c(c/d)) + ((a-b(c/d))/(d+c(c/d)))i if |c| < |d|
           (type-case x
-             [(fixnum? bignum? ratnum? flonum?)
-              ;; a / c+di => c(a/(cc+dd)) + (-d(a/cc+dd))i
-              (if (eq? x 0)
-                  0
-                  (let ([c (real-part y)] [d (imag-part y)])
-                    (let ([t (/ x (+ (* c c) (* d d)))])
-                      (make-rectangular (* c t) (- (* d t))))))]
-             [($exactnum? $inexactnum?)
-              (let ([a (real-part x)] [b (imag-part x)]
-                    [c (real-part y)] [d (imag-part y)])
-                ;; a+bi / c+di => (ac+bd)/(cc+dd) + ((bc-ad)/(cc+dd))i
-                (define (simpler-divide a b c d)
-                  ;; Direct calculuation does not work as well for complex numbers with
-                  ;; large parts, such as `(/ 1e+300+1e+300i 4e+300+4e+300i)`, but it
-                  ;; works better for small parts, as in `(/ 0.0+0.0i 1+1e-320i)`
-                  (let ([t (+ (* c c) (* d d))])
-                    (make-rectangular (/ (+ (* a c) (* b d)) t)
-                                      (/ (- (* b c) (* a d)) t))))
-                ;; Let r = c/d or d/c, depending on which is larger
-                (cond
-                 [(or (eq? c 0) (and ($exactnum? x) ($exactnum? y)))
-                  (simpler-divide a b c d)]
-                 [(< (abs c) (abs d))
-                  (let ([r (/ d c)])
-                    (if (infinite? r)
-                        ;; Too large; try form that works better with small c or d
-                        (simpler-divide a b c d)
-                        ;; a+bi / c+di => 
-                        (let ([x (+ c (* d r))]) ; x = c+dd/c = (cc+dd)/c
-                          ;; (a+br)/x + ((b-ar)/x)i = (a+bd/c)c/(cc+dd) + ((b-ad/c)c/(cc+dd))i
-                          ;; = (ac+bd)/(cc+dd) + ((bc-ad)/(cc+dd))i
-                          (make-rectangular (/ (+ a (* b r)) x)
-                                            (/ (- b (* a r)) x)))))]
-                 [else
-                  (let ([r (/ c d)])
-                    (if (infinite? r)
-                        ;; Too large; try form that works better with small c or d
-                        (simpler-divide a b c d)
-                        (let ([x (+ d (* c r))]) ; x = d+cc/d = (cc+dd)/d
-                          ;; (b+ar)/x + ((br-a)/x)i = (b+ac/d)d/(cc+dd) + ((bc/d-a)d/(cc+dd))i
-                          ;; = (bd+ac)/(cc+dd) + ((bc-ad)/(cc+dd))i
-                          (make-rectangular (/ (+ b (* a r)) x)
-                                            (/ (- (* b r) a) x)))))]))]
-             [else (nonnumber-error who x)])]
+            [(fixnum? bignum? ratnum? flonum?)
+             (let ([c (real-part y)] [d (imag-part y)])
+               (if (>= (abs c) (abs d))
+                   (let* ([r (/ d c)] [den (+ c (* r d))])
+                     (make-rectangular (/ x den) (/ (- (* x r)) den)))
+                   (let* ([r (/ c d)] [den (+ d (* r c))])
+                     (make-rectangular (/ (* x r) den) (/ (- x) den)))))]
+            [($exactnum? $inexactnum?)
+             (let ([a (real-part x)] [b (imag-part x)]
+                   [c (real-part y)] [d (imag-part y)])
+               (if (>= (abs c) (abs d))
+                   (let* ([r (/ d c)] [den (+ c (* r d))])
+                     (make-rectangular (/ (+ a (* b r)) den) (/ (- b (* a r)) den)))
+                   (let* ([r (/ c d)] [den (+ d (* r c))])
+                     (make-rectangular (/ (+ (* a r) b) den) (/ (- (* b r) a) den)))))]
+            [else (nonnumber-error who x)])]
          [else (nonnumber-error who y)])))
 
 (set! conjugate
@@ -2996,7 +2981,7 @@
       ($oops who "~s is not an exact integer" x))
     (unless (or (and (fixnum? y) (fxnonnegative? y))
                 (and (bignum? y) ($bigpositive? y)))
-      ($oops who "~s is not a nonnegative exact integer" y))
+      ($oops who "invalid bit index ~s" y))
     (cond
       [(eq? b 0) (logbit0 y x)]
       [(eq? b 1) (logbit1 y x)]
@@ -3176,19 +3161,23 @@
          (random-double s)]
         [(s x)
          (define (random-integer s x)
-           (let ([bits (integer-length x)])
-             (let loop ([shift 0])
-               (cond
-                 [(<= bits shift) 0]
-                 [else
-                  ;; Assuming that a `uptr` is at least 32 bits:
-                  (bitwise-ior (loop (+ shift 32))
-                               (let ([n (bitwise-bit-field x shift (+ shift 32))])
-                                 (if (zero? n)
-                                     0
-                                     (bitwise-arithmetic-shift-left
-                                      (random-int s n)
-                                      shift))))]))))
+           ;; assumes that uptr is at least 32 bits
+           (let ([maybe-result
+                  ;; get a number that might be too big, because we bump
+                  ;; the high 31-bit digit by one to cover the range created
+                  ;; by lower 31-bit digits (assuming that one of them is non-zero)
+                  (let ([y (- x 1)]) ; might reduce bit width; more than compensated by `(+ z 1)` below
+                    (let loop ([r 0] [len (integer-length y)] [shift 0])
+                      (if (< len 32)
+                          (let ([z (bitwise-bit-field y shift (+ shift 31))])
+                            (+ r (bitwise-arithmetic-shift-left (random-int s (+ z 1)) shift)))
+                          (loop (+ r (bitwise-arithmetic-shift-left (random-int s #x80000000) shift))
+                                (- len 31)
+                                (+ shift 31)))))])
+             ;; probability of a bad choice is at most 1/2
+             (if (>= maybe-result x)
+                 (random-integer s x)
+                 maybe-result)))
          (unless (is-pseudo-random-generator? s) ($oops who "not a pseudo-random generator ~s" s))
          (cond
           [(fixnum? x)
@@ -3390,6 +3379,48 @@
         [(fl= x y) #f]
         [(fl= (fl+ y 1.0) x) #t]
         [else (noninteger-error who x)]))))
+
+(set-who! flbit-field
+  (lambda (x start end)
+    (unless (flonum? x) ($oops who "~s is not a flonum" x))
+    (unless (and (fixnum? start) (fx<= 0 start (constant flonum-bits))) ($oops who "invalid start index ~s" start))
+    (unless (and (fixnum? end) (fx<= start end (constant flonum-bits))) ($oops who "invalid end index ~s" end))
+    ;; inlined `flbit-field` works on immediate integer arguments whose
+    ;; difference is less than the fixnum width, so extract bits using
+    ;; statically selected pieces that definitely fit into a fixnum
+    (let ()
+      (define (fxextract n start end)
+        (fxand (fxsrl n start)
+               (fx- (fxsll 1 (fx- end start)) 1)))
+      (cond
+        [(fx<= end (constant positive-fixnum-bits))
+         (fxextract (flbit-field x 0 (constant positive-fixnum-bits)) start end)]
+        [(fx>= start (constant flonum-high-positive-fixnum-start))
+         (fxextract (flbit-field x (constant flonum-high-positive-fixnum-start) (constant flonum-bits))
+                    (fx- start (constant flonum-high-positive-fixnum-start))
+                    (fx- end (constant flonum-high-positive-fixnum-start)))]
+        [else
+         (constant-case ptr-bits
+           [(64)
+            ;; `start` through `end` must span high and low 32-bit sections
+            (bitwise-ior
+             (bitwise-arithmetic-shift-left (fxextract (flbit-field x 32 64) 0 (fx- end 32))
+                                            (fx- 32 start))
+             (fxextract (flbit-field x 0 32) start 32))]
+           [(32)
+            ;; `start` through `end` must hit middle 25 bits
+            (bitwise-ior
+             (if (fx> end 50)
+                 (bitwise-arithmetic-shift-left (fxextract (flbit-field x 50 64) 0 (fx- end 50))
+                                                (fx- 50 start))
+                 0)
+             (let ([v (fxextract (flbit-field x 25 50) (fx- (fxmax start 25) 25) (fx- (fxmin end 50) 25))])
+               (if (fx< start 25)
+                   (bitwise-arithmetic-shift-left v (fx- 25 start))
+                   v))
+             (if (fx< start 25)
+                 (fxextract (flbit-field x 0 25) start 25)
+                 0))])]))))
 
 (set-who! flmin
   (let ([$flmin (lambda (x y) (if (or (fl< x y) ($nan? x)) x y))])

@@ -357,7 +357,7 @@
 ;; ---------------------------------------------------------------------
 ;; Version and machine types:
 
-(define-constant scheme-version #x0909090E)
+(define-constant scheme-version #x0a020001)
 
 (define-syntax define-machine-types
   (lambda (x)
@@ -391,6 +391,7 @@
   i3gnu     ti3gnu
   a6nt      ta6nt
   a6osx     ta6osx
+  a6ios     ta6ios
   a6le      ta6le
   a6fb      ta6fb
   a6ob      ta6ob
@@ -407,6 +408,7 @@
   arm32nb   tarm32nb
   arm64nt   tarm64nt
   arm64osx  tarm64osx
+  arm64ios  tarm64ios
   arm64le   tarm64le
   arm64fb   tarm64fb
   arm64ob   tarm64ob
@@ -415,6 +417,7 @@
   rv64fb    trv64fb
   rv64ob    trv64ob
   rv64nb    trv64nb
+  la64le    tla64le
 )
 
 (include "machine.def")
@@ -597,6 +600,7 @@
   (arm64 reloc-arm64-abs reloc-arm64-call reloc-arm64-jump)
   (ppc32 reloc-ppc32-abs reloc-ppc32-call reloc-ppc32-jump)
   (riscv64 reloc-riscv64-abs reloc-riscv64-call reloc-riscv64-jump)
+  (loongarch64 reloc-loongarch64-abs reloc-loongarch64-call reloc-loongarch64-jump)
   (pb reloc-pb-abs reloc-pb-proc))
 
 (constant-case ptr-bits
@@ -1205,7 +1209,8 @@
       (fixnum (constant ptr-bytes) fixnum?)
       (char 1 $foreign-char?)
       (wchar (fxsrl (constant wchar-bits) 3) $foreign-wchar?)
-      (boolean (fxsrl (constant int-bits) 3) (lambda (x) #t)))))
+      (boolean (fxsrl (constant int-bits) 3) (lambda (x) #t))
+      (stdbool (fxsrl (constant stdbool-bits) 3) (lambda (x) #t)))))
 )
 
 (define-syntax record-datatype
@@ -1497,6 +1502,7 @@
   ([double data]))
 
 (define-constant flonum-bytes 8)
+(define-constant flonum-bits (* 8 (constant flonum-bytes)))
 
 ; on 32-bit systems, the iptr pad will have no effect above and
 ; beyond the normal padding.  on 64-bit systems, the pad
@@ -1606,6 +1612,7 @@
    [iptr scheme-stack-size]
    [ptr winders]
    [ptr attachments]
+   [ptr handler-stack]
    [ptr cached-frame]
    [ptr U]
    [ptr V]
@@ -1744,9 +1751,9 @@
    [ptr link]))
 
 (define-primitive-structure-disps rp-header type-untyped
-  ([uptr toplink]
-   [uptr mv-return-address]
+  ([uptr mv-return-address]
    [ptr livemask]
+   [uptr toplink]
    [iptr frame-size])) ; low bit is 0 to distinguish from a `rp-compact-header`
 (define-constant return-address-mv-return-address-disp
   (- (constant rp-header-mv-return-address-disp) (constant size-rp-header)))
@@ -2816,6 +2823,7 @@
      (fl> #f 2 #t #t)
      (fl<= #f 2 #t #t)
      (fl>= #f 2 #t #t)
+     (flbit-field #f 3 #t #t)
      (flmin #f 2 #t #t)
      (flmax #f 2 #t #t)
      (callcc #f 1 #f #f)

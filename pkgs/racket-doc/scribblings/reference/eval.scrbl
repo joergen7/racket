@@ -392,7 +392,7 @@ use for the initial parameter value.
 
 @defparam*[current-compiled-file-roots paths (listof (or/c path-string? 'same)) (listof (or/c path? 'same))]{
 
-A list of paths and @racket['same]s that is is used by the default
+A list of paths and @racket['same]s that is used by the default
 @tech{compiled-load handler} (see @racket[current-load/use-compiled]).
 
 The parameter is normally initialized to @racket[(list 'same)], but
@@ -524,7 +524,7 @@ a procedure that yields to one or more available GUI events.
 @history[#:added "8.3.0.3"]}
 
 
-@defparam[current-read-interaction proc (any/c input-port? -> any)]{
+@defparam[current-read-interaction proc (any/c input-port? . -> . any)]{
 
 A @tech{parameter} that determines the current @deftech{read interaction
 handler}, which is procedure that takes an arbitrary value and an
@@ -540,7 +540,7 @@ The default read interaction handler accepts @racket[_src] and
 ]}
 
 
-@defparam[current-print proc (any/c -> any)]{
+@defparam[current-print proc (any/c . -> . any)]{
 
 A @tech{parameter} that determines the @deftech{print handler} that is called
  by @racket[read-eval-print-loop] to print the result of an evaluation
@@ -607,6 +607,19 @@ potentially different performance characteristics.
 
 @history[#:added "6.3"]}
 
+@defproc[(compiled-expression-add-target-machine [ce compiled-expression?]
+                                                 [other-ce compiled-expression?])
+         compiled-expression?]{
+
+Returns a compiled expression like @racket[ce], but augments or
+replaces cross-compilation information in @racket[ce] with information
+from @racket[other-ce]. The intent is that @racket[ce] and
+@racket[other-ce] have been compiled with different values for
+@racket[current-compile-target-machine], and @racket[ce] will be used
+to run a module on the compiling machine, while information from
+@racket[other-ce] is needed for cross-compiling imports of the module.
+
+@history[#:added "8.12.0.3"]}
 
 @defproc[(compiled-expression? [v any/c]) boolean?]{
 
